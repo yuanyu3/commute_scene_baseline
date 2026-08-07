@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CommuteTickDecision",
+  "type": "object",
+  "required": ["t", "scene", "coordinate_system", "should_service"],
+  "properties": {
+    "t": { "type": "string", "format": "date-time" },
+    "coordinate_system": { "const": "WGS84" },
+    "scene": {
+      "enum": [
+        "AT_HOME",
+        "LEAVING_HOME",
+        "AT_COMPANY",
+        "LEAVING_COMPANY",
+        "COMMUTE",
+        "AWAY",
+        "UNKNOWN"
+      ]
+    },
+    "score_home": { "type": "number" },
+    "score_company": { "type": "number" },
+    "home_relation": { "enum": ["INSIDE", "NEAR", "OUTSIDE", "UNKNOWN"] },
+    "company_relation": { "enum": ["INSIDE", "NEAR", "OUTSIDE", "UNKNOWN"] },
+    "should_service": { "type": "boolean" },
+    "service_intent": {
+      "enum": ["NONE", "DEPARTURE_NOTIFICATION", "LEAVE_COMPANY_NOTIFICATION"]
+    },
+    "uncertainty": { "enum": ["LOW", "MEDIUM", "HIGH"] }
+  }
+}

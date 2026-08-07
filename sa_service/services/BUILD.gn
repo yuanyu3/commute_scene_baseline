@@ -1,0 +1,140 @@
+# Copyright (C) 2021 Huawei Device Co., Ltd.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import("//build/ohos.gni")
+
+config("commuteagentservice_config") {
+  visibility = [ ":*" ]
+  include_dirs = [
+    # NDK RDB headers (relational_store.h, oh_*.h) are vendored under include/
+    # so they resolve with this path (always present on the compile command).
+    "include",
+    "include/ability",
+    "include/provider",
+    "include/engine",
+    "include/power",
+    "include/proactive",
+    "include/utils",
+    "include/sa_agent",
+    "third_party/PDRLib/inc",
+    "third_party/LEAVECAR/inc",
+    # Mirror copy; optional. Link uses system libnative_rdb_ndk.z.so.
+    "third_party/rdb_ndk/include",
+    # SceneEngine headers live under include/commute_sa/
+  ]
+
+  cflags = [
+    "-fdata-sections",
+    "-ffunction-sections",
+    "-fvisibility=hidden",
+    "-g",
+    "-O0",
+  ]
+  cflags_cc = [
+    "-g",
+    "-O0",
+  ]
+}
+
+ohos_prebuilt_shared_library("pdr_prebuilt") {
+  source = "third_party/PDRLib/prebuilt/arm64-v8a/libPDR.so"
+  subsystem_name = "multimedia"
+  part_name = "commuteagentservice"
+}
+
+ohos_prebuilt_shared_library("leavecar_prebuilt") {
+  source = "third_party/LEAVECAR/prebuilt/arm64-v8a/libleave_car.so"
+  subsystem_name = "multimedia"
+  part_name = "commuteagentservice"
+}
+
+
+
+ohos_shared_library("commuteagentservice") {
+  sources = [
+    "src/ability/AgentServiceAbility.cpp",
+    "src/ability/AgentServiceStub.cpp",
+    "src/ability/AgentServiceProxy.cpp",
+    "src/engine/PdrEngine.cpp",
+    "src/engine/LeaveCarEngine.cpp",
+    "src/engine/LeaveCarCApiShim.cpp",
+    "src/engine/StopWalking.cpp",
+    "src/engine/GeoEngine.cpp",
+    "src/provider/WifiProvider.cpp",
+    "src/provider/BleProvider.cpp",
+    "src/provider/CellProvider.cpp",
+    "src/power/PowerModeController.cpp",
+    "src/proactive/ProactiveAgentBusinessModule.cpp",
+    "src/proactive/AgentRuntimeConfig.cpp",
+    "src/sa_agent/LeavingHomeBaselineAgentConfig.cpp",
+    "src/sa_agent/LeavingHomeContextEngine.cpp",
+    "src/utils/database/OHOSRelationalDB.cpp",
+    "src/utils/database/OHOSVectorDB.cpp",
+    # Vendored SceneEngine (tick realtime path; no Python)
+    "src/commute_sa/crs.cpp",
+    "src/commute_sa/anchors.cpp",
+    "src/commute_sa/theta.cpp",
+    "src/commute_sa/scene_engine.cpp",
+    "src/commute_sa/baseline_runtime.cpp",
+    "src/commute_sa/personalization.cpp",
+    "src/commute_sa/product_store.cpp",
+    "src/commute_sa/evidence_query.cpp",
+    "src/commute_sa/action_ops.cpp",
+    "src/sa_agent/EvidenceTools.cpp",
+    "src/sa_agent/ActionTools.cpp",
+  ]
+
+  defines = [
+    "USE_SQLITE_SYMBOLS",
+    "OHOS_DEBUG",
+    "_PRE_MIPT_PDR",
+    "HIMATRIX_DLL",
+    "_USE_AI_NET",
+    "SA_AGENT_ENABLE_OHOS_CONTEXT_ENGINE",
+  ]
+
+  public_configs = [
+    ":commuteagentservice_config",
+  ]
+
+  deps = [
+    ":pdr_prebuilt",
+    ":leavecar_prebuilt",
+  ]
+
+
+  external_deps = [
+    "napi:ace_napi",
+    "hilog:libhilog",
+    "samgr:samgr_proxy",
+    "safwk:system_ability_fwk",
+    "ability_base:want",
+    "ability_runtime:ability_manager",
+    "ipc:ipc_core",
+    "c_utils:utils",
+    "sensor:sensor_interface_native",
+    "access_token:libaccesstoken_sdk",
+    "location:locator_sdk",
+    "location:lbsservice_common",
+    "sqlite:sqlite",
+    # Directly link OHOS system NDK: libnative_rdb_ndk.z.so
+    # (device path /system/lib64/ndk/). Do not vendor the .so.
+    "relational_store:native_rdb_ndk",
+    "jiuwen_core:jiuwen_core",
+    "wifi:wifi_sdk",
+    "bluetooth:btframework",
+    "core_service:tel_core_service_api",
+  ]
+  subsystem_name = "multimedia"
+  part_name = "commuteagentservice"
+}

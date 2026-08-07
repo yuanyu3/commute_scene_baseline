@@ -1,0 +1,10 @@
+{
+  "process": "commuteagentservice",
+  "systemability": [{
+    "name": 9903,
+    "libpath": "libcommuteagentservice.z.so",
+    "run-on-create": true,
+    "distributed": false,
+    "dump_level": 1
+  }]
+}

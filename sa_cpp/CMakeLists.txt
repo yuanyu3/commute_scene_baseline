@@ -1,0 +1,43 @@
+cmake_minimum_required(VERSION 3.16)
+project(commute_sa LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+add_library(commute_sa
+    src/crs.cpp
+    src/rolling_sensor_dump.cpp
+    src/sensor_events_writer.cpp
+    src/anchors.cpp
+    src/theta.cpp
+    src/scene_engine.cpp
+    src/baseline_runtime.cpp
+    src/personalization.cpp
+    src/product_store.cpp
+    src/evidence_query.cpp
+    src/action_ops.cpp
+)
+target_include_directories(commute_sa PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+if(WIN32)
+    target_compile_definitions(commute_sa PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+option(COMMUTE_SA_BUILD_SMOKE "Build host smoke tests" ON)
+if(COMMUTE_SA_BUILD_SMOKE)
+    add_executable(commute_sa_smoke tests/smoke_dump.cpp)
+    target_link_libraries(commute_sa_smoke PRIVATE commute_sa)
+
+    add_executable(commute_scene_smoke tests/smoke_scene_engine.cpp)
+    target_link_libraries(commute_scene_smoke PRIVATE commute_sa)
+
+    add_executable(commute_evidence_smoke tests/smoke_evidence_query.cpp)
+    target_link_libraries(commute_evidence_smoke PRIVATE commute_sa)
+
+    add_executable(commute_action_smoke tests/smoke_action_ops.cpp)
+    target_link_libraries(commute_action_smoke PRIVATE commute_sa)
+
+    add_executable(commute_offline_tools tests/offline_tools_harness.cpp)
+    target_link_libraries(commute_offline_tools PRIVATE commute_sa)
+endif()

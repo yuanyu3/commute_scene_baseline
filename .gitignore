@@ -1,0 +1,70 @@
+# Secrets / credentials
+sa_service/etc/agent.env
+**/.env
+**/*.pem
+**/credentials*.json
+
+# Offline Python replay (not part of product upload)
+/python/
+
+# Local datasets & run outputs
+/data/
+/output/
+**/run_data/
+**/export_*/
+examples/personalizer_llm/export_*/
+examples/personalizer_llm/run_data/
+examples/**/run_data/
+**/agent_trace.jsonl
+**/agent_result.json
+**/query.json
+**/smoke_product/
+sa_cpp/*_smoke_tmp/
+sa_cpp/offline_tools_run/
+sa_cpp/**/smoke_*/
+**/*_smoke_tmp/
+
+# Build artifacts
+**/build/
+**/build_*/
+**/cmake-build-*/
+**/out/
+**/*.o
+**/*.obj
+**/*.a
+**/*.lib
+**/*.exe
+**/*.dll
+**/*.pdb
+**/*.ilk
+!third_party/**/*.so
+!sa_service/prebuilts/**/*.so
+
+# IDE / OS
+.cursor/
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+*.user
+*.suo
+
+# Logs & temp
+*.log
+**/logs/
+tmp/
+temp/
+.cache/
+
+# Python local (if any leftovers outside /python/)
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Large personalizer / jiuwen host caches (keep lib.so via exception above)
+third_party/bbpjiuwen/lib/*.so
+!third_party/bbpjiuwen/lib/.gitkeep

@@ -1,0 +1,92 @@
+# 架构：基线实时环 + Jiuwen 改参环
+
+## 1. 目标
+
+| 能力 | 要求 |
+|------|------|
+| 实时场景 | 识别在家 / 离家中 / 在公司 / 离开公司 / 通勤 / 在外 |
+| 主动服务 | 仅在 `LEAVING_HOME` / `LEAVING_COMPANY` 窗口推送（如带钥匙） |
+| 个性化 | 低频用 Jiuwen Agent 更新 θ，稳态不调 LLM |
+| 坐标 | 全链路 WGS84（见 `CRS_UNIFICATION.md`） |
+
+## 2. 双环
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│ SA 感知 tick（本仓库 sa_cpp dump）                        │
+│ GPS(WGS84) + PDR + WiFi/BLE/CELL + motion               │
+└──────────────────────────┬──────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│ 基线（无 LLM）                                           │
+│ 锚点(home/company) → 关系(INSIDE/NEAR/OUTSIDE)          │
+│ → 特征 → Score → 状态机 → 可选推送                       │
+└──────────────────────────┬──────────────────────────────┘
+                           ▼
+              事后自标注 t* + 推送对错日志
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│ Jiuwen 改参 Agent（事件/日终触发）                        │
+│ Tools: get_theta / get_errors / apply_delta / audit     │
+└─────────────────────────────────────────────────────────┘
+```
+
+## 3. 状态机
+
+```text
+                 LEAVING_HOME
+    AT_HOME ──────────────────► COMMUTE / AWAY
+       ▲                              │
+       │ ARRIVE_HOME                  │
+       └──────────────────────────────┘
+
+                 LEAVING_COMPANY
+ AT_COMPANY ──────────────────► COMMUTE / AWAY
+       ▲                              │
+       │ ARRIVE_COMPANY               │
+       └──────────────────────────────┘
+```
+
+| 状态 | 含义 | 可推送 |
+|------|------|--------|
+| `AT_HOME` | 在家且非出门过程 | 否 |
+| `LEAVING_HOME` | 正在离家过渡 | **是**（带钥匙等） |
+| `AT_COMPANY` | 在公司且非离开过程 | 否 |
+| `LEAVING_COMPANY` | 正在离开公司 | **是**（可选） |
+| `COMMUTE` | 家↔公司走廊上 | 否 |
+| `AWAY` | 稳定在外且非上述 | 否 |
+| `UNKNOWN` | 证据不足 | 否 |
+
+转移原则：
+
+- 单一行走事实不足以进入 `LEAVING_*`
+- 朝锚点距离减小不得判为离开该锚点
+- `LEAVING_*` 为短暂过渡；外侧稳定后进入 `COMMUTE`/`AWAY`
+
+## 4. 推送时序（预测离家）
+
+```text
+条件：home ∈ {INSIDE,NEAR} 且 score/hits/arm_delay 达标
+      且 ETA_out ≤ lead_max_s（太早不推）
+      且 非 OUTSIDE（完全离家后不推「带钥匙」）
+t_push = 上述条件首次满足的 tick（同一离开 episode 只推一次）
+t*     = 推送后首次 OUTSIDE
+lead   = t* − t_push
+目标：lead_min ≤ lead ≤ lead_max（默认 90s～240s；偏晚仍可在家时紧急推）
+```
+
+`eta_leave_s`：按外扩速度（或默认步行 1.2m/s）估计距穿过 `r_out` 还有多少秒。  
+实时环无 LLM；事后 `lead_s` 写入 label，供改参 Agent 使用。
+
+不是固定闹钟；事件触发为主，时段先验为门控。
+
+## 5. 组件边界（本仓库自洽）
+
+| 组件 | 本仓库位置 | 说明 |
+|------|------------|------|
+| SA 工程 | `sa_service/` | Ability + dump(WGS84) + PDR/LeaveCar + ProactiveAgent |
+| 轻量 dump | `sa_cpp/` | 主机可编，不依赖 OHOS |
+| 实时场景 | `python/commute_baseline/` | Score + FSM，无 LLM |
+| 改参 Agent | `jiuwen_agent/` | 低频改 θ |
+| 锚点 | `config/anchors.json` | 推断管线 |
+| Jiuwen 运行时 | 外部（如 bbpjiuwen-linux） | 仅宿主 |

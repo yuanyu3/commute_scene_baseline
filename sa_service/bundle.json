@@ -1,0 +1,60 @@
+{
+    "name": "@ohos/commuteagentservice",
+    "description": "commute scene baseline system ability (collection + dump WGS84 + proactive ticks)",
+    "version": "3.1",
+    "license": "Apache License 2.0",
+    "publishAs": "code-segment",
+    "segment": {
+      "destPath": "//foundation/multimedia/commute_scene_baseline/sa_service"
+    },
+    "dirs": {},
+    "scripts": {},
+    "component": {
+      "name": "commuteagentservice",
+      "subsystem": "multimedia",
+      "syscap": [
+        "SystemCapability.Multimedia.CommuteAgentService"
+      ],
+      "features": [
+      ],
+      "adapted_system_type": [
+        "standard"
+      ],
+      "rom":"10000KB",
+      "ram":"5000KB",
+      "deps": {
+        "components": [
+          "ability_base",
+          "ability_runtime",
+          "napi",
+          "samgr",
+          "hilog",
+          "ipc",
+          "safwk",
+          "c_utils",
+          "sensor",
+          "access_token",
+          "location",
+          "sqlite",
+          "wifi",
+          "bluetooth",
+          "core_service",
+          "relational_store",
+          "jiuwen_core"
+        ],
+        "third_party": [
+        ]
+        },
+      "build": {
+        "sub_component": [
+          "//foundation/multimedia/commute_scene_baseline/sa_service/etc/init:commuteagentservice.cfg",
+          "//foundation/multimedia/commute_scene_baseline/sa_service/sa_profile:commuteagentservice_sa_profiles",
+          "//foundation/multimedia/commute_scene_baseline/sa_service/services:commuteagentservice",
+          "//foundation/multimedia/commute_scene_baseline/sa_service/interfaces/napi:commuteagentservice_napi"
+        ],
+        "inner_kits": [
+        ],
+        "test": []
+      }
+    }
+  }
