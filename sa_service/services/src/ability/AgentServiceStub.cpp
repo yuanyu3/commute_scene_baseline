@@ -103,6 +103,14 @@ int32_t AgentServiceStub::OnRemoteRequest(uint32_t code, MessageParcel &data, Me
             reply.WriteInt32(StopCellCollection());
             return OHOS::NO_ERROR;
         }
+        case GET_PRODUCT_DEBUG_TIMELINE: {
+            reply.WriteString(GetProductDebugTimeline());
+            return OHOS::NO_ERROR;
+        }
+        case CLEAR_PRODUCT_DEBUG_TIMELINE: {
+            reply.WriteInt32(ClearProductDebugTimeline());
+            return OHOS::NO_ERROR;
+        }
         default:
             break;
     }

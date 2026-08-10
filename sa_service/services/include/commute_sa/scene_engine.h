@@ -58,6 +58,8 @@ struct TickFeatures {
     bool wifi_company_detach = false;
     bool cell_leave_home = false;
     bool cell_leave_company = false;
+    bool ble_home_detach = false;
+    bool ble_company_detach = false;
 };
 
 struct TickDecision {
@@ -106,7 +108,7 @@ private:
     };
 
     ScoreResult ScoreLeaving(const TickFeatures &feat, Relation rel, bool hasDist, double distM, double rIn,
-        double rOut, double pdrNetOut, bool radioDetach, bool cellLeave, double centerHour,
+        double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double centerHour,
         std::optional<double> prevDist) const;
 
     /** Seconds until dist reaches rOut; nullopt if not outbound / unknown. */

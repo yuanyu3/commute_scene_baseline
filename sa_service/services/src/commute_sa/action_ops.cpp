@@ -1,10 +1,12 @@
 #include "commute_sa/action_ops.h"
 
+#include "commute_sa/anchor_reestimate.h"
 #include "commute_sa/anchors.h"
 #include "commute_sa/baseline_runtime.h"
 #include "commute_sa/evidence_query.h"
 #include "commute_sa/product_store.h"
 #include "commute_sa/theta.h"
+#include "commute_sa/theta_eval.h"
 
 #include <chrono>
 #include <cmath>
@@ -170,6 +172,18 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
         *lim = {0.05, 0.4, 0.05};
         return true;
     }
+    if (param == "w_wifi") {
+        *lim = {0.0, 0.4, 0.02};
+        return true;
+    }
+    if (param == "w_cell") {
+        *lim = {0.0, 0.3, 0.02};
+        return true;
+    }
+    if (param == "w_ble") {
+        *lim = {0.0, 0.2, 0.02};
+        return true;
+    }
     if (param == "w_radio") {
         *lim = {0.05, 0.4, 0.05};
         return true;
@@ -237,8 +251,20 @@ bool ReadParamValue(const Theta &t, const std::string &param, double *out)
         *out = t.w_walk;
         return true;
     }
+    if (param == "w_wifi") {
+        *out = t.w_wifi;
+        return true;
+    }
+    if (param == "w_cell") {
+        *out = t.w_cell;
+        return true;
+    }
+    if (param == "w_ble") {
+        *out = t.w_ble;
+        return true;
+    }
     if (param == "w_radio") {
-        *out = t.w_radio;
+        *out = t.w_wifi + t.w_cell + t.w_ble;
         return true;
     }
     if (param == "min_evidence") {
@@ -327,7 +353,9 @@ bool ApplyFenceDelta(const std::string &param, double delta, const std::string &
 std::string GetParamLimitsJson()
 {
     return R"({"enter_leave":{"min":0.4,"max":0.85,"step":0.03},"exit_leave":{"min":0.2,"max":0.7,"step":0.03},)"
-           R"("w_walk":{"min":0.05,"max":0.4,"step":0.05},"w_radio":{"min":0.05,"max":0.4,"step":0.05},)"
+           R"("w_walk":{"min":0.05,"max":0.4,"step":0.05},"w_wifi":{"min":0,"max":0.4,"step":0.02},)"
+           R"("w_cell":{"min":0,"max":0.3,"step":0.02},"w_ble":{"min":0,"max":0.2,"step":0.02},)"
+           R"("w_radio":{"min":0.05,"max":0.4,"step":0.05,"note":"legacy; prefer w_wifi/w_cell/w_ble"},)"
            R"("min_evidence":{"min":1,"max":5,"step":1},"weekday_leave_home_hour":{"min":5,"max":11,"step":0.083},)"
            R"("weekday_leave_company_hour":{"min":16,"max":21,"step":0.083},"arm_delay_s":{"min":0,"max":90,"step":5},)"
            R"("lead_min_s":{"min":30,"max":180,"step":15},"lead_max_s":{"min":60,"max":600,"step":30},)"
@@ -436,8 +464,68 @@ std::string RequestAnchorReestimateAction(const std::string &paramsJson)
     if (jobId.empty()) {
         return "{\"ok\":false,\"error\":\"AppendAnchorReestimateJob failed\"}";
     }
+    // Execute immediately (on-device / host). Extra queued jobs also drained on DAY_END.
+    const std::string exec = ProcessQueuedAnchorReestimateJobs(RootDir(), 2);
     return "{\"ok\":true,\"job_id\":\"" + Esc(jobId) + "\",\"which\":\"" + Esc(which) +
-        "\",\"status\":\"queued\",\"note\":\"offline re-inference consumer not wired; job persisted\"}";
+        "\",\"status\":\"queued_then_run\",\"execution\":" + exec + "}";
+}
+
+std::string EvaluateThetaOnHistoryAction(const std::string &paramsJson)
+{
+    double since = 0.0;
+    double limit = 30.0;
+    ExtractNumber(paramsJson, "since_ms", &since);
+    ExtractNumber(paramsJson, "limit", &limit);
+    if (limit < 1.0) {
+        limit = 1.0;
+    }
+    if (limit > 100.0) {
+        limit = 100.0;
+    }
+    const std::string root = RootDir();
+    Theta t = DefaultTheta();
+    if (BaselineRuntime::GetInstance().Enabled() && BaselineRuntime::GetInstance().Engine() != nullptr) {
+        t = BaselineRuntime::GetInstance().Engine()->GetTheta();
+    } else {
+        LoadThetaFromFile(root + "/theta.json", &t, nullptr);
+    }
+    std::string out = EvaluateThetaOnHistoryJson(root, t, static_cast<int64_t>(since), static_cast<int>(limit));
+    // Annotate trial state for the agent loop.
+    const std::string trial = HasActiveThetaTrial() ? "true" : "false";
+    if (out.size() > 1 && out.back() == '}') {
+        out.pop_back();
+        out += ",\"trial_active\":" + trial + "}";
+    }
+    return out;
+}
+
+std::string BeginThetaTrialAction(const std::string & /*paramsJson*/)
+{
+    std::string err;
+    if (!BeginThetaTrial(&err)) {
+        return "{\"ok\":false,\"error\":\"" + Esc(err.empty() ? "begin failed" : err) + "\"}";
+    }
+    return "{\"ok\":true,\"trial_active\":true,\"note\":\"snapshot taken; apply_theta_delta then "
+           "evaluate_theta_on_history; revert_theta_trial if score worsens\"}";
+}
+
+std::string RevertThetaTrialAction(const std::string & /*paramsJson*/)
+{
+    std::string err;
+    if (!RevertThetaTrial(&err)) {
+        return "{\"ok\":false,\"error\":\"" + Esc(err.empty() ? "revert failed" : err) + "\"}";
+    }
+    return "{\"ok\":true,\"trial_active\":false,\"note\":\"theta restored to trial snapshot\"}";
+}
+
+std::string CommitThetaTrialAction(const std::string & /*paramsJson*/)
+{
+    std::string err;
+    if (!CommitThetaTrial(&err)) {
+        return "{\"ok\":false,\"error\":\"" + Esc(err.empty() ? "commit failed" : err) + "\"}";
+    }
+    return "{\"ok\":true,\"trial_active\":false,\"note\":\"kept current theta (already persisted by "
+           "apply_theta_delta)\"}";
 }
 
 }  // namespace commute_sa

@@ -109,12 +109,10 @@ int main()
     Call("get_error_stats", eq.GetErrorStatsJson("{}"));
     Call("get_leave_episode", eq.GetLeaveEpisodeJson("{}"));
     Call("get_leave_window_samples", eq.GetLeaveWindowSamplesJson("{\"limit\":10}"));
-    Call("get_wifi_window",
-        eq.GetWifiWindowJson("{\"t_center_ms\":1700000000000,\"before_s\":600,\"after_s\":1200,\"limit\":50}"));
-    Call("get_cell_window",
-        eq.GetCellWindowJson("{\"t_center_ms\":1700000000000,\"before_s\":600,\"after_s\":1200}"));
-    Call("get_mag_window", eq.GetMagWindowJson("{\"t_center_ms\":1700000000000,\"before_s\":60,\"after_s\":60}"));
-    Call("get_gps_window", eq.GetGpsWindowJson("{\"t_center_ms\":1700000000000,\"before_s\":600,\"after_s\":600}"));
+    Call("get_leave_sensor_summary",
+        eq.GetLeaveSensorSummaryJson("{\"t_push_ms\":1700000000000,\"before_s\":600,\"after_s\":1200}"));
+    expectOk("get_leave_sensor_summary",
+        eq.GetLeaveSensorSummaryJson("{\"t_push_ms\":1700000000000,\"before_s\":600,\"after_s\":1200}"));
 
     Section("ACTION");
     Call("get_param_limits", std::string("{\"ok\":true,\"param_limits\":") + commute_sa::GetParamLimitsJson() + "}");

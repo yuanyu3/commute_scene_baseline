@@ -1,6 +1,6 @@
 /*
  * Copyright (c) Huawei Technologies Co., Ltd. 2026-2026. All rights reserved.
- * Description: Jiuwen evidence tools for θ personalizer (read product + raw dumps).
+ * Description: Jiuwen evidence tools for θ personalizer (semantic summaries, not raw dumps).
  */
 #include "sa_agent/EvidenceTools.h"
 
@@ -62,24 +62,9 @@ std::string CallGetLeaveWindowSamples(const std::string &params)
     return commute_sa::EvidenceQuery::GetInstance().GetLeaveWindowSamplesJson(params);
 }
 
-std::string CallGetWifiWindow(const std::string &params)
+std::string CallGetLeaveSensorSummary(const std::string &params)
 {
-    return commute_sa::EvidenceQuery::GetInstance().GetWifiWindowJson(params);
-}
-
-std::string CallGetCellWindow(const std::string &params)
-{
-    return commute_sa::EvidenceQuery::GetInstance().GetCellWindowJson(params);
-}
-
-std::string CallGetMagWindow(const std::string &params)
-{
-    return commute_sa::EvidenceQuery::GetInstance().GetMagWindowJson(params);
-}
-
-std::string CallGetGpsWindow(const std::string &params)
-{
-    return commute_sa::EvidenceQuery::GetInstance().GetGpsWindowJson(params);
+    return commute_sa::EvidenceQuery::GetInstance().GetLeaveSensorSummaryJson(params);
 }
 
 ErrorCode RegisterOne(const char *name, const char *desc,
@@ -102,10 +87,7 @@ const std::vector<std::string> &EvidenceToolNames()
         "get_error_stats",
         "get_leave_episode",
         "get_leave_window_samples",
-        "get_wifi_window",
-        "get_cell_window",
-        "get_mag_window",
-        "get_gps_window",
+        "get_leave_sensor_summary",
     };
     return kNames;
 }
@@ -130,23 +112,14 @@ std::vector<std::string> RegisterEvidenceTools()
         {{"t_push_ms", "Filter by push timestamp; omit for latest", "integer", false},
             {"limit", "Max samples (default 100, max 500)", "integer", false}},
         &CallGetLeaveWindowSamples);
-
-    const std::vector<std::tuple<std::string, std::string, std::string, bool>> windowParams = {
-        {"t_center_ms", "Window center; 0 or omit → latest t_push_ms", "integer", false},
-        {"t_push_ms", "Alias of t_center_ms", "integer", false},
-        {"before_s", "Seconds before center (default 600)", "integer", false},
-        {"after_s", "Seconds after center (default 1200)", "integer", false},
-        {"session_dir", "Ability dump session path; omit → latest under product root", "string", false},
-        {"limit", "Max CSV rows (default 200, max 500)", "integer", false},
-    };
-    RegisterOne("get_wifi_window", "Raw wifi_data_*.csv rows in time window (Ability session)", windowParams,
-        &CallGetWifiWindow);
-    RegisterOne("get_cell_window", "Raw cell_data_*.csv rows in time window (Ability session)", windowParams,
-        &CallGetCellWindow);
-    RegisterOne("get_mag_window", "Raw mag_data_*.csv rows in time window (Ability session)", windowParams,
-        &CallGetMagWindow);
-    RegisterOne("get_gps_window", "Raw location_data_*.csv rows in time window (Ability session)", windowParams,
-        &CallGetGpsWindow);
+    RegisterOne("get_leave_sensor_summary",
+        "High-density wifi/cell/gps/mag semantics around t_push (not raw CSV rows)",
+        {{"t_push_ms", "Episode center; omit → latest push", "integer", false},
+            {"t_center_ms", "Alias of t_push_ms", "integer", false},
+            {"before_s", "Seconds before center (default 600)", "integer", false},
+            {"after_s", "Seconds after center (default 1200)", "integer", false},
+            {"session_dir", "Ability dump session path; omit → latest", "string", false}},
+        &CallGetLeaveSensorSummary);
 
     return EvidenceToolNames();
 }

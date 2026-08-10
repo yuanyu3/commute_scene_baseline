@@ -1,17 +1,21 @@
 {
   "coordinate_system": "WGS84",
-  "enter_leave": 0.58,
+  "enter_leave": 0.55,
   "exit_leave": 0.45,
-  "min_evidence": 2,
+  "min_evidence": 1,
   "w_walk": 0.25,
   "w_pdr": 0.2,
   "w_geo": 0.2,
+  "w_wifi": 0.08,
+  "w_cell": 0.05,
+  "w_ble": 0.02,
   "w_radio": 0.15,
   "w_time": 0.2,
   "weekday_leave_home_hour": 8.25,
   "weekday_leave_company_hour": 18.2,
   "leave_window_min": 25,
   "arm_delay_s": 25,
+  "walk_hold_s": 120,
   "lead_min_s": 90,
   "lead_max_s": 240,
   "away_confirm_s": 180,
@@ -19,12 +23,15 @@
   "push_cooldown_s": 1800,
   "max_gps_acc_m": 80.0,
   "allow_network_dwell_acc_m": 120.0,
+  "focus_side": "company",
   "param_limits": {
     "enter_leave": {"min": 0.4, "max": 0.85, "step": 0.03},
-    "w_walk": {"min": 0.05, "max": 0.4, "step": 0.05},
-    "weekday_leave_home_hour": {"min": 5.0, "max": 11.0, "step": 0.083},
+    "min_evidence": {"min": 1, "max": 4, "step": 1},
     "arm_delay_s": {"min": 0, "max": 90, "step": 5},
-    "home.r_in_m": {"min": 40, "max": 150, "step": 5},
-    "company.r_in_m": {"min": 40, "max": 200, "step": 5}
+    "leave_window_min": {"min": 15, "max": 180, "step": 15},
+    "w_time": {"min": 0.05, "max": 0.35, "step": 0.05},
+    "w_geo": {"min": 0.05, "max": 0.4, "step": 0.05},
+    "walk_hold_s": {"min": 0, "max": 600, "step": 30},
+    "weekday_leave_company_hour": {"min": 11.0, "max": 21.0, "step": 0.1}
   }
 }

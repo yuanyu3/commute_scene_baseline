@@ -29,6 +29,14 @@ declare namespace commuteagentservice {
   /** Start/stop cellular (network) info collection on SA. */
   function StartCellCollection(): number;
   function StopCellCollection(): number;
+  /**
+   * Product debug timeline for visualization HAP.
+   * JSON: { ok, status:{scene,home_relation,...}, events:[{seq,t_ms,type,title,detail}], ... }
+   * event types: SCENE | PUSH | OUTSIDE | LABEL | LLM_START | LLM_DONE
+   */
+  function GetProductDebugTimeline(): string;
+  /** Clear in-memory debug timeline events. */
+  function ClearProductDebugTimeline(): number;
 }
 
 export default commuteagentservice;

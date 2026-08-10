@@ -42,10 +42,15 @@ public:
     std::string GetLeaveWindowSamplesJson(const std::string &paramsJson) const;
 
     /**
-     * Raw sensor window from latest (or given) Ability session dump.
+     * High-density semantic sensor summary around a leave push (for Agent).
+     * params: {"t_push_ms":0,"before_s":600,"after_s":1200,"session_dir":""}
+     * Covers wifi / cell / gps / pdr / mag semantics — not raw CSV rows.
+     */
+    std::string GetLeaveSensorSummaryJson(const std::string &paramsJson) const;
+
+    /**
+     * Debug-only raw CSV windows (not registered for the Agent).
      * params: {"t_center_ms":0,"before_s":600,"after_s":1200,"session_dir":"","limit":200}
-     * t_center_ms=0 → use latest push t_push_ms from leave_episodes.
-     * limit splits ~half before / half after center (pre keeps nearest-to-center rows).
      */
     std::string GetWifiWindowJson(const std::string &paramsJson) const;
     std::string GetCellWindowJson(const std::string &paramsJson) const;

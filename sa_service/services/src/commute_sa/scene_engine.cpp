@@ -152,7 +152,7 @@ bool SceneEngine::LeadWindowOk(const std::optional<double> &etaS, std::string *b
 }
 
 SceneEngine::ScoreResult SceneEngine::ScoreLeaving(const TickFeatures &feat, Relation rel, bool hasDist, double distM,
-    double rIn, double rOut, double pdrNetOut, bool radioDetach, bool cellLeave, double centerHour,
+    double rIn, double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double centerHour,
     std::optional<double> prevDist) const
 {
     ScoreResult out;
@@ -180,8 +180,17 @@ SceneEngine::ScoreResult SceneEngine::ScoreLeaving(const TickFeatures &feat, Rel
         sGeo = 0.8;
     }
 
-    const double sRadio = (radioDetach || cellLeave) ? 1.0 : 0.0;
-    if (sRadio >= 0.5) {
+    // WiFi / CELL / BLE are independent evidence channels (separate weights + hits).
+    const double sWifi = wifiDetach ? 1.0 : 0.0;
+    if (sWifi >= 0.5) {
+        ++hits;
+    }
+    const double sCell = cellLeave ? 1.0 : 0.0;
+    if (sCell >= 0.5) {
+        ++hits;
+    }
+    const double sBle = bleDetach ? 1.0 : 0.0;
+    if (sBle >= 0.5) {
         ++hits;
     }
 
@@ -194,8 +203,8 @@ SceneEngine::ScoreResult SceneEngine::ScoreLeaving(const TickFeatures &feat, Rel
         return {0.0, 0};
     }
 
-    out.score = Clip01(theta_.w_walk * sWalk + theta_.w_pdr * sPdr + theta_.w_geo * sGeo + theta_.w_radio * sRadio +
-        theta_.w_time * sTime);
+    out.score = Clip01(theta_.w_walk * sWalk + theta_.w_pdr * sPdr + theta_.w_geo * sGeo + theta_.w_wifi * sWifi +
+        theta_.w_cell * sCell + theta_.w_ble * sBle + theta_.w_time * sTime);
     out.hits = hits;
     return out;
 }
@@ -210,10 +219,10 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const bool hasCo = feat.has_gps && cRel != Relation::kUnknown;
 
     const auto sh = ScoreLeaving(feat, hRel, hasHome, dHome, anchors_.home.r_in_m, anchors_.home.r_out_m,
-        feat.pdr_net_out_home_m, feat.wifi_home_detach, feat.cell_leave_home, theta_.weekday_leave_home_hour,
-        prevDistHome_);
+        feat.pdr_net_out_home_m, feat.wifi_home_detach, feat.cell_leave_home, feat.ble_home_detach,
+        theta_.weekday_leave_home_hour, prevDistHome_);
     const auto sc = ScoreLeaving(feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
-        feat.pdr_net_out_company_m, feat.wifi_company_detach, feat.cell_leave_company,
+        feat.pdr_net_out_company_m, feat.wifi_company_detach, feat.cell_leave_company, feat.ble_company_detach,
         theta_.weekday_leave_company_hour, prevDistCompany_);
 
     const auto etaHome = EstimateEtaOutS(hasHome, dHome, anchors_.home.r_out_m, feat.walking, feat.pdr_net_out_home_m,
@@ -223,6 +232,8 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
 
     const double enter = theta_.enter_leave;
     const int need = theta_.min_evidence;
+    const bool allowHome = FocusAllowsHome(theta_.focus_side);
+    const bool allowCompany = FocusAllowsCompany(theta_.focus_side);
     bool shouldService = false;
     std::string intent = "NONE";
     std::string pushBlock = "NONE";
@@ -246,20 +257,20 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         return (feat.t_ms - *since) >= static_cast<TickTsMs>(theta_.away_confirm_s * 1000.0);
     };
 
-    if (hRel == Relation::kInside && sh.score < enter) {
+    if (allowHome && hRel == Relation::kInside && sh.score < enter) {
         newScene = Scene::kAtHome;
         leaveHomeSince_.reset();
         leaveHomePushed_ = false;
-    } else if (cRel == Relation::kInside && sc.score < enter) {
+    } else if (allowCompany && cRel == Relation::kInside && sc.score < enter) {
         newScene = Scene::kAtCompany;
         leaveCompanySince_.reset();
         leaveCompanyPushed_ = false;
     }
 
-    const bool homeLeaveCand =
-        (hRel == Relation::kInside || hRel == Relation::kNear) && sh.score >= enter && sh.hits >= need && ArmDelayOk(feat);
-    const bool coLeaveCand =
-        (cRel == Relation::kInside || cRel == Relation::kNear) && sc.score >= enter && sc.hits >= need && ArmDelayOk(feat);
+    const bool homeLeaveCand = allowHome && (hRel == Relation::kInside || hRel == Relation::kNear) &&
+        sh.score >= enter && sh.hits >= need && ArmDelayOk(feat);
+    const bool coLeaveCand = allowCompany && (cRel == Relation::kInside || cRel == Relation::kNear) &&
+        sc.score >= enter && sc.hits >= need && ArmDelayOk(feat);
 
     std::optional<double> activeEta;
     bool leadOk = false;
@@ -311,27 +322,29 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const bool leavingNow = (newScene == Scene::kLeavingHome || newScene == Scene::kLeavingCompany);
     if (!leavingNow && persistOut(outsideHomeSince_) && persistOut(outsideCompanySince_)) {
         newScene = Scene::kCommute;
-    } else if (!leavingNow && persistOut(outsideHomeSince_) && cRel == Relation::kInside) {
+    } else if (!leavingNow && allowCompany && persistOut(outsideHomeSince_) && cRel == Relation::kInside) {
         newScene = Scene::kAtCompany;
-    } else if (!leavingNow && persistOut(outsideCompanySince_) && hRel == Relation::kInside) {
+    } else if (!leavingNow && allowHome && persistOut(outsideCompanySince_) && hRel == Relation::kInside) {
         newScene = Scene::kAtHome;
     } else if (persistOut(outsideHomeSince_) && newScene == Scene::kLeavingHome) {
         if ((feat.t_ms - leaveHomeSince_.value_or(feat.t_ms)) >=
             static_cast<TickTsMs>(theta_.away_confirm_s * 1000.0)) {
-            newScene = (cRel != Relation::kInside) ? Scene::kCommute : Scene::kAtCompany;
+            newScene = (allowCompany && cRel == Relation::kInside) ? Scene::kAtCompany : Scene::kCommute;
         }
     } else if (persistOut(outsideCompanySince_) && newScene == Scene::kLeavingCompany) {
         if ((feat.t_ms - leaveCompanySince_.value_or(feat.t_ms)) >=
             static_cast<TickTsMs>(theta_.away_confirm_s * 1000.0)) {
-            newScene = (hRel != Relation::kInside) ? Scene::kCommute : Scene::kAtHome;
+            newScene = (allowHome && hRel == Relation::kInside) ? Scene::kAtHome : Scene::kCommute;
         }
     }
 
-    if (!leavingNow && hRel == Relation::kInside && sh.score < enter && persistOut(outsideCompanySince_)) {
+    if (allowHome && !leavingNow && hRel == Relation::kInside && sh.score < enter &&
+        persistOut(outsideCompanySince_)) {
         newScene = Scene::kAtHome;
         leaveHomePushed_ = false;
     }
-    if (!leavingNow && cRel == Relation::kInside && sc.score < enter && persistOut(outsideHomeSince_)) {
+    if (allowCompany && !leavingNow && cRel == Relation::kInside && sc.score < enter &&
+        persistOut(outsideHomeSince_)) {
         newScene = Scene::kAtCompany;
         leaveCompanyPushed_ = false;
     }

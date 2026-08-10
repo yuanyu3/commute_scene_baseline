@@ -14,6 +14,7 @@
 | `sa_cpp/` | 共享 C++：SceneEngine / ProductStore / Evidence·Action |
 | `jiuwen_agent/` | 改参 Agent（prompt + tools 契约） |
 | `examples/personalizer_llm/` | 主机 DeepSeek/Jiuwen 个性化试跑 |
+| `hap_debug/` | 真机可视化 HAP（推送 / OUTSIDE / 改参 LLM 时间线） |
 | `config/` `schemas/` | θ / 锚点 / Schema |
 | `docs/` | 架构与流程文档 |
 

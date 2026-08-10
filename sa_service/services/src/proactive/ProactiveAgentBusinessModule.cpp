@@ -15,6 +15,7 @@
 #include "sa_agent/ActionTools.h"
 #include "commute_sa/baseline_runtime.h"
 #include "commute_sa/evidence_query.h"
+#include "commute_sa/anchor_reestimate.h"
 #include "commute_sa/personalization.h"
 #include "commute_sa/product_store.h"
 #endif
@@ -1173,6 +1174,8 @@ void ProactiveAgentBusinessModule::OnPdrPoint(const RawPdrPoint &point)
     activeEpisode_.points.push_back(point);
     const size_t n = activeEpisode_.points.size();
 
+    commute_sa::BaselineRuntime::GetInstance().OnPdrPoint(point.observed_at, point.x, point.y);
+
     SensorDebugEvent dbg;
     dbg.sequence_id = ++debugEventSequence_;
     dbg.received_at = receivedAt;
@@ -1438,12 +1441,64 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
             tick.gps.longitude, tick.gps.horizontal_accuracy_m, tick.gps.valid);
         CAMERA_AGENT_LOG_INFO(
             "SceneEngine tick=%{public}s scene=%{public}s scoreH=%{public}.2f scoreC=%{public}.2f "
-            "push=%{public}d intent=%{public}s eta=%{public}.1f block=%{public}s",
+            "push=%{public}d intent=%{public}s eta=%{public}.1f block=%{public}s pdr=%{public}s",
             tick.tick_id.c_str(), commute_sa::SceneToString(baselineDec.scene), baselineDec.score_home,
             baselineDec.score_company, baselineDec.should_service ? 1 : 0, baselineDec.service_intent.c_str(),
-            baselineDec.eta_leave_s, baselineDec.push_block_reason.c_str());
-        commute_sa::ProductStore::GetInstance().ObserveLeaveProgress(
-            tick.observed_at, commute_sa::RelationToString(baselineDec.home_relation));
+            baselineDec.eta_leave_s, baselineDec.push_block_reason.c_str(),
+            commute_sa::BaselineRuntime::GetInstance().PdrDebugJson().c_str());
+        {
+            const std::string sceneStr = commute_sa::SceneToString(baselineDec.scene);
+            const std::string homeRel = commute_sa::RelationToString(baselineDec.home_relation);
+            const std::string companyRel = commute_sa::RelationToString(baselineDec.company_relation);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                lastDebugScene_ = sceneStr;
+                lastDebugHomeRel_ = homeRel;
+                lastDebugCompanyRel_ = companyRel;
+                lastDebugScoreHome_ = baselineDec.score_home;
+                lastDebugScoreCompany_ = baselineDec.score_company;
+                lastDebugEtaLeaveS_ = baselineDec.eta_leave_s;
+                lastDebugDistHomeM_ = baselineDec.has_dist_home ? baselineDec.dist_home_m : -1.0;
+                lastDebugShouldService_ = baselineDec.should_service;
+                lastDebugHasGps_ = hasGps;
+                if (!baselineDec.service_intent.empty()) {
+                    lastDebugIntent_ = baselineDec.service_intent;
+                }
+            }
+            if (sceneStr != lastBaselineScene_ || !hasLastBaselineScene_) {
+                std::ostringstream detail;
+                detail << std::fixed << std::setprecision(2) << "home=" << homeRel << " company=" << companyRel
+                       << " scoreH=" << baselineDec.score_home << " scoreC=" << baselineDec.score_company
+                       << " eta=" << baselineDec.eta_leave_s;
+                if (!baselineDec.push_block_reason.empty()) {
+                    detail << " block=" << baselineDec.push_block_reason;
+                }
+                PublishProductDebugEvent("SCENE", tick.observed_at, sceneStr, detail.str());
+            }
+        }
+        const bool firstOutside = commute_sa::ProductStore::GetInstance().ObserveLeaveProgress(
+            tick.observed_at, commute_sa::RelationToString(baselineDec.home_relation),
+            commute_sa::RelationToString(baselineDec.company_relation));
+        if (firstOutside) {
+            commute_sa::PersonalizationController::GetInstance().OnOutsideObserved(tick.observed_at);
+            PublishProductDebugEvent("OUTSIDE", tick.observed_at, "first OUTSIDE after push",
+                "t* recorded; CONFIRMED_LEAVE personalize pending");
+        }
+        {
+            const auto &th = commute_sa::BaselineRuntime::GetInstance().Engine() != nullptr
+                ? commute_sa::BaselineRuntime::GetInstance().Engine()->GetTheta()
+                : commute_sa::DefaultTheta();
+            const double lookbackS = std::max(th.lead_max_s + 600.0, 1200.0);
+            std::string missedSide;
+            if (commute_sa::ProductStore::GetInstance().ObserveMissedLeave(tick.observed_at,
+                    commute_sa::RelationToString(baselineDec.home_relation),
+                    commute_sa::RelationToString(baselineDec.company_relation), th.away_confirm_s, lookbackS,
+                    th.focus_side, &missedSide)) {
+                commute_sa::PersonalizationController::GetInstance().OnMissedLeave(tick.observed_at, missedSide);
+                PublishProductDebugEvent("LABEL", tick.observed_at, "MISSED_LEAVE",
+                    "side=" + missedSide + " sustained OUTSIDE without prior push");
+            }
+        }
     }
 #endif
 
@@ -1536,7 +1591,7 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
             push.service_intent.c_str(), push.scene.c_str(), push.message.c_str(), push.tick_id.c_str());
     }
 
-    // Update-θ only: AFTER_PUSH settle / DAY_END → then call online LLM once.
+    // Update-θ: first OUTSIDE after push (CONFIRMED_LEAVE) or 20min timeout (FALSE_PUSH) / DAY_END.
     if (commute_sa::BaselineRuntime::GetInstance().Enabled() &&
         commute_sa::BaselineRuntime::GetInstance().Engine() != nullptr) {
         const auto &theta = commute_sa::BaselineRuntime::GetInstance().Engine()->GetTheta();
@@ -1546,24 +1601,38 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                 commute_sa::ProductStore::GetInstance().AppendPersonalizeJob(job.created_at_ms, job.reason,
                     job.last_intent, job.last_scene, job.last_push_at_ms, job.theta_snapshot);
 
-                if (job.reason == "AFTER_PUSH" && job.last_push_at_ms > 0) {
-                    std::string label = "UNKNOWN";
-                    const std::string rel = commute_sa::RelationToString(baselineDec.home_relation);
-                    if (rel == "OUTSIDE" || rel == "NEAR") {
-                        label = "CONFIRMED_LEAVE";
-                    } else if (rel == "INSIDE") {
-                        label = "FALSE_PUSH";
+                if ((job.reason == "AFTER_PUSH" || job.reason == "MISSED_LEAVE") && !job.settle_label.empty()) {
+                    if (job.reason == "AFTER_PUSH" && job.last_push_at_ms > 0) {
+                        const bool leaveCompany = (job.last_intent == "LEAVE_COMPANY_NOTIFICATION");
+                        const std::string rel = leaveCompany
+                            ? commute_sa::RelationToString(baselineDec.company_relation)
+                            : commute_sa::RelationToString(baselineDec.home_relation);
+                        const bool hasDist = leaveCompany ? baselineDec.has_dist_company : baselineDec.has_dist_home;
+                        const double distM = leaveCompany ? baselineDec.dist_company_m : baselineDec.dist_home_m;
+                        commute_sa::ProductStore::GetInstance().AppendLeaveLabel(tick.observed_at, job.last_push_at_ms,
+                            job.settle_label, rel, hasDist, distM);
+                        PublishProductDebugEvent("LABEL", tick.observed_at, job.settle_label,
+                            "reason=" + job.reason + " rel=" + rel + " intent=" + job.last_intent);
                     }
-                    commute_sa::ProductStore::GetInstance().AppendLeaveLabel(tick.observed_at, job.last_push_at_ms,
-                        label, rel, baselineDec.has_dist_home, baselineDec.dist_home_m);
+                    // MISSED_LEAVE already written by ObserveMissedLeave.
+                }
+
+                if (job.reason == "DAY_END") {
+                    const std::string anchorExec =
+                        commute_sa::ProcessQueuedAnchorReestimateJobs(commute_sa::ProductStore::GetInstance().RootDir(), 3);
+                    CAMERA_AGENT_LOG_INFO("DAY_END anchor reestimate drain: %{public}s", anchorExec.c_str());
+                    PublishProductDebugEvent("ANCHOR", tick.observed_at, "DAY_END_DRAIN", anchorExec.substr(0, 200));
                 }
 
                 CAMERA_AGENT_LOG_INFO(
-                    "PersonalizeJob reason=%{public}s → invoke θ LLM (not scene)",
-                    job.reason.c_str());
+                    "PersonalizeJob reason=%{public}s label=%{public}s → invoke θ LLM (not scene)",
+                    job.reason.c_str(), job.settle_label.c_str());
+                PublishProductDebugEvent("LLM_START", tick.observed_at, job.reason,
+                    "settle_label=" + job.settle_label + " invoke θ personalizer");
                 std::ostringstream query;
                 query << "{\"task\":\"update_theta\""
                       << ",\"reason\":\"" << job.reason << "\""
+                      << ",\"settle_label\":\"" << job.settle_label << "\""
                       << ",\"last_intent\":\"" << job.last_intent << "\""
                       << ",\"last_scene\":\"" << job.last_scene << "\""
                       << ",\"last_push_at_ms\":" << job.last_push_at_ms
@@ -1580,6 +1649,7 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                       << ",\"min_evidence\":" << job.theta_snapshot.min_evidence
                       << "},\"instruction\":\"Use evidence tools first, then apply_theta_delta / write_audit / "
                          "request_anchor_reestimate. Max 3 param changes. Do not classify scenes.\"}";
+                const int64_t invokeSinceMs = NowWallClockMs();
                 invokeResult = InvokeAgent(tick.tick_id + "-personalize", query.str());
                 if (invokeResult.status == "NotInitialized" || invokeResult.status == "NotImplemented") {
                     invokeResult.status = "PersonalizeQueuedNoAgent";
@@ -1588,6 +1658,39 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                 } else if (invokeResult.status == "Ok" || invokeResult.implemented) {
                     invokeResult.status = "PersonalizeInvoke";
                 }
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    lastLlmStatus_ = invokeResult.status;
+                    lastLlmAtMs_ = tick.observed_at;
+                }
+                std::string summary = invokeResult.response_message;
+                if (summary.size() > 1200) {
+                    summary.resize(1200);
+                    summary.append("...");
+                }
+                const std::string changesJson =
+                    commute_sa::ProductStore::GetInstance().GetRecentParamChangesJson(invokeSinceMs - 2000, 10);
+                const std::string auditsJson =
+                    commute_sa::ProductStore::GetInstance().GetRecentAuditsJson(invokeSinceMs - 2000, 8);
+                std::ostringstream resultOss;
+                resultOss << "{\"status\":\"" << EscapeJson(invokeResult.status) << "\""
+                          << ",\"reason\":\"" << EscapeJson(job.reason) << "\""
+                          << ",\"settle_label\":\"" << EscapeJson(job.settle_label) << "\""
+                          << ",\"response_summary\":\"" << EscapeJson(summary) << "\""
+                          << ",\"changes\":" << changesJson
+                          << ",\"audits\":" << auditsJson << "}";
+                std::ostringstream detailOss;
+                detailOss << "tap for θ changes; status=" << invokeResult.status;
+                if (changesJson != "[]") {
+                    detailOss << " (has param deltas)";
+                } else if (auditsJson.find("no_op") != std::string::npos ||
+                    auditsJson.find("noop") != std::string::npos) {
+                    detailOss << " (audit no_op)";
+                } else {
+                    detailOss << " (no apply_theta_delta recorded)";
+                }
+                PublishProductDebugEvent("LLM_DONE", tick.observed_at, invokeResult.status, detailOss.str(),
+                    resultOss.str());
             }
         }
     }
@@ -1967,15 +2070,16 @@ constexpr const char *kSaContextEngineDatabaseDir = "/data/service/el2/9903/data
 
 /** θ personalizer system prompt — evidence tools, not per-tick scene labels. */
 constexpr const char *kThetaPersonalizerSystemPrompt = R"delimiter(
-你是通勤场景参数优化 Agent。实时场景识别由端上规则化 SceneEngine 完成；你只根据证据更新 θ / 锚点建议。
+你是通勤场景参数优化 Agent。实时场景由 SceneEngine 完成；你根据证据改 θ，并用历史 leave_episodes 验证收敛。
 
-规则：
-1. 先调用证据工具收集事实，再决定是否改参。优先：get_error_stats、get_leave_episode，需要时再 get_wifi/cell/mag/gps_window。
-2. 单次最多建议修改 3 个参数；遵守步长；禁止编造统计。
-3. 证据不足则调用 write_audit 说明 no_op。
-4. 改参使用 apply_theta_delta（单次最多 3 个参数）；先 get_param_limits。
-5. 不修改业务代码；不做每 tick 场景分类。
-6. 原始 CSV 窗口仅用于解释误推/确认离开。
+闭环（必须）：
+1) get_error_stats + get_leave_episode
+2) begin_theta_trial → evaluate_theta_on_history 记 baseline score
+3) get_param_limits 后小步 apply_theta_delta（本 Invoke 最多 5 次）
+4) 每次改后再 evaluate_theta_on_history：score 升可继续；score 降或 missed_leave 升则 revert_theta_trial
+5) commit_theta_trial + write_audit（写明 baseline→final score）；无把握则 no_op
+
+规则：禁止编造；不做每 tick 场景分类；evaluate 为反事实评分（push score vs enter_leave + lead 窗），非完整 GPS 重放。
 )delimiter";
 } // namespace
 #endif
@@ -2032,7 +2136,7 @@ void ProactiveAgentBusinessModule::TryInitializeAgent()
     }
 
     agentConfig->mode = jiuwen::AgentType::REACT;
-    agentConfig->maxTurn = 6;
+    agentConfig->maxTurn = 10;
     agentConfig->promptTemplates["system"] = kThetaPersonalizerSystemPrompt;
 
     (void)jiuwen::ResourceManager::GetInstance();
@@ -2210,8 +2314,7 @@ ValidationResult ProactiveAgentBusinessModule::ValidateAgentResponse(const Agent
 
 void ProactiveAgentBusinessModule::PushDebugToHap(const DebugDeliveryPayload &payload)
 {
-    // Placeholder for HAP/notification channel. On device, log + persist is the contract for now;
-    // wire WantAgent / notification here when product UI is ready.
+    // Feed debug HAP timeline; WantAgent/notification can be added later.
     if (!payload.implemented) {
         return;
     }
@@ -2220,6 +2323,72 @@ void ProactiveAgentBusinessModule::PushDebugToHap(const DebugDeliveryPayload &pa
         "scoreH=%{public}.2f scoreC=%{public}.2f",
         payload.service_intent.c_str(), payload.scene.c_str(), payload.message.c_str(), payload.tick_id.c_str(),
         payload.score_home, payload.score_company);
+    std::ostringstream detail;
+    detail << std::fixed << std::setprecision(2) << "intent=" << payload.service_intent << " scene=" << payload.scene
+           << " scoreH=" << payload.score_home << " scoreC=" << payload.score_company << " tick=" << payload.tick_id;
+    PublishProductDebugEvent("PUSH", payload.observed_at,
+        payload.message.empty() ? payload.service_intent : payload.message, detail.str());
+}
+
+void ProactiveAgentBusinessModule::PublishProductDebugEvent(const std::string &type, int64_t tMs,
+    const std::string &title, const std::string &detail, const std::string &resultJson)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    ProductDebugEvent ev;
+    ev.seq = ++productDebugSeq_;
+    ev.t_ms = tMs;
+    ev.type = type;
+    ev.title = title;
+    ev.detail = detail;
+    ev.result_json = resultJson;
+    productDebugEvents_.push_back(ev);
+    while (productDebugEvents_.size() > kProductDebugEventCap) {
+        productDebugEvents_.pop_front();
+    }
+}
+
+void ProactiveAgentBusinessModule::ClearProductDebugTimeline()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    productDebugEvents_.clear();
+    productDebugSeq_ = 0;
+}
+
+std::string ProactiveAgentBusinessModule::GetProductDebugTimelineJson() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(2);
+    oss << "{\"ok\":true,\"now_ms\":" << NowWallClockMs()
+        << ",\"status\":{"
+        << "\"scene\":\"" << EscapeJson(lastDebugScene_) << "\""
+        << ",\"home_relation\":\"" << EscapeJson(lastDebugHomeRel_) << "\""
+        << ",\"company_relation\":\"" << EscapeJson(lastDebugCompanyRel_) << "\""
+        << ",\"score_home\":" << lastDebugScoreHome_
+        << ",\"score_company\":" << lastDebugScoreCompany_
+        << ",\"eta_leave_s\":" << lastDebugEtaLeaveS_
+        << ",\"dist_home_m\":" << lastDebugDistHomeM_
+        << ",\"should_service\":" << (lastDebugShouldService_ ? "true" : "false")
+        << ",\"has_gps\":" << (lastDebugHasGps_ ? "true" : "false")
+        << ",\"last_intent\":\"" << EscapeJson(lastDebugIntent_) << "\""
+        << ",\"last_llm_status\":\"" << EscapeJson(lastLlmStatus_) << "\""
+        << ",\"last_llm_at_ms\":" << lastLlmAtMs_
+        << "},\"events\":[";
+    bool first = true;
+    for (const auto &ev : productDebugEvents_) {
+        if (!first) {
+            oss << ",";
+        }
+        first = false;
+        oss << "{\"seq\":" << ev.seq << ",\"t_ms\":" << ev.t_ms << ",\"type\":\"" << EscapeJson(ev.type)
+            << "\",\"title\":\"" << EscapeJson(ev.title) << "\",\"detail\":\"" << EscapeJson(ev.detail) << "\"";
+        if (!ev.result_json.empty()) {
+            oss << ",\"result\":" << ev.result_json;
+        }
+        oss << "}";
+    }
+    oss << "],\"event_count\":" << productDebugEvents_.size() << ",\"next_seq\":" << (productDebugSeq_ + 1) << "}";
+    return oss.str();
 }
 
 bool ProactiveAgentBusinessModule::HasLastTick() const

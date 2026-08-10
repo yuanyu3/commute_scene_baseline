@@ -10,7 +10,7 @@
 推送后离开窗口:
   leave_episodes.jsonl (push) + leave_window_samples.jsonl
 
-流程触发 AFTER_PUSH / DAY_END:
+流程触发（首次 OUTSIDE→CONFIRMED_LEAVE 立刻改参；20min 无 OUTSIDE→FALSE_PUSH；或 DAY_END）:
   leave_episodes.jsonl (label) + personalize_jobs.jsonl + Invoke(θ 更新)
 ```
 

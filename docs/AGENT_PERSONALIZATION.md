@@ -28,23 +28,26 @@
 | `get_error_stats` | `since_ms`, `scene` | n_push / false_push / confirmed_leave |
 | `get_leave_episode` | `t_push_ms?` | push+label 行 |
 | `get_leave_window_samples` | `t_push_ms?`, `limit?` | 稀疏 GPS/行走 |
-| `get_wifi_window` | `t_center_ms?`, `before_s`, `after_s`, `session_dir?`, `limit?` | raw CSV 行 |
-| `get_cell_window` | 同上 | raw CELL |
-| `get_mag_window` | 同上 | raw 磁 |
-| `get_gps_window` | 同上 | raw location |
+| `get_leave_sensor_summary` | `t_push_ms?`, `before_s`, `after_s` | WiFi/CELL/GPS/**PDR**/磁**语义摘要**（非 raw CSV） |
 
-实现：`sa_agent::RegisterEvidenceTools` → `commute_sa::EvidenceQuery`（读 product 根目录 + Ability session dump）。
+实现：`sa_agent::RegisterEvidenceTools` → `commute_sa::EvidenceQuery`。  
+原始 `get_*_window` 仅保留 C++ API 供调试，**不注册给 Agent**。
 
 ### 动作（已注册）
 
 | Tool | 入参 | 出参 |
 |------|------|------|
 | `get_param_limits` | — | min/max/step |
+| `begin_theta_trial` | — | 快照 θ |
 | `apply_theta_delta` | `{param, delta, reason}` | old/new；按 step 裁剪并落盘 |
+| `evaluate_theta_on_history` | `since_ms?`, `limit?` | 历史反事实 score（越高越好） |
+| `revert_theta_trial` / `commit_theta_trial` | — | 回滚或接受试验 |
 | `write_audit` | `message`, `changes?` | `audit_id` → `audit.jsonl` |
 | `request_anchor_reestimate` | `which: home\|company\|both` | `job_id` → `anchor_reestimate_jobs.jsonl` |
 
-实现：`sa_agent::RegisterActionTools` → `commute_sa::ApplyThetaDeltaAction` / `WriteAuditAction` / `RequestAnchorReestimateAction`。
+实现：`sa_agent::RegisterActionTools` → `commute_sa::ApplyThetaDeltaAction` / `EvaluateThetaOnHistoryAction` / trial helpers。
+
+推荐闭环：`begin_theta_trial` → eval baseline → `apply_theta_delta` → eval → 变差则 `revert` → 最终 `commit` + `write_audit`。
 
 ## 系统提示要点
 
@@ -60,9 +63,13 @@
 | `t*_leave_home` | HOME OUTSIDE 持续 `away_confirm_s` 且在外 ≥ `min_away_s` |
 | `t*_leave_company` | COMPANY 侧同上 |
 | `false_push` | 推送后未确认离开 / 用户关闭 |
-| `missed_leave` | 确认离开但未推送 |
+| `missed_leave` | 持续 OUTSIDE ≥ `away_confirm_s`，且 lookback 内无对应侧 push |
 | `lead` | `t* - t_push` |
+
+`missed_leave` 由 `ProductStore::ObserveMissedLeave` 每 tick 自标注，写入 `leave_episodes.jsonl`，并触发 `MISSED_LEAVE` 改参任务（绕过 6h cooldown）。
 
 ## 配置文件
 
 见 `jiuwen_agent/agent_config.json` 与 `jiuwen_agent/tools_contract.json`。
+
+**Agent 能读到哪些语义：** 见 [AGENT_SEMANTICS.md](AGENT_SEMANTICS.md)。

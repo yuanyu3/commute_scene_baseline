@@ -38,6 +38,8 @@ public:
     int32_t StopBleCollection() override;
     int32_t StartCellCollection() override;
     int32_t StopCellCollection() override;
+    std::string GetProductDebugTimeline() override;
+    int32_t ClearProductDebugTimeline() override;
 
 protected:
     void OnStart() override;

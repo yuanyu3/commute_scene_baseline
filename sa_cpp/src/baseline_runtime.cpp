@@ -13,6 +13,17 @@ int64_t NowMs()
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
+void MaybePersistRadioSoft(RadioEvidence *radio, int64_t tMs)
+{
+    if (radio == nullptr || !radio->SoftPersistDue(tMs)) {
+        return;
+    }
+    const std::string json = radio->ExportSoftJson();
+    if (ProductStore::GetInstance().SaveRadioSoftJson(json)) {
+        radio->MarkSoftPersisted(tMs);
+    }
+}
+
 }  // namespace
 
 BaselineRuntime &BaselineRuntime::GetInstance()
@@ -36,6 +47,12 @@ void BaselineRuntime::Init(const std::string &anchorsPath, const std::string &th
     }
     delete engine_;
     engine_ = new SceneEngine(anchors, theta);
+    radio_.Reset(false);
+    pdr_.Reset();
+    std::string softJson;
+    if (ProductStore::GetInstance().LoadRadioSoftJson(&softJson)) {
+        radio_.ImportSoftJson(softJson, NowMs());
+    }
     inited_ = true;
 }
 
@@ -56,19 +73,55 @@ SceneEngine *BaselineRuntime::Engine()
     return engine_;
 }
 
+RadioEvidence *BaselineRuntime::Radio()
+{
+    return &radio_;
+}
+
+PdrEvidence *BaselineRuntime::Pdr()
+{
+    return &pdr_;
+}
+
 void BaselineRuntime::OnWalkingStarted(int64_t tsMs)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     walking_ = true;
     hasWalkStarted_ = true;
     walkStartedAtMs_ = tsMs;
+    pdr_.OnWalkingStarted(tsMs);
 }
 
-void BaselineRuntime::OnWalkingStopped(int64_t /*tsMs*/)
+void BaselineRuntime::OnWalkingStopped(int64_t tsMs)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     walking_ = false;
     hasWalkStarted_ = false;
+    pdr_.OnWalkingStopped(tsMs);
+}
+
+void BaselineRuntime::OnWifiScan(const WifiScanSample &scan)
+{
+    // RadioEvidence has its own mutex; avoid taking BaselineRuntime lock here
+    // so WiFi callbacks do not stall behind OnTick.
+    radio_.OnWifiScan(scan);
+}
+
+void BaselineRuntime::OnCellSample(const CellSample &cell)
+{
+    radio_.OnCellSample(cell);
+}
+
+void BaselineRuntime::OnBleSample(const BleSample &ble)
+{
+    radio_.OnBleSample(ble);
+}
+
+void BaselineRuntime::OnPdrPoint(int64_t tMs, double xM, double yM)
+{
+    // Own mutex inside PdrEvidence; avoid holding BaselineRuntime lock so PDR
+    // callbacks do not stall behind OnTick.
+    pdr_.OnPdrPoint(tMs, xM, yM);
 }
 
 TickDecision BaselineRuntime::OnTick(
@@ -79,6 +132,8 @@ TickDecision BaselineRuntime::OnTick(
     if (!inited_ || engine_ == nullptr || !enabled_) {
         return empty;
     }
+    const RadioDetachSnapshot radioSnap = radio_.Evaluate(tMs);
+
     TickFeatures feat;
     feat.t_ms = tMs;
     feat.has_gps = hasGps && gpsValid;
@@ -88,7 +143,58 @@ TickDecision BaselineRuntime::OnTick(
     feat.walking = walking_;
     feat.has_walk_started = hasWalkStarted_;
     feat.walk_started_at_ms = walkStartedAtMs_;
-    return engine_->Step(feat);
+    feat.wifi_home_detach = radioSnap.wifi_home_detach;
+    feat.wifi_company_detach = radioSnap.wifi_company_detach;
+    feat.cell_leave_home = radioSnap.cell_leave_home;
+    feat.cell_leave_company = radioSnap.cell_leave_company;
+    feat.ble_home_detach = radioSnap.ble_home_detach;
+    feat.ble_company_detach = radioSnap.ble_company_detach;
+    if (engine_ != nullptr) {
+        if (!FocusAllowsHome(engine_->GetTheta().focus_side)) {
+            feat.wifi_home_detach = false;
+            feat.cell_leave_home = false;
+            feat.ble_home_detach = false;
+        }
+        if (!FocusAllowsCompany(engine_->GetTheta().focus_side)) {
+            feat.wifi_company_detach = false;
+            feat.cell_leave_company = false;
+            feat.ble_company_detach = false;
+        }
+    }
+
+    // Pre-tag walk side from current GPS before scoring (first INSIDE/NEAR sticks).
+    if (feat.has_gps && walking_) {
+        const auto &anchors = engine_->GetAnchors();
+        const Relation hPre =
+            RelationToAnchor(feat.lat, feat.lon, anchors.home.lat, anchors.home.lon, anchors.home.r_in_m,
+                anchors.home.r_out_m, nullptr);
+        const Relation cPre =
+            RelationToAnchor(feat.lat, feat.lon, anchors.company.lat, anchors.company.lon, anchors.company.r_in_m,
+                anchors.company.r_out_m, nullptr);
+        pdr_.NoteWalkContext(hPre, cPre);
+    }
+    const PdrLeaveSnapshot pdrSnap = pdr_.Evaluate();
+    feat.pdr_net_out_home_m = pdrSnap.pdr_net_out_home_m;
+    feat.pdr_net_out_company_m = pdrSnap.pdr_net_out_company_m;
+    if (engine_ != nullptr) {
+        if (!FocusAllowsHome(engine_->GetTheta().focus_side)) {
+            feat.pdr_net_out_home_m = 0.0;
+        }
+        if (!FocusAllowsCompany(engine_->GetTheta().focus_side)) {
+            feat.pdr_net_out_company_m = 0.0;
+        }
+    }
+
+    TickDecision dec = engine_->Step(feat);
+    if (FocusAllowsHome(engine_->GetTheta().focus_side) || FocusAllowsCompany(engine_->GetTheta().focus_side)) {
+        const Relation dwellHome =
+            FocusAllowsHome(engine_->GetTheta().focus_side) ? dec.home_relation : Relation::kOutside;
+        const Relation dwellCo =
+            FocusAllowsCompany(engine_->GetTheta().focus_side) ? dec.company_relation : Relation::kOutside;
+        radio_.ObserveDwell(tMs, dwellHome, dwellCo);
+    }
+    MaybePersistRadioSoft(&radio_, tMs);
+    return dec;
 }
 
 bool BaselineRuntime::PersistTheta() const
@@ -120,8 +226,24 @@ bool BaselineRuntime::ApplyThetaDeltaAndPersist(const std::string &param, double
             *out = th.w_walk;
             return true;
         }
+        if (param == "w_pdr") {
+            *out = th.w_pdr;
+            return true;
+        }
+        if (param == "w_wifi") {
+            *out = th.w_wifi;
+            return true;
+        }
+        if (param == "w_cell") {
+            *out = th.w_cell;
+            return true;
+        }
+        if (param == "w_ble") {
+            *out = th.w_ble;
+            return true;
+        }
         if (param == "w_radio") {
-            *out = th.w_radio;
+            *out = th.w_wifi + th.w_cell + th.w_ble;
             return true;
         }
         if (param == "min_evidence") {
@@ -154,6 +276,16 @@ bool BaselineRuntime::ApplyThetaDeltaAndPersist(const std::string &param, double
     engine_->SetTheta(t);
     ProductStore::GetInstance().AppendParamChange(NowMs(), param, oldV, newV, reason);
     return ProductStore::GetInstance().SaveTheta(t);
+}
+
+std::string BaselineRuntime::RadioDebugJson(int64_t tMs) const
+{
+    return radio_.DebugJson(tMs);
+}
+
+std::string BaselineRuntime::PdrDebugJson() const
+{
+    return pdr_.DebugJson();
 }
 
 }  // namespace commute_sa

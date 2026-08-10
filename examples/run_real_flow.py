@@ -239,30 +239,26 @@ def main() -> int:
                 if t_star is None and rel_now == "OUTSIDE":
                     t_star = r["t_ms"]
 
-            # settle label: prefer early confirmed outside; else last known non-UNKNOWN in window
-            label = "UNKNOWN"
-            if last_rel == "OUTSIDE" or last_rel == "NEAR":
-                # NEAR at +20min after leave-home is weak; require OUTSIDE or t_star
-                if t_star is not None or last_rel == "OUTSIDE":
-                    label = "CONFIRMED_LEAVE"
-                elif use_home and last_rel == "INSIDE":
-                    label = "FALSE_PUSH"
-            if last_rel == "INSIDE":
+            # Early confirm on first OUTSIDE; else FALSE_PUSH at settle timeout.
+            settle_t = t_push + int(args.settle_s * 1000)
+            if t_star is not None:
+                label = "CONFIRMED_LEAVE"
+                t_label = t_star
+            elif last_rel == "INSIDE":
                 label = "FALSE_PUSH"
-            elif last_rel == "OUTSIDE":
-                label = "CONFIRMED_LEAVE"
-            elif t_star is not None:
-                label = "CONFIRMED_LEAVE"
+                t_label = min(settle_t, sorted_dec[-1]["t_ms"] if sorted_dec else settle_t)
+            else:
+                label = "UNKNOWN"
+                t_label = min(settle_t, sorted_dec[-1]["t_ms"] if sorted_dec else settle_t)
 
             lead_s = None
             if t_star is not None and t_star >= t_push:
                 lead_s = (t_star - t_push) / 1000.0
-            settle_t = t_push + int(args.settle_s * 1000)
             ep.write(
                 json.dumps(
                     {
                         "type": "label",
-                        "t_label_ms": min(settle_t, sorted_dec[-1]["t_ms"] if sorted_dec else settle_t),
+                        "t_label_ms": t_label,
                         "t_push_ms": t_push,
                         "label": label,
                         "home_relation": last_rel if use_home else push["home_relation"],
@@ -276,8 +272,8 @@ def main() -> int:
                 + "\n"
             )
             print(
-                f"LABEL {label} push@{push['t']} lead_s={lead_s} settle_rel={last_rel} "
-                f"dist={last_dist}"
+                f"LABEL {label} push@{push['t']} t_label={t_label} lead_s={lead_s} "
+                f"anchor_rel={last_rel} dist={last_dist}"
             )
 
     # Link sensor session for evidence tools (wifi/gps windows)

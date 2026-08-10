@@ -179,14 +179,14 @@ bool PathExistsFile(const std::string &p)
 
 const char *kSystemPrompt = R"(你是通勤场景参数优化 Agent。实时预测离家推送由 SceneEngine 完成；你只根据证据更新 θ。
 规则：
-1. 先调用 get_error_stats 与 get_leave_episode；需要时再 get_wifi_window / get_gps_window。
+1. 先调用 get_error_stats 与 get_leave_episode；需要时再 get_leave_sensor_summary。
 2. 再 get_param_limits；单次最多 apply_theta_delta 3 次。
 3. 无足够证据则 write_audit 说明 no_op。
 4. 不做场景分类。根据 FALSE_PUSH / CONFIRMED_LEAVE / lead_s 偏早偏晚决定改参。)";
 
 const char *kSystemPromptFixture = R"(你是通勤场景参数优化 Agent。实时预测离家推送由 SceneEngine 完成；你只根据证据更新 θ。
 规则：
-1. 先调用 get_error_stats 与 get_leave_episode；需要时再 get_wifi_window / get_gps_window。
+1. 先调用 get_error_stats 与 get_leave_episode；需要时再 get_leave_sensor_summary。
 2. 再 get_param_limits；单次最多 apply_theta_delta 3 次。
 3. 无足够证据则 write_audit 说明 no_op。
 4. 不做场景分类。关注 FALSE_PUSH / lead 偏早偏晚。本次样本是 FALSE_PUSH（推送后仍 INSIDE），且家 WiFi 仍强。)";
@@ -202,13 +202,35 @@ std::string BuildQueryFromEpisodes(const std::string &dataRoot)
     std::string line;
     std::string lastPush;
     std::string lastLabel;
+    auto isType = [](const std::string &s, const char *ty) -> bool {
+        // accept "type":"push" or "type": "push"
+        const std::string a = std::string("\"type\":\"") + ty + "\"";
+        const std::string b = std::string("\"type\": \"") + ty + "\"";
+        return s.find(a) != std::string::npos || s.find(b) != std::string::npos;
+    };
+    std::string lastCompanyPush;
+    std::string lastCompanyLabel;
     while (std::getline(iss, line)) {
-        if (line.find("\"type\":\"push\"") != std::string::npos) {
+        if (isType(line, "push")) {
             lastPush = line;
+            if (line.find("LEAVING_COMPANY") != std::string::npos ||
+                line.find("LEAVE_COMPANY") != std::string::npos) {
+                lastCompanyPush = line;
+            }
         }
-        if (line.find("\"type\":\"label\"") != std::string::npos) {
+        if (isType(line, "label")) {
             lastLabel = line;
+            if (line.find("\"side\": \"company\"") != std::string::npos ||
+                line.find("\"side\":\"company\"") != std::string::npos) {
+                lastCompanyLabel = line;
+            }
         }
+    }
+    if (!lastCompanyPush.empty()) {
+        lastPush = lastCompanyPush;
+    }
+    if (!lastCompanyLabel.empty()) {
+        lastLabel = lastCompanyLabel;
     }
     auto grabInt = [](const std::string &s, const char *key) -> int64_t {
         const std::string pat = std::string("\"") + key + "\":";
@@ -223,12 +245,19 @@ std::string BuildQueryFromEpisodes(const std::string &dataRoot)
         return std::strtoll(s.c_str() + pos, nullptr, 10);
     };
     auto grabStr = [](const std::string &s, const char *key) -> std::string {
-        const std::string pat = std::string("\"") + key + "\":\"";
+        const std::string pat = std::string("\"") + key + "\":";
         auto pos = s.find(pat);
         if (pos == std::string::npos) {
             return {};
         }
         pos += pat.size();
+        while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t')) {
+            ++pos;
+        }
+        if (pos >= s.size() || s[pos] != '"') {
+            return {};
+        }
+        ++pos;
         std::string out;
         for (size_t i = pos; i < s.size() && s[i] != '"'; ++i) {
             out.push_back(s[i]);
@@ -250,10 +279,12 @@ std::string BuildQueryFromEpisodes(const std::string &dataRoot)
         label = grabStr(lastLabel, "label");
     }
     std::ostringstream q;
-    q << "{\"task\":\"update_theta\",\"reason\":\"AFTER_PUSH\",\"last_intent\":\"" << intent
-      << "\",\"last_scene\":\"" << scene << "\",\"last_push_at_ms\":" << tPush << ",\"label\":\"" << label
-      << "\",\"instruction\":\"Use evidence tools (get_error_stats, get_leave_episode) then "
-         "apply_theta_delta or write_audit. Max 3 param changes. Respect lead_s if present.\"}";
+    q << "{\"task\":\"update_theta\",\"reason\":\"AFTER_PUSH\",\"focus_side\":\"company\",\"last_intent\":\""
+      << intent << "\",\"last_scene\":\"" << scene << "\",\"last_push_at_ms\":" << tPush << ",\"label\":\""
+      << label
+      << "\",\"instruction\":\"focus_side=company. Use evidence tools then begin_theta_trial / "
+         "apply_theta_delta / evaluate_theta_on_history; revert if score drops; finally "
+         "commit_theta_trial + write_audit. Max 5 applies. Prefer FALSE_PUSH / lead issues on company.\"}";
     return q.str();
 }
 
@@ -442,8 +473,18 @@ int main(int argc, char **argv)
     cfg->description = "Host personalizer with evidence+action tools";
     cfg->version = "1.0.0";
     cfg->mode = AgentType::REACT;
-    cfg->maxTurn = 10;
-    cfg->promptTemplates["system"] = noFixture ? kSystemPrompt : kSystemPromptFixture;
+    cfg->maxTurn = 16;
+    {
+        // Prefer project prompt (company-focus personalization); fall back to embedded.
+        const std::string promptPath = "jiuwen_agent/system_prompt.md";
+        std::string loaded = ReadFile(promptPath);
+        if (noFixture && !loaded.empty()) {
+            cfg->promptTemplates["system"] = loaded;
+            std::cout << "system prompt ← " << promptPath << " (" << loaded.size() << " bytes)\n";
+        } else {
+            cfg->promptTemplates["system"] = noFixture ? kSystemPrompt : kSystemPromptFixture;
+        }
+    }
     cfg->modelConfig.apiKey = WithBearer(apiKey);
     cfg->modelConfig.apiBase = NormalizeApiBase(baseUrl);
     cfg->modelConfig.formatType = FormatType::OPENAI;

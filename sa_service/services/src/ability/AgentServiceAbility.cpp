@@ -16,6 +16,7 @@
 #include "PdrEngine.h"
 #include "ProactiveAgentBusinessModule.h"
 #include "PowerModeController.h"
+#include "commute_sa/baseline_runtime.h"
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -923,6 +924,23 @@ void OnWifiFrame(WifiErrorCode code, WifiFp &wifiFp)
         gLatestWifi = wifiFp;
         gHasWifi = true;
     }
+    {
+        commute_sa::WifiScanSample scan;
+        scan.t_ms = wifiFp.timestamp;
+        scan.aps.reserve(wifiFp.aps.size());
+        for (const auto &ap : wifiFp.aps) {
+            if (ap.bssid.empty()) {
+                continue;
+            }
+            commute_sa::WifiApSample s;
+            s.bssid = ap.bssid;
+            s.rssi = ap.rssi;
+            scan.aps.push_back(std::move(s));
+        }
+        if (!scan.aps.empty()) {
+            commute_sa::BaselineRuntime::GetInstance().OnWifiScan(scan);
+        }
+    }
     for (const auto &ap : wifiFp.aps) {
         std::ostringstream line;
         line << dumpPrefix.str() << "," << ap.bssid << "," << ap.ssid << "," << ap.rssi << "," << ap.freq;
@@ -936,6 +954,13 @@ void OnBleFrame(const BleData &bleData)
         std::lock_guard<std::mutex> lock(gSensorMutex);
         gLatestBle = bleData;
         gHasBle = true;
+    }
+    if (!bleData.mac.empty() && bleData.timestamp > 0) {
+        commute_sa::BleSample sample;
+        sample.t_ms = bleData.timestamp;
+        sample.mac = bleData.mac;
+        sample.rssi = bleData.rssi;
+        commute_sa::BaselineRuntime::GetInstance().OnBleSample(sample);
     }
     std::ostringstream line;
     line << bleData.timestamp << "," << bleData.mac << "," << bleData.name << "," << bleData.rssi;
@@ -989,6 +1014,23 @@ void OnCellFrame(const std::vector<std::shared_ptr<CellInfo>> &cellVec)
         std::lock_guard<std::mutex> lock(gSensorMutex);
         gLatestCells = cellVec;
         gHasCell = !cellVec.empty();
+    }
+    // Prefer strongest serving-like sample for leave evidence.
+    const CellInfo *best = nullptr;
+    for (const auto &cell : cellVec) {
+        if (cell == nullptr || cell->cellId == 0) {
+            continue;
+        }
+        if (best == nullptr || cell->signalIntensity > best->signalIntensity) {
+            best = cell.get();
+        }
+    }
+    if (best != nullptr) {
+        commute_sa::CellSample sample;
+        sample.t_ms = best->timestamp;
+        sample.cell_id = best->cellId;
+        sample.rssi = best->signalIntensity;
+        commute_sa::BaselineRuntime::GetInstance().OnCellSample(sample);
     }
     for (const auto &cell : cellVec) {
         if (cell == nullptr) {
@@ -1772,6 +1814,17 @@ int32_t AgentServiceAbility::StopCellCollection()
     CellProvider::GetInstance()->UnRegisterListener();
     std::lock_guard<std::mutex> lock(gSensorMutex);
     StopDumpWorkerIfIdleNoLock();
+    return 0;
+}
+
+std::string AgentServiceAbility::GetProductDebugTimeline()
+{
+    return ProactiveAgentBusinessModule::GetInstance().GetProductDebugTimelineJson();
+}
+
+int32_t AgentServiceAbility::ClearProductDebugTimeline()
+{
+    ProactiveAgentBusinessModule::GetInstance().ClearProductDebugTimeline();
     return 0;
 }
 

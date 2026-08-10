@@ -57,6 +57,26 @@ std::string CallGetParamLimits(const std::string & /*params*/)
     return std::string("{\"ok\":true,\"param_limits\":") + commute_sa::GetParamLimitsJson() + "}";
 }
 
+std::string CallEvaluateThetaOnHistory(const std::string &params)
+{
+    return commute_sa::EvaluateThetaOnHistoryAction(params);
+}
+
+std::string CallBeginThetaTrial(const std::string &params)
+{
+    return commute_sa::BeginThetaTrialAction(params);
+}
+
+std::string CallRevertThetaTrial(const std::string &params)
+{
+    return commute_sa::RevertThetaTrialAction(params);
+}
+
+std::string CallCommitThetaTrial(const std::string &params)
+{
+    return commute_sa::CommitThetaTrialAction(params);
+}
+
 ErrorCode RegisterOne(const char *name, const char *desc,
     const std::vector<std::tuple<std::string, std::string, std::string, bool>> &params,
     ActionToolBase::Handler handler)
@@ -76,6 +96,10 @@ const std::vector<std::string> &ActionToolNames()
         "write_audit",
         "request_anchor_reestimate",
         "get_param_limits",
+        "evaluate_theta_on_history",
+        "begin_theta_trial",
+        "revert_theta_trial",
+        "commit_theta_trial",
     };
     return kNames;
 }
@@ -86,8 +110,8 @@ std::vector<std::string> RegisterActionTools()
 
     RegisterOne("apply_theta_delta",
         "Apply one clipped theta/fence delta and persist (param_changes + theta.json/anchors.json)",
-        {{"param", "enter_leave|exit_leave|w_walk|w_radio|min_evidence|weekday_leave_home_hour|"
-                   "weekday_leave_company_hour|arm_delay_s|home.r_in_m|company.r_in_m",
+        {{"param", "enter_leave|exit_leave|w_walk|w_wifi|w_cell|w_ble|w_radio|min_evidence|weekday_leave_home_hour|"
+                   "weekday_leave_company_hour|arm_delay_s|lead_min_s|lead_max_s|home.r_in_m|company.r_in_m",
              "string", true},
             {"delta", "Signed delta; clipped to param step", "number", true},
             {"reason", "Short evidence-based reason", "string", false}},
@@ -103,6 +127,19 @@ std::vector<std::string> RegisterActionTools()
         {{"which", "home|company|both", "string", true}}, &CallRequestAnchorReestimate);
 
     RegisterOne("get_param_limits", "Return min/max/step for writable params", {}, &CallGetParamLimits);
+
+    RegisterOne("evaluate_theta_on_history",
+        "Score current θ on historical leave_episodes (counterfactual push/lead). Higher score is better.",
+        {{"since_ms", "optional epoch ms lower bound", "integer", false},
+            {"limit", "max episodes, default 30", "integer", false}},
+        &CallEvaluateThetaOnHistory);
+
+    RegisterOne("begin_theta_trial",
+        "Snapshot θ before try→evaluate→revert/commit loop", {}, &CallBeginThetaTrial);
+
+    RegisterOne("revert_theta_trial", "Restore θ to begin_theta_trial snapshot", {}, &CallRevertThetaTrial);
+
+    RegisterOne("commit_theta_trial", "Keep current θ and clear trial snapshot", {}, &CallCommitThetaTrial);
 
     return ActionToolNames();
 }

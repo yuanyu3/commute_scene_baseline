@@ -28,10 +28,14 @@ add_library(commute_sa_host STATIC
   "${COMMUTE_SA_ROOT}/src/theta.cpp"
   "${COMMUTE_SA_ROOT}/src/scene_engine.cpp"
   "${COMMUTE_SA_ROOT}/src/baseline_runtime.cpp"
+  "${COMMUTE_SA_ROOT}/src/radio_evidence.cpp"
+  "${COMMUTE_SA_ROOT}/src/pdr_evidence.cpp"
   "${COMMUTE_SA_ROOT}/src/personalization.cpp"
   "${COMMUTE_SA_ROOT}/src/product_store.cpp"
   "${COMMUTE_SA_ROOT}/src/evidence_query.cpp"
   "${COMMUTE_SA_ROOT}/src/action_ops.cpp"
+  "${COMMUTE_SA_ROOT}/src/theta_eval.cpp"
+  "${COMMUTE_SA_ROOT}/src/anchor_reestimate.cpp"
 )
 target_include_directories(commute_sa_host PUBLIC "${COMMUTE_SA_ROOT}/include")
 

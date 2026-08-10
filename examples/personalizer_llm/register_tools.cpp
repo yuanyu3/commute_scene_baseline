@@ -60,21 +60,9 @@ std::string GetLeaveSamples(const std::string &p)
 {
     return commute_sa::EvidenceQuery::GetInstance().GetLeaveWindowSamplesJson(p);
 }
-std::string GetWifi(const std::string &p)
+std::string GetSensorSummary(const std::string &p)
 {
-    return commute_sa::EvidenceQuery::GetInstance().GetWifiWindowJson(p);
-}
-std::string GetCell(const std::string &p)
-{
-    return commute_sa::EvidenceQuery::GetInstance().GetCellWindowJson(p);
-}
-std::string GetMag(const std::string &p)
-{
-    return commute_sa::EvidenceQuery::GetInstance().GetMagWindowJson(p);
-}
-std::string GetGps(const std::string &p)
-{
-    return commute_sa::EvidenceQuery::GetInstance().GetGpsWindowJson(p);
+    return commute_sa::EvidenceQuery::GetInstance().GetLeaveSensorSummaryJson(p);
 }
 std::string ApplyDelta(const std::string &p)
 {
@@ -92,6 +80,22 @@ std::string GetLimits(const std::string &)
 {
     return std::string("{\"ok\":true,\"param_limits\":") + commute_sa::GetParamLimitsJson() + "}";
 }
+std::string EvalHistory(const std::string &p)
+{
+    return commute_sa::EvaluateThetaOnHistoryAction(p);
+}
+std::string BeginTrial(const std::string &p)
+{
+    return commute_sa::BeginThetaTrialAction(p);
+}
+std::string RevertTrial(const std::string &p)
+{
+    return commute_sa::RevertThetaTrialAction(p);
+}
+std::string CommitTrial(const std::string &p)
+{
+    return commute_sa::CommitThetaTrialAction(p);
+}
 
 }  // namespace
 
@@ -106,16 +110,17 @@ std::vector<std::string> RegisterPersonalizerTools()
         {{"t_push_ms", "optional latest", "integer", false}}, &GetLeaveEpisode);
     Reg("get_leave_window_samples", "Sparse GPS samples after push",
         {{"t_push_ms", "optional", "integer", false}, {"limit", "optional", "integer", false}}, &GetLeaveSamples);
-    const std::vector<std::tuple<std::string, std::string, std::string, bool>> win = {
-        {"t_center_ms", "optional", "integer", false}, {"t_push_ms", "optional", "integer", false},
-        {"before_s", "optional", "integer", false}, {"after_s", "optional", "integer", false},
-        {"session_dir", "optional", "string", false}, {"limit", "optional", "integer", false},
-    };
-    Reg("get_wifi_window", "Raw wifi CSV window", win, &GetWifi);
-    Reg("get_cell_window", "Raw cell CSV window", win, &GetCell);
-    Reg("get_mag_window", "Raw mag CSV window", win, &GetMag);
-    Reg("get_gps_window", "Raw gps CSV window", win, &GetGps);
+    Reg("get_leave_sensor_summary", "Semantic wifi/cell/gps/mag summary around leave push",
+        {{"t_push_ms", "optional", "integer", false}, {"t_center_ms", "optional", "integer", false},
+            {"before_s", "optional", "integer", false}, {"after_s", "optional", "integer", false},
+            {"session_dir", "optional", "string", false}},
+        &GetSensorSummary);
     Reg("get_param_limits", "Param min/max/step", {}, &GetLimits);
+    Reg("evaluate_theta_on_history", "Score current θ on leave history (higher better)",
+        {{"since_ms", "optional", "integer", false}, {"limit", "optional", "integer", false}}, &EvalHistory);
+    Reg("begin_theta_trial", "Snapshot θ before try/eval loop", {}, &BeginTrial);
+    Reg("revert_theta_trial", "Restore θ snapshot", {}, &RevertTrial);
+    Reg("commit_theta_trial", "Keep current θ, end trial", {}, &CommitTrial);
     Reg("apply_theta_delta", "Apply one clipped theta/fence delta",
         {{"param", "name", "string", true}, {"delta", "signed", "number", true},
             {"reason", "evidence reason", "string", false}},
@@ -126,8 +131,8 @@ std::vector<std::string> RegisterPersonalizerTools()
         {{"which", "home|company|both", "string", true}}, &ReqAnchor);
 
     return {"get_theta", "get_anchors", "get_error_stats", "get_leave_episode", "get_leave_window_samples",
-        "get_wifi_window", "get_cell_window", "get_mag_window", "get_gps_window", "get_param_limits",
-        "apply_theta_delta", "write_audit", "request_anchor_reestimate"};
+        "get_leave_sensor_summary", "get_param_limits", "evaluate_theta_on_history", "begin_theta_trial",
+        "revert_theta_trial", "commit_theta_trial", "apply_theta_delta", "write_audit", "request_anchor_reestimate"};
 }
 
 }  // namespace personalizer

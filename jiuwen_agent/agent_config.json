@@ -1,43 +1,88 @@
 {
+
   "name": "commute_theta_personalizer",
+
   "framework": "jiuwen",
+
   "agent_type": "REACT",
-  "max_turn": 6,
+
+  "max_turn": 10,
+
   "stream": false,
-  "description": "Low-frequency personalization agent: evidence tools + action tools to update theta. Does NOT run per perception tick.",
+
+  "description": "Low-frequency personalization: evidence + try/evaluate/revert θ on history. Not per tick.",
+
   "system_prompt_file": "system_prompt.md",
+
   "tools": {
+
     "evidence": [
+
       "get_theta",
+
       "get_anchors",
+
       "get_error_stats",
+
       "get_leave_episode",
+
       "get_leave_window_samples",
-      "get_wifi_window",
-      "get_cell_window",
-      "get_mag_window",
-      "get_gps_window"
+
+      "get_leave_sensor_summary"
+
     ],
+
     "action": [
+
       "get_param_limits",
+
+      "begin_theta_trial",
+
       "apply_theta_delta",
+
+      "evaluate_theta_on_history",
+
+      "revert_theta_trial",
+
+      "commit_theta_trial",
+
       "write_audit",
+
       "request_anchor_reestimate"
+
     ]
+
   },
+
   "trigger": {
+
     "modes": ["AFTER_PUSH", "DAY_END", "manual"],
+
     "after_push_settle_s": 1200
+
   },
+
   "constraints": {
-    "max_params_per_invoke": 3,
+
+    "max_params_per_invoke": 5,
+
     "require_error_evidence": true,
-    "sensor_window_limit": 500
+
+    "require_eval_before_commit": true
+
   },
+
   "integration": {
+
     "register": "sa_agent::RegisterEvidenceTools + RegisterActionTools + Agent.AddTools",
+
     "query": "commute_sa::EvidenceQuery",
-    "actions": "commute_sa::action_ops",
+
+    "actions": "commute_sa::action_ops + theta_eval",
+
     "host": "OHOS SA ProactiveAgentBusinessModule::TryInitializeAgent"
+
   }
+
 }
+

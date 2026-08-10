@@ -12,10 +12,14 @@ add_library(commute_sa
     src/theta.cpp
     src/scene_engine.cpp
     src/baseline_runtime.cpp
+    src/radio_evidence.cpp
+    src/pdr_evidence.cpp
+    src/anchor_reestimate.cpp
     src/personalization.cpp
     src/product_store.cpp
     src/evidence_query.cpp
     src/action_ops.cpp
+    src/theta_eval.cpp
 )
 target_include_directories(commute_sa PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -31,6 +35,15 @@ if(COMMUTE_SA_BUILD_SMOKE)
 
     add_executable(commute_scene_smoke tests/smoke_scene_engine.cpp)
     target_link_libraries(commute_scene_smoke PRIVATE commute_sa)
+
+    add_executable(commute_radio_smoke tests/smoke_radio_evidence.cpp)
+    target_link_libraries(commute_radio_smoke PRIVATE commute_sa)
+
+    add_executable(commute_pdr_smoke tests/smoke_pdr_evidence.cpp)
+    target_link_libraries(commute_pdr_smoke PRIVATE commute_sa)
+
+    add_executable(commute_gapfill_smoke tests/smoke_gapfill.cpp)
+    target_link_libraries(commute_gapfill_smoke PRIVATE commute_sa)
 
     add_executable(commute_evidence_smoke tests/smoke_evidence_query.cpp)
     target_link_libraries(commute_evidence_smoke PRIVATE commute_sa)

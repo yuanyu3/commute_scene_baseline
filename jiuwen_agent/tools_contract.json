@@ -1,116 +1,252 @@
 {
+
   "tools": [
+
     {
+
       "name": "get_theta",
+
       "category": "evidence",
+
       "description": "Return current theta.json from product root",
+
       "input_schema": {},
+
       "output_schema": {"ok": "bool", "theta": "object", "path": "string"}
+
     },
+
     {
+
       "name": "get_anchors",
+
       "category": "evidence",
+
       "description": "Return WGS84 home/company anchors.json",
+
       "input_schema": {},
+
       "output_schema": {"ok": "bool", "anchors": "object"}
+
     },
+
     {
+
       "name": "get_error_stats",
+
       "category": "evidence",
+
       "description": "Aggregate leave_episodes.jsonl push/label counts and lead timing",
+
       "input_schema": {
+
         "since_ms": "int, optional, default 0",
+
         "scene": "LEAVING_HOME|LEAVING_COMPANY|ALL"
+
       },
+
       "output_schema": {
+
         "n_push": "int",
+
         "n_false_push": "int",
+
         "n_confirmed_leave": "int",
+
         "n_missed_leave": "int",
-        "n_lead_samples": "int",
-        "n_lead_late": "int",
-        "n_lead_ok": "int",
-        "n_lead_early": "int",
-        "lead_p50_s": "float|null",
-        "lead_p90_s": "float|null"
+
+        "lead_p50_s": "float|null"
+
       }
+
     },
+
     {
+
       "name": "get_leave_episode",
+
       "category": "evidence",
+
       "description": "Push + label rows for one episode",
+
       "input_schema": {"t_push_ms": "int, optional → latest push"},
+
       "output_schema": {"t_push_ms": "int", "rows": "array"}
+
     },
+
     {
+
       "name": "get_leave_window_samples",
+
       "category": "evidence",
-      "description": "Sparse GPS/walk samples after push",
+
+      "description": "Sparse GPS/walk samples after push (already condensed)",
+
       "input_schema": {"t_push_ms": "int optional", "limit": "int optional"},
+
       "output_schema": {"samples": "array"}
+
     },
+
     {
-      "name": "get_wifi_window",
+
+      "name": "get_leave_sensor_summary",
+
       "category": "evidence",
-      "description": "Raw wifi_data_*.csv rows in time window",
+
+      "description": "High-density wifi/cell/gps/pdr/mag semantics around t_push (NOT raw CSV). Use this instead of raw sensor dumps.",
+
       "input_schema": {
-        "t_center_ms": "int optional",
+
+        "t_push_ms": "int optional → latest",
+
         "before_s": "int default 600",
+
         "after_s": "int default 1200",
-        "session_dir": "string optional",
-        "limit": "int default 200 max 500; ~half before / half after t_center"
+
+        "session_dir": "string optional"
+
       },
-      "output_schema": {"rows": "string[]"}
+
+      "output_schema": {
+
+        "wifi": "soft set + pre/at/post Jaccard snapshots + detach events",
+
+        "cell": "dominant cell pre/at/post + change events",
+
+        "gps": "dist_home/company snapshots",
+
+        "pdr": "net/path/straightness + outbound_hint",
+
+        "mag": "ema pre/post delta"
+
+      }
+
     },
+
     {
-      "name": "get_cell_window",
-      "category": "evidence",
-      "description": "Raw cell_data_*.csv window",
-      "input_schema": {"same_as": "get_wifi_window"}
-    },
-    {
-      "name": "get_mag_window",
-      "category": "evidence",
-      "description": "Raw mag_data_*.csv window",
-      "input_schema": {"same_as": "get_wifi_window"}
-    },
-    {
-      "name": "get_gps_window",
-      "category": "evidence",
-      "description": "Raw location_data_*.csv window",
-      "input_schema": {"same_as": "get_wifi_window"}
-    },
-    {
+
       "name": "get_param_limits",
+
       "category": "action",
+
       "description": "Return min/max/step for writable params",
+
       "input_schema": {},
+
       "output_schema": {"param_limits": "object"}
+
     },
+
     {
+
       "name": "apply_theta_delta",
+
       "category": "action",
+
       "description": "Apply one clipped theta/fence delta and persist",
+
       "input_schema": {
-        "param": "enter_leave|exit_leave|w_walk|w_radio|min_evidence|weekday_leave_home_hour|weekday_leave_company_hour|arm_delay_s|lead_min_s|lead_max_s|home.r_in_m|company.r_in_m",
+
+        "param": "enter_leave|exit_leave|w_walk|w_wifi|w_cell|w_ble|w_radio|min_evidence|weekday_leave_home_hour|weekday_leave_company_hour|arm_delay_s|lead_min_s|lead_max_s|home.r_in_m|company.r_in_m",
+
         "delta": "number (clipped to step)",
+
         "reason": "string"
+
       },
+
       "output_schema": {"ok": "bool", "old": "number", "new": "number", "delta_applied": "number"}
+
     },
+
     {
+
+      "name": "evaluate_theta_on_history",
+
+      "category": "action",
+
+      "description": "Counterfactual score of current θ on leave_episodes (higher better). Use after apply to converge.",
+
+      "input_schema": {"since_ms": "int optional", "limit": "int optional default 30"},
+
+      "output_schema": {"score": "float", "false_avoided": "int", "missed_leave": "int"}
+
+    },
+
+    {
+
+      "name": "begin_theta_trial",
+
+      "category": "action",
+
+      "description": "Snapshot θ before try→evaluate→revert/commit",
+
+      "input_schema": {},
+
+      "output_schema": {"ok": "bool", "trial_active": "bool"}
+
+    },
+
+    {
+
+      "name": "revert_theta_trial",
+
+      "category": "action",
+
+      "description": "Restore θ snapshot from begin_theta_trial",
+
+      "input_schema": {},
+
+      "output_schema": {"ok": "bool"}
+
+    },
+
+    {
+
+      "name": "commit_theta_trial",
+
+      "category": "action",
+
+      "description": "Accept current θ and clear trial snapshot",
+
+      "input_schema": {},
+
+      "output_schema": {"ok": "bool"}
+
+    },
+
+    {
+
       "name": "write_audit",
+
       "category": "action",
+
       "description": "Append audit.jsonl entry (including no_op)",
+
       "input_schema": {"message": "string", "changes": "object optional"},
+
       "output_schema": {"ok": "bool", "audit_id": "string"}
+
     },
+
     {
+
       "name": "request_anchor_reestimate",
+
       "category": "action",
+
       "description": "Queue offline anchor re-inference job",
+
       "input_schema": {"which": "home|company|both"},
+
       "output_schema": {"ok": "bool", "job_id": "string", "status": "queued"}
+
     }
+
   ]
+
 }
+

@@ -37,6 +37,8 @@ public:
         STOP_BLE_COLLECTION = 15,
         START_CELL_COLLECTION = 16,
         STOP_CELL_COLLECTION = 17,
+        GET_PRODUCT_DEBUG_TIMELINE = 18,
+        CLEAR_PRODUCT_DEBUG_TIMELINE = 19,
     };
 
     virtual std::string HelloWorld() = 0;
@@ -57,6 +59,8 @@ public:
     virtual int32_t StopBleCollection() = 0;
     virtual int32_t StartCellCollection() = 0;
     virtual int32_t StopCellCollection() = 0;
+    virtual std::string GetProductDebugTimeline() = 0;
+    virtual int32_t ClearProductDebugTimeline() = 0;
 
     DECLARE_INTERFACE_DESCRIPTOR(u"ohos.agent.agentservice.IAgentService");
 };

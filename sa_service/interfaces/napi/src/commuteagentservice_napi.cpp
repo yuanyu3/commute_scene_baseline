@@ -274,6 +274,28 @@ napi_value StopCellCollection(napi_env env, napi_callback_info info)
     return ret;
 }
 
+napi_value GetProductDebugTimeline(napi_env env, napi_callback_info info)
+{
+    (void)info;
+    napi_value ret = nullptr;
+    auto proxy = GetAgentProxy();
+    const std::string result = (proxy == nullptr)
+        ? "{\"ok\":false,\"error\":\"sa_unavailable\",\"events\":[],\"status\":{}}"
+        : proxy->GetProductDebugTimeline();
+    napi_create_string_utf8(env, result.c_str(), NAPI_AUTO_LENGTH, &ret);
+    return ret;
+}
+
+napi_value ClearProductDebugTimeline(napi_env env, napi_callback_info info)
+{
+    (void)info;
+    napi_value ret = nullptr;
+    auto proxy = GetAgentProxy();
+    int32_t code = (proxy == nullptr) ? -1 : proxy->ClearProductDebugTimeline();
+    napi_create_int32(env, code, &ret);
+    return ret;
+}
+
 EXTERN_C_START
 static napi_value NapiInit(napi_env env, napi_value exports)
 {
@@ -298,6 +320,8 @@ static napi_value NapiInit(napi_env env, napi_value exports)
         DECLARE_NAPI_FUNCTION("StopBleCollection", StopBleCollection),
         DECLARE_NAPI_FUNCTION("StartCellCollection", StartCellCollection),
         DECLARE_NAPI_FUNCTION("StopCellCollection", StopCellCollection),
+        DECLARE_NAPI_FUNCTION("GetProductDebugTimeline", GetProductDebugTimeline),
+        DECLARE_NAPI_FUNCTION("ClearProductDebugTimeline", ClearProductDebugTimeline),
     };
 
     NAPI_CALL(env, napi_define_properties(env, exports, sizeof(descriptors) / sizeof(descriptors[0]), descriptors));

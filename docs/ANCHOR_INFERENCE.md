@@ -58,3 +58,19 @@
 ```
 
 Agent 可微调 `r_in_m` / `r_out_m`，一般不频繁搬动中心；中心漂移大时触发重估任务。
+
+## 端侧重估执行器（C++）
+
+实现：`sa_cpp/anchor_reestimate.cpp` → `ProcessQueuedAnchorReestimateJobs`。
+
+算法与上文 Python 同源（白天静止簇→公司，夜间/黏着静止簇→家），GPS 来自产品根下各 session 的 `location_data_*.csv` 以及 `leave_window_samples.jsonl`。
+
+### 何时执行
+
+| 时机 | 行为 |
+|------|------|
+| Agent 调 `request_anchor_reestimate` | **立刻**：先入队 `anchor_reestimate_jobs.jsonl`，再同步跑执行器（最多 2 个 job） |
+| `DAY_END` 改参 tick（本地 ≥22 点） | **排空队列**：再跑最多 3 个排队 job（补跑失败/积压） |
+| 主机/离线 | 直接调 `ProcessQueuedAnchorReestimateJobs(root)` |
+
+成功后写回 `anchors.json`，若 `BaselineRuntime` 已启用则 `SetAnchors` 热更新；状态行追加到同一 jsonl（`status=done|failed`）。

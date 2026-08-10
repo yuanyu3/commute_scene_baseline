@@ -237,4 +237,26 @@ int32_t AgentServiceProxy::StopCellCollection()
     int error = Remote()->SendRequest(STOP_CELL_COLLECTION, data, reply, option);
     return (error != OHOS::NO_ERROR) ? -1 : reply.ReadInt32();
 }
+
+std::string AgentServiceProxy::GetProductDebugTimeline()
+{
+    MessageParcel data, reply;
+    MessageOption option(MessageOption::TF_SYNC);
+    data.WriteInterfaceToken(GetDescriptor());
+    int error = Remote()->SendRequest(GET_PRODUCT_DEBUG_TIMELINE, data, reply, option);
+    if (error != OHOS::NO_ERROR) {
+        CAMERA_AGENT_LOG_ERROR("GetProductDebugTimeline SendRequest failed, error code: %{public}d", error);
+        return "{\"ok\":false,\"error\":\"send_request_failed\"}";
+    }
+    return reply.ReadString();
+}
+
+int32_t AgentServiceProxy::ClearProductDebugTimeline()
+{
+    MessageParcel data, reply;
+    MessageOption option(MessageOption::TF_SYNC);
+    data.WriteInterfaceToken(GetDescriptor());
+    int error = Remote()->SendRequest(CLEAR_PRODUCT_DEBUG_TIMELINE, data, reply, option);
+    return (error != OHOS::NO_ERROR) ? -1 : reply.ReadInt32();
+}
 }

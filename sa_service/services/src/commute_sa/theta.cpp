@@ -32,6 +32,18 @@ bool ExtractNumber(const std::string &json, const std::string &key, double *val)
     return true;
 }
 
+bool ExtractString(const std::string &json, const std::string &key, std::string *val)
+{
+    // Avoid matching "type":"label" when looking for key "label" via requiring quote-colon after key.
+    std::regex re("\"" + key + "\"\\s*:\\s*\"([^\"]*)\"");
+    std::smatch m;
+    if (!std::regex_search(json, m, re)) {
+        return false;
+    }
+    *val = m[1].str();
+    return true;
+}
+
 }  // namespace
 
 bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
@@ -69,8 +81,27 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     if (ExtractNumber(json, "w_geo", &v)) {
         t.w_geo = v;
     }
+    bool hasSplitRadio = false;
+    if (ExtractNumber(json, "w_wifi", &v)) {
+        t.w_wifi = v;
+        hasSplitRadio = true;
+    }
+    if (ExtractNumber(json, "w_cell", &v)) {
+        t.w_cell = v;
+        hasSplitRadio = true;
+    }
+    if (ExtractNumber(json, "w_ble", &v)) {
+        t.w_ble = v;
+        hasSplitRadio = true;
+    }
     if (ExtractNumber(json, "w_radio", &v)) {
         t.w_radio = v;
+        if (!hasSplitRadio) {
+            // Legacy single radio weight → split across modalities.
+            t.w_wifi = v * 0.55;
+            t.w_cell = v * 0.30;
+            t.w_ble = v * 0.15;
+        }
     }
     if (ExtractNumber(json, "w_time", &v)) {
         t.w_time = v;
@@ -108,6 +139,12 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     if (ExtractNumber(json, "allow_network_dwell_acc_m", &v)) {
         t.allow_network_dwell_acc_m = v;
     }
+    std::string focus;
+    if (ExtractString(json, "focus_side", &focus)) {
+        if (focus == "home" || focus == "company" || focus == "both") {
+            t.focus_side = focus;
+        }
+    }
     *out = t;
     return true;
 }
@@ -127,8 +164,21 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         theta->exit_leave = clip(theta->exit_leave + delta, 0.2, 0.7);
     } else if (param == "w_walk") {
         theta->w_walk = clip(theta->w_walk + delta, 0.05, 0.4);
+    } else if (param == "w_pdr") {
+        theta->w_pdr = clip(theta->w_pdr + delta, 0.0, 0.4);
+    } else if (param == "w_wifi") {
+        theta->w_wifi = clip(theta->w_wifi + delta, 0.0, 0.4);
+        theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;
+    } else if (param == "w_cell") {
+        theta->w_cell = clip(theta->w_cell + delta, 0.0, 0.3);
+        theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;
+    } else if (param == "w_ble") {
+        theta->w_ble = clip(theta->w_ble + delta, 0.0, 0.2);
+        theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;
     } else if (param == "w_radio") {
-        theta->w_radio = clip(theta->w_radio + delta, 0.05, 0.4);
+        // Legacy: nudge wifi primarily, keep cell/ble ratio.
+        theta->w_wifi = clip(theta->w_wifi + delta, 0.0, 0.4);
+        theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;
     } else if (param == "min_evidence") {
         const double v = clip(static_cast<double>(theta->min_evidence) + delta, 1.0, 5.0);
         theta->min_evidence = static_cast<int>(std::lround(v));

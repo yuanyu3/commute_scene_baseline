@@ -1,6 +1,8 @@
 #include "commute_sa/action_ops.h"
 #include "commute_sa/evidence_query.h"
 #include "commute_sa/product_store.h"
+#include "commute_sa/theta.h"
+#include "commute_sa/theta_eval.h"
 
 #include <fstream>
 #include <iostream>
@@ -14,44 +16,73 @@
 #define MKDIR(p) mkdir(p, 0755)
 #endif
 
+static void WriteFixture(const std::string &root)
+{
+    std::ofstream th(root + "/theta.json", std::ios::trunc);
+    th << "{\"enter_leave\":0.58,\"w_walk\":0.25,\"arm_delay_s\":25,\"min_evidence\":2,"
+          "\"lead_min_s\":90,\"lead_max_s\":240}\n";
+    std::ofstream ep(root + "/leave_episodes.jsonl", std::ios::trunc);
+    ep << "{\"type\":\"push\",\"t_push_ms\":1000,\"intent\":\"DEPARTURE_NOTIFICATION\","
+          "\"score_home\":0.50,\"score_company\":0.1}\n";
+    ep << "{\"type\":\"label\",\"t_push_ms\":1000,\"label\":\"FALSE_PUSH\"}\n";
+    ep << "{\"type\":\"push\",\"t_push_ms\":2000,\"intent\":\"DEPARTURE_NOTIFICATION\","
+          "\"score_home\":0.70,\"score_company\":0.1}\n";
+    ep << "{\"type\":\"label\",\"t_push_ms\":2000,\"label\":\"CONFIRMED_LEAVE\",\"lead_s\":120}\n";
+}
+
 int main()
 {
     const std::string root = "action_ops_smoke_tmp";
     MKDIR(root.c_str());
+    WriteFixture(root);
+
+    commute_sa::Theta th0 = commute_sa::DefaultTheta();
+    commute_sa::LoadThetaFromFile(root + "/theta.json", &th0, nullptr);
+    const std::string eval0 = commute_sa::EvaluateThetaOnHistoryJson(root, th0, 0, 10);
+    std::cout << "eval0=" << eval0 << "\n";
+    if (eval0.find("\"n_episodes\":2") == std::string::npos) {
+        std::cerr << "FAIL eval0\n";
+        return 1;
+    }
+
     commute_sa::ProductStore::GetInstance().Init(root);
     commute_sa::EvidenceQuery::GetInstance().SetRootDir(root);
 
-    {
-        std::ofstream th(root + "/theta.json", std::ios::trunc);
-        th << "{\"enter_leave\":0.58,\"w_walk\":0.25,\"arm_delay_s\":25,\"min_evidence\":2}\n";
+    const std::string begin = commute_sa::BeginThetaTrialAction("{}");
+    std::cout << "begin=" << begin << "\n";
+    if (begin.find("\"ok\":true") == std::string::npos) {
+        std::cerr << "FAIL begin\n";
+        return 1;
     }
 
-    const std::string r1 = commute_sa::ApplyThetaDeltaAction(
+    const std::string apply = commute_sa::ApplyThetaDeltaAction(
         "{\"param\":\"enter_leave\",\"delta\":0.03,\"reason\":\"smoke_false_push\"}");
-    std::cout << "apply=" << r1 << "\n";
-    if (r1.find("\"ok\":true") == std::string::npos) {
+    std::cout << "apply=" << apply << "\n";
+    if (apply.find("\"ok\":true") == std::string::npos) {
         std::cerr << "FAIL apply\n";
         return 1;
     }
 
-    const std::string audit = commute_sa::WriteAuditAction(
-        "{\"message\":\"no_op demo\",\"changes\":{\"n\":0}}");
-    std::cout << "audit=" << audit << "\n";
+    WriteFixture(root);  // refresh episodes if Init touched the jsonl handle
+    commute_sa::Theta th1 = commute_sa::DefaultTheta();
+    commute_sa::LoadThetaFromFile(root + "/theta.json", &th1, nullptr);
+    const std::string eval1 = commute_sa::EvaluateThetaOnHistoryJson(root, th1, 0, 10);
+    std::cout << "eval1=" << eval1 << "\n";
+    if (eval1.find("\"false_avoided\":1") == std::string::npos) {
+        std::cerr << "FAIL false_avoided\n";
+        return 1;
+    }
+
+    const std::string revert = commute_sa::RevertThetaTrialAction("{}");
+    std::cout << "revert=" << revert << "\n";
+    if (revert.find("\"ok\":true") == std::string::npos) {
+        std::cerr << "FAIL revert\n";
+        return 1;
+    }
+
+    const std::string audit = commute_sa::WriteAuditAction("{\"message\":\"trial smoke ok\"}");
     if (audit.find("\"ok\":true") == std::string::npos) {
         std::cerr << "FAIL audit\n";
-        return 1;
-    }
-
-    const std::string job = commute_sa::RequestAnchorReestimateAction("{\"which\":\"home\"}");
-    std::cout << "job=" << job << "\n";
-    if (job.find("\"ok\":true") == std::string::npos || job.find("job_id") == std::string::npos) {
-        std::cerr << "FAIL anchor job\n";
-        return 1;
-    }
-
-    const std::string lim = commute_sa::GetParamLimitsJson();
-    if (lim.find("enter_leave") == std::string::npos) {
-        std::cerr << "FAIL limits\n";
         return 1;
     }
 

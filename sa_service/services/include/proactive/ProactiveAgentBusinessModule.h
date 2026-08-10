@@ -9,6 +9,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -350,6 +351,12 @@ public:
     ValidationResult ValidateAgentResponse(const AgentInvokeResult &response);
     void PushDebugToHap(const DebugDeliveryPayload &payload);
 
+    /** Live timeline for debug HAP (push / label / LLM / scene). */
+    std::string GetProductDebugTimelineJson() const;
+    void ClearProductDebugTimeline();
+    void PublishProductDebugEvent(const std::string &type, int64_t tMs, const std::string &title,
+        const std::string &detail, const std::string &resultJson = "");
+
     /** Last produced tick / snapshot (for tests / future Agent). */
     bool HasLastTick() const;
     SaPerceptionTick GetLastTick() const;
@@ -436,6 +443,31 @@ private:
     bool debugSinksConfig_ = false;
     std::string lastBaselineScene_;
     bool hasLastBaselineScene_ = false;
+
+    struct ProductDebugEvent {
+        uint64_t seq = 0;
+        int64_t t_ms = 0;
+        std::string type;
+        std::string title;
+        std::string detail;
+        /** Optional JSON object for LLM outcome (changes + audits + response_summary). */
+        std::string result_json;
+    };
+    static constexpr size_t kProductDebugEventCap = 200;
+    uint64_t productDebugSeq_ = 0;
+    std::deque<ProductDebugEvent> productDebugEvents_;
+    std::string lastDebugScene_;
+    std::string lastDebugHomeRel_;
+    std::string lastDebugCompanyRel_;
+    std::string lastDebugIntent_;
+    double lastDebugScoreHome_ = 0.0;
+    double lastDebugScoreCompany_ = 0.0;
+    double lastDebugEtaLeaveS_ = -1.0;
+    double lastDebugDistHomeM_ = -1.0;
+    bool lastDebugShouldService_ = false;
+    bool lastDebugHasGps_ = false;
+    std::string lastLlmStatus_;
+    int64_t lastLlmAtMs_ = 0;
 
     bool hasLastTick_ = false;
     SaPerceptionTick lastTick_;

@@ -6,7 +6,7 @@
 3) 更新参数    PersonalizationController 触发时 → 在线 LLM 改 θ
 ```
 
-推送约束：`OUTSIDE` 不发「带钥匙」；同一离开 episode 只推一次；`lead_s`/`t_star` 写入 settle 标签。
+推送约束：`OUTSIDE` 不发「带钥匙」；同一离开 episode 只推一次；首次 `OUTSIDE` 记 `t*`/`lead_s` 并立刻 `CONFIRMED_LEAVE` 改参；若约 20min 内从未 `OUTSIDE` 则 `FALSE_PUSH` 再改参。
 
 ## LLM 何时调用（流程门控，不是 env 开关）
 
@@ -14,7 +14,8 @@
 |------|------|
 | 平时每个 tick | **不调** LLM |
 | SceneEngine `should_service` | 本地推送，仍不调 LLM |
-| 推送后约 20min（`AFTER_PUSH`） | **调用** θ 个性化 LLM |
+| 推送后首次 `OUTSIDE`（`CONFIRMED_LEAVE`） | **立即调用** θ 个性化 LLM |
+| 推送后约 20min 仍未 `OUTSIDE`（`FALSE_PUSH`） | **调用** θ 个性化 LLM |
 | 本地 ≥22 点且当日未跑（`DAY_END`） | **调用** θ 个性化 LLM |
 
 `agent.env` 只放 **API 凭证** 与可选 `SA_AGENT_DEBUG_SINKS`，**不**用 `SA_AGENT_INVOKE` / `SA_AGENT_PERSONALIZE` 控制是否调用。

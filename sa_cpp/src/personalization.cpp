@@ -68,6 +68,27 @@ void PersonalizationController::OnBaselinePush(int64_t tMs, const std::string &i
     lastIntent_ = intent;
     lastScene_ = scene;
     pushPendingSettle_ = true;
+    outsideConfirmed_ = false;
+}
+
+void PersonalizationController::OnOutsideObserved(int64_t tMs)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!pushPendingSettle_ || lastPushAtMs_ <= 0) {
+        return;
+    }
+    if (tMs < lastPushAtMs_) {
+        return;
+    }
+    outsideConfirmed_ = true;
+}
+
+void PersonalizationController::OnMissedLeave(int64_t tMs, const std::string &side)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    missedLeavePending_ = true;
+    missedLeaveSide_ = side;
+    missedLeaveAtMs_ = tMs;
 }
 
 bool PersonalizationController::MaybeEnqueueJob(int64_t nowMs, const Theta &currentTheta)
@@ -76,21 +97,38 @@ bool PersonalizationController::MaybeEnqueueJob(int64_t nowMs, const Theta &curr
     if (!enabled_ || hasJob_) {
         return false;
     }
-    if (lastJobAtMs_ > 0 &&
-        (nowMs - lastJobAtMs_) < static_cast<int64_t>(cooldownSec_ * 1000.0)) {
-        return false;
-    }
 
     std::string reason;
-    if (pushPendingSettle_ && lastPushAtMs_ > 0 &&
-        (nowMs - lastPushAtMs_) >= static_cast<int64_t>(afterPushSettleSec_ * 1000.0)) {
-        reason = "AFTER_PUSH";
-        pushPendingSettle_ = false;
-    } else if (LocalHour(nowMs) >= 22 && LocalDayKey(nowMs) != lastJobDayKey_) {
-        // Evening batch: at most once per local calendar day.
-        reason = "DAY_END";
+    std::string settleLabel;
+    // Missed leave is high-priority; bypass personalize cooldown.
+    if (missedLeavePending_) {
+        reason = "MISSED_LEAVE";
+        settleLabel = "MISSED_LEAVE";
+        lastIntent_ = (missedLeaveSide_ == "company") ? "LEAVE_COMPANY_NOTIFICATION" : "DEPARTURE_NOTIFICATION";
+        lastScene_ = (missedLeaveSide_ == "company") ? "LEAVING_COMPANY" : "LEAVING_HOME";
+        lastPushAtMs_ = 0;
+        missedLeavePending_ = false;
     } else {
-        return false;
+        if (lastJobAtMs_ > 0 &&
+            (nowMs - lastJobAtMs_) < static_cast<int64_t>(cooldownSec_ * 1000.0)) {
+            return false;
+        }
+        if (pushPendingSettle_ && outsideConfirmed_) {
+            reason = "AFTER_PUSH";
+            settleLabel = "CONFIRMED_LEAVE";
+            pushPendingSettle_ = false;
+            outsideConfirmed_ = false;
+        } else if (pushPendingSettle_ && lastPushAtMs_ > 0 &&
+            (nowMs - lastPushAtMs_) >= static_cast<int64_t>(afterPushSettleSec_ * 1000.0)) {
+            reason = "AFTER_PUSH";
+            settleLabel = "FALSE_PUSH";
+            pushPendingSettle_ = false;
+            outsideConfirmed_ = false;
+        } else if (LocalHour(nowMs) >= 22 && LocalDayKey(nowMs) != lastJobDayKey_) {
+            reason = "DAY_END";
+        } else {
+            return false;
+        }
     }
 
     pending_ = PersonalizeJob {};
@@ -99,6 +137,7 @@ bool PersonalizationController::MaybeEnqueueJob(int64_t nowMs, const Theta &curr
     pending_.last_intent = lastIntent_;
     pending_.last_scene = lastScene_;
     pending_.last_push_at_ms = lastPushAtMs_;
+    pending_.settle_label = settleLabel;
     pending_.theta_snapshot = currentTheta;
     hasJob_ = true;
     lastJobAtMs_ = nowMs;

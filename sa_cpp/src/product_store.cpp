@@ -1,7 +1,9 @@
 #include "commute_sa/product_store.h"
 
 #include "commute_sa/anchors.h"
+#include "commute_sa/theta.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
@@ -122,7 +124,13 @@ void ProductStore::AppendLeavePush(int64_t tPushMs, const std::string &intent, c
 {
     std::lock_guard<std::mutex> lock(mutex_);
     activePushMs_ = tPushMs;
+    activeIntent_ = intent;
     tStarOutsideMs_ = 0;
+    if (intent == "LEAVE_COMPANY_NOTIFICATION") {
+        lastCompanyPushMs_ = tPushMs;
+    } else {
+        lastHomePushMs_ = tPushMs;
+    }
     std::ostringstream oss;
     oss << std::setprecision(8)
         << "{\"type\":\"push\",\"t_push_ms\":" << tPushMs << ",\"intent\":\"" << Esc(intent) << "\",\"scene\":\""
@@ -133,15 +141,94 @@ void ProductStore::AppendLeavePush(int64_t tPushMs, const std::string &intent, c
     AppendLine(leaveEpisodes_, oss.str());
 }
 
-void ProductStore::ObserveLeaveProgress(int64_t tMs, const std::string &homeRelation)
+bool ProductStore::ObserveLeaveProgress(int64_t tMs, const std::string &homeRelation,
+    const std::string &companyRelation)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (activePushMs_ <= 0 || tStarOutsideMs_ > 0) {
-        return;
+        return false;
     }
-    if (homeRelation == "OUTSIDE") {
+    const bool leaveCompany = (activeIntent_ == "LEAVE_COMPANY_NOTIFICATION");
+    const std::string &rel = leaveCompany ? companyRelation : homeRelation;
+    if (rel == "OUTSIDE") {
         tStarOutsideMs_ = tMs;
+        return true;
     }
+    return false;
+}
+
+bool ProductStore::ObserveMissedLeave(int64_t tMs, const std::string &homeRelation,
+    const std::string &companyRelation, double awayConfirmS, double lookbackS, const std::string &focusSide,
+    std::string *sideOut)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!inited_) {
+        return false;
+    }
+    const int64_t confirmMs = static_cast<int64_t>(std::max(30.0, awayConfirmS) * 1000.0);
+    const int64_t lookbackMs = static_cast<int64_t>(std::max(60.0, lookbackS) * 1000.0);
+
+    auto tickSide = [&](const std::string &rel, int64_t *outsideSince, bool *emitted, bool *seenInside,
+                         int64_t lastPushMs, const std::string &side, const std::string &pushIntent) -> bool {
+        if (rel == "INSIDE" || rel == "NEAR") {
+            *seenInside = true;
+            *outsideSince = 0;
+            *emitted = false;
+            return false;
+        }
+        if (rel != "OUTSIDE") {
+            return false;
+        }
+        // Never mark missed if we never observed INSIDE/NEAR (boot already outside / commute).
+        if (!*seenInside) {
+            return false;
+        }
+        if (*outsideSince <= 0) {
+            *outsideSince = tMs;
+            return false;
+        }
+        if (*emitted) {
+            return false;
+        }
+        if ((tMs - *outsideSince) < confirmMs) {
+            return false;
+        }
+        // Covered by an active push for this side → CONFIRMED path, not missed.
+        if (activePushMs_ > 0 && activeIntent_ == pushIntent && activePushMs_ <= *outsideSince) {
+            *emitted = true;
+            return false;
+        }
+        // Recent push before leaving → not a miss.
+        if (lastPushMs > 0 && lastPushMs >= (*outsideSince - lookbackMs) && lastPushMs <= *outsideSince) {
+            *emitted = true;
+            return false;
+        }
+        *emitted = true;
+        std::ostringstream oss;
+        oss << "{\"type\":\"label\",\"t_label_ms\":" << tMs << ",\"t_push_ms\":0"
+            << ",\"label\":\"MISSED_LEAVE\",\"side\":\"" << Esc(side) << "\",\"home_relation\":\""
+            << Esc(homeRelation) << "\",\"company_relation\":\"" << Esc(companyRelation)
+            << "\",\"t_star_ms\":" << *outsideSince << ",\"lead_s\":null,\"away_confirm_s\":" << awayConfirmS
+            << ",\"lookback_s\":" << lookbackS << "}";
+        AppendLine(leaveEpisodes_, oss.str());
+        if (sideOut) {
+            *sideOut = side;
+        }
+        return true;
+    };
+
+    bool fired = false;
+    if (FocusAllowsHome(focusSide)) {
+        fired = tickSide(homeRelation, &outsideHomeSinceMs_, &missedHomeEmitted_, &seenInsideHome_, lastHomePushMs_,
+                    "home", "DEPARTURE_NOTIFICATION") ||
+            fired;
+    }
+    if (FocusAllowsCompany(focusSide)) {
+        fired = tickSide(companyRelation, &outsideCompanySinceMs_, &missedCompanyEmitted_, &seenInsideCompany_,
+                    lastCompanyPushMs_, "company", "LEAVE_COMPANY_NOTIFICATION") ||
+            fired;
+    }
+    return fired;
 }
 
 void ProductStore::AppendLeaveLabel(int64_t tLabelMs, int64_t tPushMs, const std::string &label,
@@ -162,6 +249,7 @@ void ProductStore::AppendLeaveLabel(int64_t tLabelMs, int64_t tPushMs, const std
     AppendLine(leaveEpisodes_, oss.str());
     if (tPushMs == activePushMs_) {
         activePushMs_ = 0;
+        activeIntent_.clear();
         tStarOutsideMs_ = 0;
     }
 }
@@ -201,6 +289,16 @@ void ProductStore::AppendParamChange(
     oss << "{\"t_ms\":" << tMs << ",\"param\":\"" << Esc(param) << "\",\"old\":" << oldValue << ",\"new\":" << newValue
         << ",\"reason\":\"" << Esc(reason) << "\"}";
     AppendLine(paramChanges_, oss.str());
+    RecentParamChange rec;
+    rec.t_ms = tMs;
+    rec.param = param;
+    rec.old_value = oldValue;
+    rec.new_value = newValue;
+    rec.reason = reason;
+    recentParamChanges_.push_back(rec);
+    while (recentParamChanges_.size() > kRecentChangeCap) {
+        recentParamChanges_.pop_front();
+    }
 }
 
 std::string ProductStore::AppendAudit(int64_t tMs, const std::string &message, const std::string &changesJson)
@@ -217,7 +315,68 @@ std::string ProductStore::AppendAudit(int64_t tMs, const std::string &message, c
     oss << "{\"audit_id\":\"" << Esc(id.str()) << "\",\"t_ms\":" << tMs << ",\"message\":\"" << Esc(message)
         << "\",\"changes\":" << changes << "}";
     AppendLine(auditLog_, oss.str());
+    RecentAudit rec;
+    rec.t_ms = tMs;
+    rec.audit_id = id.str();
+    rec.message = message;
+    rec.changes_json = changes;
+    recentAudits_.push_back(rec);
+    while (recentAudits_.size() > kRecentAuditCap) {
+        recentAudits_.pop_front();
+    }
     return id.str();
+}
+
+std::string ProductStore::GetRecentParamChangesJson(int64_t sinceMs, int limit) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::ostringstream oss;
+    oss << "[";
+    bool first = true;
+    int n = 0;
+    for (auto it = recentParamChanges_.rbegin(); it != recentParamChanges_.rend(); ++it) {
+        if (sinceMs > 0 && it->t_ms < sinceMs) {
+            continue;
+        }
+        if (n >= limit) {
+            break;
+        }
+        if (!first) {
+            oss << ",";
+        }
+        first = false;
+        ++n;
+        oss << "{\"t_ms\":" << it->t_ms << ",\"param\":\"" << Esc(it->param) << "\",\"old\":" << it->old_value
+            << ",\"new\":" << it->new_value << ",\"reason\":\"" << Esc(it->reason) << "\"}";
+    }
+    oss << "]";
+    return oss.str();
+}
+
+std::string ProductStore::GetRecentAuditsJson(int64_t sinceMs, int limit) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::ostringstream oss;
+    oss << "[";
+    bool first = true;
+    int n = 0;
+    for (auto it = recentAudits_.rbegin(); it != recentAudits_.rend(); ++it) {
+        if (sinceMs > 0 && it->t_ms < sinceMs) {
+            continue;
+        }
+        if (n >= limit) {
+            break;
+        }
+        if (!first) {
+            oss << ",";
+        }
+        first = false;
+        ++n;
+        oss << "{\"t_ms\":" << it->t_ms << ",\"audit_id\":\"" << Esc(it->audit_id) << "\",\"message\":\""
+            << Esc(it->message) << "\",\"changes\":" << it->changes_json << "}";
+    }
+    oss << "]";
+    return oss.str();
 }
 
 std::string ProductStore::AppendAnchorReestimateJob(int64_t tMs, const std::string &which)
@@ -233,7 +392,45 @@ std::string ProductStore::AppendAnchorReestimateJob(int64_t tMs, const std::stri
     oss << "{\"job_id\":\"" << Esc(id.str()) << "\",\"t_ms\":" << tMs << ",\"which\":\"" << Esc(which)
         << "\",\"status\":\"queued\"}";
     AppendLine(anchorJobs_, oss.str());
+    PendingAnchorJob job;
+    job.job_id = id.str();
+    job.which = which;
+    job.t_ms = tMs;
+    pendingAnchorJobs_.push_back(job);
     return id.str();
+}
+
+bool ProductStore::PopQueuedAnchorJob(std::string *jobId, std::string *which, int64_t *tMs)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (pendingAnchorJobs_.empty()) {
+        return false;
+    }
+    const PendingAnchorJob job = pendingAnchorJobs_.front();
+    pendingAnchorJobs_.pop_front();
+    if (jobId) {
+        *jobId = job.job_id;
+    }
+    if (which) {
+        *which = job.which;
+    }
+    if (tMs) {
+        *tMs = job.t_ms;
+    }
+    return true;
+}
+
+void ProductStore::AppendAnchorJobStatus(const std::string &jobId, const std::string &status,
+    const std::string &detail)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!anchorJobs_.is_open()) {
+        return;
+    }
+    std::ostringstream oss;
+    oss << "{\"job_id\":\"" << Esc(jobId) << "\",\"status\":\"" << Esc(status) << "\",\"detail\":\"" << Esc(detail)
+        << "\"}";
+    AppendLine(anchorJobs_, oss.str());
 }
 
 bool ProductStore::SaveTheta(const Theta &theta) const
@@ -254,7 +451,10 @@ bool ProductStore::SaveTheta(const Theta &theta) const
         << "  \"w_walk\": " << theta.w_walk << ",\n"
         << "  \"w_pdr\": " << theta.w_pdr << ",\n"
         << "  \"w_geo\": " << theta.w_geo << ",\n"
-        << "  \"w_radio\": " << theta.w_radio << ",\n"
+        << "  \"w_wifi\": " << theta.w_wifi << ",\n"
+        << "  \"w_cell\": " << theta.w_cell << ",\n"
+        << "  \"w_ble\": " << theta.w_ble << ",\n"
+        << "  \"w_radio\": " << (theta.w_wifi + theta.w_cell + theta.w_ble) << ",\n"
         << "  \"w_time\": " << theta.w_time << ",\n"
         << "  \"weekday_leave_home_hour\": " << theta.weekday_leave_home_hour << ",\n"
         << "  \"weekday_leave_company_hour\": " << theta.weekday_leave_company_hour << ",\n"
@@ -266,7 +466,8 @@ bool ProductStore::SaveTheta(const Theta &theta) const
         << "  \"min_away_s\": " << theta.min_away_s << ",\n"
         << "  \"push_cooldown_s\": " << theta.push_cooldown_s << ",\n"
         << "  \"max_gps_acc_m\": " << theta.max_gps_acc_m << ",\n"
-        << "  \"allow_network_dwell_acc_m\": " << theta.allow_network_dwell_acc_m << "\n"
+        << "  \"allow_network_dwell_acc_m\": " << theta.allow_network_dwell_acc_m << ",\n"
+        << "  \"focus_side\": \"" << theta.focus_side << "\"\n"
         << "}\n";
     return out.good();
 }
@@ -294,6 +495,42 @@ bool ProductStore::SaveAnchors(const AnchorSet &anchors) const
         << "  \"notes\": \"" << Esc(anchors.notes) << "\"\n"
         << "}\n";
     return out.good();
+}
+
+bool ProductStore::SaveRadioSoftJson(const std::string &json) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (root_.empty()) {
+        return false;
+    }
+    std::ofstream out(root_ + "/radio_soft.json", std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+        return false;
+    }
+    out << json;
+    if (!json.empty() && json.back() != '\n') {
+        out << '\n';
+    }
+    return out.good();
+}
+
+bool ProductStore::LoadRadioSoftJson(std::string *out) const
+{
+    if (out == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (root_.empty()) {
+        return false;
+    }
+    std::ifstream in(root_ + "/radio_soft.json", std::ios::in | std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    *out = ss.str();
+    return !out->empty();
 }
 
 }  // namespace commute_sa

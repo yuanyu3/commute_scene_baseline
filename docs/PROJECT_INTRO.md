@@ -26,7 +26,7 @@
 │ ① 实时环（无 LLM）                                        │
 │ SA 感知 tick → 特征 → SceneEngine → 场景 / 可选推送        │
 └───────────────────────────┬──────────────────────────────┘
-                            │ 推送后 ~20min / 日终
+                            │ 首次 OUTSIDE / 误推超时 / 日终
                             ▼
 ┌──────────────────────────────────────────────────────────┐
 │ ② 改参环（在线 LLM，低频）                                 │
@@ -40,6 +40,8 @@
 ---
 
 ## 实时判定（SceneEngine）
+
+默认 `focus_side=company`：只启用公司侧离开候选与推送；家侧 relation 仍可计算但不推 `DEPARTURE_NOTIFICATION`。
 
 权威实现：`sa_cpp/`（同步至 `sa_service/.../commute_sa/`）。
 
@@ -55,7 +57,7 @@
 ### 单 tick 流程（简述）
 
 1. GPS 相对家/公司锚点 → `INSIDE` / `NEAR` / `OUTSIDE`
-2. `ScoreLeaving`：行走、PDR、距离外扩、WiFi/Cell 脱离、时段先验加权；**距离明显变近则离开分清零**
+2. `ScoreLeaving`：行走、PDR、距离外扩、**在线 WiFi/Cell 脱离**（见 `docs/RADIO_EVIDENCE.md`）、时段先验加权；**距离明显变近则离开分清零**
 3. 分数 ≥ `enter_leave` 且 hits ≥ `min_evidence` 且过 `arm_delay` → 进入 `LEAVING_*`
 4. **预测推送门控**（带钥匙必须在完全离家前）：
    - 仅 `INSIDE` / `NEAR`（**禁止 OUTSIDE 推**）
@@ -75,7 +77,8 @@
 |------|------|
 | 每个 tick | 不调 LLM |
 | `should_service` | 本地推送，不调 LLM |
-| `AFTER_PUSH`（约 20 min） | 调 θ LLM |
+| 推送后首次 `OUTSIDE` | 标 `CONFIRMED_LEAVE`，**立刻**调 θ LLM |
+| 推送后约 20 min 仍未离开 | 标 `FALSE_PUSH`，调 θ LLM |
 | `DAY_END`（≥22 点） | 调 θ LLM |
 
 工具分两类：
@@ -83,7 +86,7 @@
 - **Evidence**：`get_theta` / `get_error_stats` / `get_leave_episode` / sensor windows …
 - **Action**：`apply_theta_delta` / `write_audit` / `request_anchor_reestimate` …
 
-策略示例：误推提高 `enter_leave` / `min_evidence` / `w_radio`；确认离开但 lead 偏小则略降阈值或 `arm_delay`。
+策略示例：误推提高 `enter_leave` / `min_evidence` / `w_radio`；确认离开但 lead 偏小则略降阈值或 `arm_delay`。改参后应用 `evaluate_theta_on_history` 在历史 episode 上验证，变差则 `revert_theta_trial`。
 
 ---
 
@@ -95,6 +98,7 @@
 | `sa_cpp/` | 共享 C++：SceneEngine、ProductStore、Evidence/Action、主机 smoke |
 | `jiuwen_agent/` | 改参 system prompt + tools 契约 |
 | `examples/personalizer_llm/` | 主机 DeepSeek/Jiuwen 个性化试跑与导出 |
+| `hap_debug/` | 调试 HAP：轮询 Scene / Push / Label / LLM 时间线 |
 | `python/commute_baseline/` | **可选**离线回放（运行时不依赖） |
 | `config/` `schemas/` | 默认 θ、锚点、Schema |
 | `docs/` | 架构、流程、CRS、采集、改参等 |
