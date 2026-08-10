@@ -103,6 +103,33 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
             t.w_ble = v * 0.15;
         }
     }
+    if (ExtractNumber(json, "thr_walk", &v)) {
+        t.thr_walk = v;
+    }
+    if (ExtractNumber(json, "thr_pdr", &v)) {
+        t.thr_pdr = v;
+    }
+    if (ExtractNumber(json, "thr_geo", &v)) {
+        t.thr_geo = v;
+    }
+    if (ExtractNumber(json, "thr_wifi", &v)) {
+        t.thr_wifi = v;
+    }
+    if (ExtractNumber(json, "thr_cell", &v)) {
+        t.thr_cell = v;
+    }
+    if (ExtractNumber(json, "thr_ble", &v)) {
+        t.thr_ble = v;
+    }
+    if (ExtractNumber(json, "thr_time", &v)) {
+        t.thr_time = v;
+    }
+    if (ExtractNumber(json, "thr_wifi_jaccard", &v)) {
+        t.thr_wifi_jaccard = v;
+    }
+    if (ExtractNumber(json, "radio_suppress_after_approach_s", &v)) {
+        t.radio_suppress_after_approach_s = v;
+    }
     if (ExtractNumber(json, "w_time", &v)) {
         t.w_time = v;
     }
@@ -117,6 +144,27 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     }
     if (ExtractNumber(json, "arm_delay_s", &v)) {
         t.arm_delay_s = v;
+    }
+    if (ExtractNumber(json, "hsmm_preleave_min_s", &v)) {
+        t.hsmm_preleave_min_s = v;
+    }
+    if (ExtractNumber(json, "hsmm_preleave_mean_s", &v)) {
+        t.hsmm_preleave_mean_s = v;
+    }
+    if (ExtractNumber(json, "hsmm_preleave_max_s", &v)) {
+        t.hsmm_preleave_max_s = v;
+    }
+    if (ExtractNumber(json, "hsmm_leaving_min_s", &v)) {
+        t.hsmm_leaving_min_s = v;
+    }
+    if (ExtractNumber(json, "hsmm_leaving_mean_s", &v)) {
+        t.hsmm_leaving_mean_s = v;
+    }
+    if (ExtractNumber(json, "hsmm_leaving_max_s", &v)) {
+        t.hsmm_leaving_max_s = v;
+    }
+    if (ExtractNumber(json, "hsmm_max_gap_s", &v)) {
+        t.hsmm_max_gap_s = v;
     }
     if (ExtractNumber(json, "lead_min_s", &v)) {
         t.lead_min_s = v;
@@ -188,6 +236,14 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         theta->weekday_leave_company_hour = clip(theta->weekday_leave_company_hour + delta, 16.0, 21.0);
     } else if (param == "arm_delay_s") {
         theta->arm_delay_s = clip(theta->arm_delay_s + delta, 0.0, 90.0);
+    } else if (param == "hsmm_preleave_mean_s") {
+        theta->hsmm_preleave_mean_s = clip(theta->hsmm_preleave_mean_s + delta, 20.0, 240.0);
+        theta->hsmm_preleave_mean_s = std::max(theta->hsmm_preleave_min_s, theta->hsmm_preleave_mean_s);
+        theta->hsmm_preleave_max_s = std::max(theta->hsmm_preleave_mean_s, theta->hsmm_preleave_max_s);
+    } else if (param == "hsmm_leaving_mean_s") {
+        theta->hsmm_leaving_mean_s = clip(theta->hsmm_leaving_mean_s + delta, 20.0, 360.0);
+        theta->hsmm_leaving_mean_s = std::max(theta->hsmm_leaving_min_s, theta->hsmm_leaving_mean_s);
+        theta->hsmm_leaving_max_s = std::max(theta->hsmm_leaving_mean_s, theta->hsmm_leaving_max_s);
     } else if (param == "lead_min_s") {
         theta->lead_min_s = clip(theta->lead_min_s + delta, 30.0, 180.0);
         if (theta->lead_min_s > theta->lead_max_s) {

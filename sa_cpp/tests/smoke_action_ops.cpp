@@ -22,11 +22,11 @@ static void WriteFixture(const std::string &root)
     th << "{\"enter_leave\":0.58,\"w_walk\":0.25,\"arm_delay_s\":25,\"min_evidence\":2,"
           "\"lead_min_s\":90,\"lead_max_s\":240}\n";
     std::ofstream ep(root + "/leave_episodes.jsonl", std::ios::trunc);
-    ep << "{\"type\":\"push\",\"t_push_ms\":1000,\"intent\":\"DEPARTURE_NOTIFICATION\","
-          "\"score_home\":0.50,\"score_company\":0.1}\n";
+    ep << "{\"type\":\"push\",\"t_push_ms\":1000,\"intent\":\"LEAVE_COMPANY_NOTIFICATION\","
+          "\"score_home\":0.1,\"score_company\":0.50}\n";
     ep << "{\"type\":\"label\",\"t_push_ms\":1000,\"label\":\"FALSE_PUSH\"}\n";
-    ep << "{\"type\":\"push\",\"t_push_ms\":2000,\"intent\":\"DEPARTURE_NOTIFICATION\","
-          "\"score_home\":0.70,\"score_company\":0.1}\n";
+    ep << "{\"type\":\"push\",\"t_push_ms\":2000,\"intent\":\"LEAVE_COMPANY_NOTIFICATION\","
+          "\"score_home\":0.1,\"score_company\":0.70}\n";
     ep << "{\"type\":\"label\",\"t_push_ms\":2000,\"label\":\"CONFIRMED_LEAVE\",\"lead_s\":120}\n";
 }
 

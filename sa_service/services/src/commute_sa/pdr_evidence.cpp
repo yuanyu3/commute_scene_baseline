@@ -140,7 +140,7 @@ PdrLeaveSnapshot PdrEvidence::Evaluate() const
 
     // Attribute to sides tagged at walk start / first INSIDE|NEAR tick.
     // If still untagged (no GPS yet), expose net on both so weak-GPS indoor leave
-    // can still use PDR; focus_side + ScoreLeaving gates still apply per side.
+    // can still use PDR; focus_side + HSMM/product gates still apply per side.
     if (tagged_home_ || tagged_company_) {
         if (tagged_home_) {
             out.pdr_net_out_home_m = credit;

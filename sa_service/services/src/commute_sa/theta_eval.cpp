@@ -298,8 +298,8 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
     std::ostringstream oss;
     oss << "{\"ok\":true,\"method\":\"counterfactual_push_score\""
         << ",\"focus_side\":\"" << Esc(theta.focus_side) << "\""
-        << ",\"notes\":\"Replay recorded push scores against candidate enter_leave; lead vs lead_min/max. "
-           "Not full GPS SceneEngine replay. Episodes filtered by focus_side.\""
+        << ",\"notes\":\"Replay recorded push P(LEAVING) against candidate enter_leave; lead vs lead_min/max. "
+           "Not full sensor-sequence HSMM replay; cannot evaluate w_* or hsmm duration changes. Episodes filtered by focus_side.\""
         << ",\"path\":\"" << Esc(path) << "\",\"n_lines\":" << nLines << ",\"n_push_seen\":" << nPushSeen
         << ",\"n_label_seen\":" << nLabelSeen
         << ",\"n_episodes\":" << n << ",\"n_false_push\":" << nFalse << ",\"n_confirmed_leave\":" << nConfirmed

@@ -726,7 +726,8 @@ bool ProactiveAgentBusinessModule::InitDebugOutputsLocked()
     openCsv(agentResponsesFile_, "agent_responses.csv", &agentResponsesEnabled_, &headerAgentResponsesWritten_,
         "tick_id,request_id,session_id,invoked_at,status,error_code,response_message,stream_payload,power_mode");
     openCsv(baselineDecisionsFile_, "baseline_decisions.csv", &baselineDecisionsEnabled_, &headerBaselineWritten_,
-        "tick_id,observed_at,scene,score_home,score_company,home_relation,company_relation,"
+        "tick_id,observed_at,scene,p_leaving_home,p_leaving_company,hsmm_phase_home,hsmm_phase_company,"
+        "p_preleave_home,p_preleave_company,p_outside_home,p_outside_company,home_relation,company_relation,"
         "dist_home_m,dist_company_m,should_service,service_intent,uncertainty,hits_home,hits_company");
 
     CAMERA_AGENT_LOG_INFO("ProactiveAgent DEBUG_SINKS=1 under %{public}s", debugRunDir_.c_str());
@@ -1440,7 +1441,7 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
         baselineDec = commute_sa::BaselineRuntime::GetInstance().OnTick(tick.observed_at, hasGps, tick.gps.latitude,
             tick.gps.longitude, tick.gps.horizontal_accuracy_m, tick.gps.valid);
         CAMERA_AGENT_LOG_INFO(
-            "SceneEngine tick=%{public}s scene=%{public}s scoreH=%{public}.2f scoreC=%{public}.2f "
+            "SceneEngine tick=%{public}s scene=%{public}s pLeaveH=%{public}.2f pLeaveC=%{public}.2f "
             "push=%{public}d intent=%{public}s eta=%{public}.1f block=%{public}s pdr=%{public}s",
             tick.tick_id.c_str(), commute_sa::SceneToString(baselineDec.scene), baselineDec.score_home,
             baselineDec.score_company, baselineDec.should_service ? 1 : 0, baselineDec.service_intent.c_str(),
@@ -1468,7 +1469,8 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
             if (sceneStr != lastBaselineScene_ || !hasLastBaselineScene_) {
                 std::ostringstream detail;
                 detail << std::fixed << std::setprecision(2) << "home=" << homeRel << " company=" << companyRel
-                       << " scoreH=" << baselineDec.score_home << " scoreC=" << baselineDec.score_company
+                       << " hsmmH=" << baselineDec.hsmm_phase_home << " hsmmC=" << baselineDec.hsmm_phase_company
+                       << " pLeaveH=" << baselineDec.score_home << " pLeaveC=" << baselineDec.score_company
                        << " eta=" << baselineDec.eta_leave_s;
                 if (!baselineDec.push_block_reason.empty()) {
                     detail << " block=" << baselineDec.push_block_reason;
@@ -1513,6 +1515,9 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                 << EscapeCsv(FormatIso8601(tick.observed_at, true)) << ","
                 << EscapeCsv(commute_sa::SceneToString(baselineDec.scene)) << ","
                 << baselineDec.score_home << "," << baselineDec.score_company << ","
+                << EscapeCsv(baselineDec.hsmm_phase_home) << "," << EscapeCsv(baselineDec.hsmm_phase_company) << ","
+                << baselineDec.hsmm_preleave_home << "," << baselineDec.hsmm_preleave_company << ","
+                << baselineDec.hsmm_outside_home << "," << baselineDec.hsmm_outside_company << ","
                 << EscapeCsv(commute_sa::RelationToString(baselineDec.home_relation)) << ","
                 << EscapeCsv(commute_sa::RelationToString(baselineDec.company_relation)) << ","
                 << (baselineDec.has_dist_home ? std::to_string(baselineDec.dist_home_m) : "") << ","

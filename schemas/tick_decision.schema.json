@@ -17,8 +17,14 @@
         "UNKNOWN"
       ]
     },
-    "score_home": { "type": "number" },
-    "score_company": { "type": "number" },
+    "score_home": { "type": "number", "minimum": 0, "maximum": 1, "description": "Compatibility field: HSMM P(LEAVING_HOME)" },
+    "score_company": { "type": "number", "minimum": 0, "maximum": 1, "description": "Compatibility field: HSMM P(LEAVING_COMPANY)" },
+    "hsmm_phase_home": { "enum": ["AT_ANCHOR", "PRE_LEAVE", "LEAVING", "OUTSIDE"] },
+    "hsmm_phase_company": { "enum": ["AT_ANCHOR", "PRE_LEAVE", "LEAVING", "OUTSIDE"] },
+    "hsmm_preleave_home": { "type": "number", "minimum": 0, "maximum": 1 },
+    "hsmm_preleave_company": { "type": "number", "minimum": 0, "maximum": 1 },
+    "hsmm_outside_home": { "type": "number", "minimum": 0, "maximum": 1 },
+    "hsmm_outside_company": { "type": "number", "minimum": 0, "maximum": 1 },
     "home_relation": { "enum": ["INSIDE", "NEAR", "OUTSIDE", "UNKNOWN"] },
     "company_relation": { "enum": ["INSIDE", "NEAR", "OUTSIDE", "UNKNOWN"] },
     "should_service": { "type": "boolean" },

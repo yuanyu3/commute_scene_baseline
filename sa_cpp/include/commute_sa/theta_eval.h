@@ -10,11 +10,12 @@ namespace commute_sa {
 /**
  * Counterfactual score of a candidate θ on historical leave_episodes.jsonl.
  *
- * Uses recorded push scores + labels (no full GPS replay):
+ * Uses recorded push P(LEAVING) + labels (no full sensor-sequence replay):
  * - Would candidate enter_leave still push? vs FALSE_PUSH / CONFIRMED_LEAVE
  * - lead_s vs candidate lead_min_s..lead_max_s
  *
- * Higher score is better. Also returns structured counts for the agent.
+ * Higher score is better. Observation reliability and HSMM duration changes
+ * cannot be evaluated by this lightweight function.
  */
 std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &theta, int64_t sinceMs = 0,
     int maxEpisodes = 30);

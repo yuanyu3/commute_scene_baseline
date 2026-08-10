@@ -14,7 +14,7 @@ namespace commute_sa {
  * Matches the offline baseline + LeavingHomeBaseline semantics:
  * - net_displacement_m = planar distance from walk-episode origin to current PDR (x,y) meters
  * - NOT distance-to-HOME; attributed to home/company by walk-start (or first GPS) relation
- * - ScoreLeaving uses: sPdr = clip01(net / max(15, r_in*0.3)); hit if sPdr>=0.5; ETA boost if net>=8
+ * - HSMM observation uses: sPdr = clip01(net / max(15, r_in*0.3)); hit if sPdr>=0.5; ETA boost if net>=8
  */
 struct PdrLeaveSnapshot {
     double net_displacement_m = 0.0;

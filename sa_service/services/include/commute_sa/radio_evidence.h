@@ -49,6 +49,11 @@ struct RadioEvidenceConfig {
     double jaccard_detach = 0.30;
     /** Jaccard(current, scan ~baseline_ago) below this → churn detach (no dwell yet). */
     double jaccard_churn = 0.35;
+    /** Jaccard(current, dwell) above this → attach (when dwell set ready). */
+    double jaccard_attach = 0.55;
+    /** Strong-AP count rise vs baseline → attach. */
+    int attach_n_strong_delta = 5;
+    int attach_n_strong_abs = 8;
     /** Look-back for temporal baseline scan. */
     int64_t churn_baseline_ms = 120000;
     /** Dwell BSSID median RSSI drop (dB) to count as detach. */
@@ -69,6 +74,8 @@ struct RadioEvidenceConfig {
 struct RadioDetachSnapshot {
     bool wifi_home_detach = false;
     bool wifi_company_detach = false;
+    bool wifi_home_attach = false;
+    bool wifi_company_attach = false;
     bool cell_leave_home = false;
     bool cell_leave_company = false;
     bool ble_home_detach = false;
@@ -80,6 +87,7 @@ struct RadioDetachSnapshot {
     double jaccard_churn = 1.0;
     bool home_dwell_ready = false;
     bool company_dwell_ready = false;
+    int n_strong = 0;
     std::string reason;
 };
 
@@ -160,6 +168,10 @@ private:
     int company_detach_streak_ = 0;
     int64_t home_detach_since_ms_ = 0;
     int64_t company_detach_since_ms_ = 0;
+    int home_attach_streak_ = 0;
+    int company_attach_streak_ = 0;
+    int64_t home_attach_since_ms_ = 0;
+    int64_t company_attach_since_ms_ = 0;
     int cell_home_streak_ = 0;
     int cell_company_streak_ = 0;
     int ble_home_streak_ = 0;
@@ -181,6 +193,8 @@ private:
     bool TemporalChurnLocked(int64_t tMs, const WifiScanSample &cur, double *jaccardOut, std::string *why) const;
     bool TemporalBleChurnLocked(int64_t tMs, double *jaccardOut, std::string *why) const;
     bool CellLeaveLocked(int64_t tMs) const;
+    bool NStrongSurgeLocked(int64_t tMs, const WifiScanSample &cur) const;
+    bool AttachAgainstDwellLocked(const DwellState &st, const WifiScanSample &cur, double jaccard) const;
     static std::string SideToJson(const DwellState &st);
 };
 

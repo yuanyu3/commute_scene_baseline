@@ -25,7 +25,7 @@
 
 | Tool | 语义主题 |
 |------|----------|
-| `get_theta` | 当前打分/门控参数 |
+| `get_theta` | 当前 HSMM 观测可靠度、持续时间先验与门控参数 |
 | `get_anchors` | 家/公司围栏中心与半径 |
 | `get_error_stats` | 推送对错与 lead 分布 |
 | `get_leave_episode` | 一次离开的 push + 自标注 |
@@ -42,8 +42,9 @@
 
 **语义：** 端上正在用的 θ（`theta.json`），例如：
 
-- 门控：`enter_leave` / `exit_leave` / `min_evidence` / `arm_delay_s`
-- 模态权重：`w_walk` / `w_pdr` / `w_geo` / `w_wifi` / `w_cell` / `w_ble` / `w_time`
+- 门控：`enter_leave` / `exit_leave` 是 `P(LEAVING)` 阈值；另有 `min_evidence` / `arm_delay_s`
+- 观测可靠度：`w_walk` / `w_pdr` / `w_geo` / `w_wifi` / `w_cell` / `w_ble` / `w_time`
+- 持续时间先验：`hsmm_preleave_*` / `hsmm_leaving_*`（完整序列 replay 上线前不允许 Agent 直接修改）
 - 时段先验：`weekday_leave_home_hour` / `weekday_leave_company_hour` / `leave_window_min`
 - 预测窗口：`lead_min_s` / `lead_max_s` / `away_confirm_s` / `min_away_s`
 - 侧重点：`focus_side`（`company` | `home` | `both`）
@@ -95,7 +96,7 @@ Agent 用它了解「当前策略」，再决定改哪几个参。
 **push 行**
 
 - `intent`：`DEPARTURE_NOTIFICATION` / `LEAVE_COMPANY_NOTIFICATION`
-- `scene`、`score_home` / `score_company`
+- `scene`、`score_home` / `score_company`（兼容字段，当前值为 `P(LEAVING)`）
 - `dist_home_m`、`walking`、`eta_leave_s`
 - 当时 θ 快照片段（`enter_leave`、`min_evidence`）
 
@@ -187,7 +188,7 @@ Agent 用它了解「当前策略」，再决定改哪几个参。
 |------|------|
 | `mag_ema_pre` / `mag_ema_post` / `delta` | 推送前后 \|B\| EMA 及差 |
 
-弱辅证环境变化；**不直接进** `ScoreLeaving`。
+弱辅证环境变化；当前**不直接进入** HSMM 观测。
 
 ### 6.6 实时调试块（可选）
 
@@ -228,5 +229,5 @@ Agent 用它了解「当前策略」，再决定改哪几个参。
 
 - [AGENT_PERSONALIZATION.md](AGENT_PERSONALIZATION.md) — 改参闭环与动作 Tool  
 - [RADIO_EVIDENCE.md](RADIO_EVIDENCE.md) — WiFi/Cell 在线证据  
-- [PDR_EVIDENCE.md](PDR_EVIDENCE.md) — PDR 净外向如何进打分  
+- [PDR_EVIDENCE.md](PDR_EVIDENCE.md) — PDR 净外向如何进入 HSMM 观测
 - [PRODUCT_FLOW.md](PRODUCT_FLOW.md) — 何时 Invoke Agent  

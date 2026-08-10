@@ -61,6 +61,8 @@ const Theta &SceneEngine::GetTheta() const
 void SceneEngine::SetAnchors(const AnchorSet &anchors)
 {
     anchors_ = anchors;
+    home_hsmm_.Reset();
+    company_hsmm_.Reset();
 }
 
 const AnchorSet &SceneEngine::GetAnchors() const
@@ -151,20 +153,38 @@ bool SceneEngine::LeadWindowOk(const std::optional<double> &etaS, std::string *b
     return true;
 }
 
-SceneEngine::ScoreResult SceneEngine::ScoreLeaving(const TickFeatures &feat, Relation rel, bool hasDist, double distM,
-    double rIn, double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double centerHour,
-    std::optional<double> prevDist) const
+LeaveHsmmConfig SceneEngine::HsmmConfig() const
 {
-    ScoreResult out;
+    LeaveHsmmConfig config;
+    config.preleave_min_s = std::max(0.0, theta_.hsmm_preleave_min_s);
+    config.preleave_mean_s = std::max(config.preleave_min_s, theta_.hsmm_preleave_mean_s);
+    config.preleave_max_s = std::max(config.preleave_mean_s, theta_.hsmm_preleave_max_s);
+    config.leaving_min_s = std::max(0.0, theta_.hsmm_leaving_min_s);
+    config.leaving_mean_s = std::max(config.leaving_min_s, theta_.hsmm_leaving_mean_s);
+    config.leaving_max_s = std::max(config.leaving_mean_s, theta_.hsmm_leaving_max_s);
+    config.max_gap_s = std::max(1.0, theta_.hsmm_max_gap_s);
+    config.reliability = {{0.25 + 3.0 * theta_.w_walk, 0.25 + 3.0 * theta_.w_pdr,
+        0.25 + 3.0 * theta_.w_geo, 0.25 + 3.0 * theta_.w_wifi, 0.25 + 3.0 * theta_.w_cell,
+        0.25 + 3.0 * theta_.w_ble, 0.25 + 3.0 * theta_.w_time}};
+    return config;
+}
+
+SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeatures &feat, Relation rel, bool hasDist, double distM,
+    double rIn, double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double wifiJaccard,
+    bool wifiAttach, double centerHour, std::optional<double> prevDist, bool approaching,
+    bool radioSuppressed) const
+{
+    ObservationResult out;
     int hits = 0;
 
     const double sWalk = feat.walking ? 1.0 : 0.0;
-    if (feat.walking) {
+    if (sWalk >= theta_.thr_walk) {
         ++hits;
     }
 
-    const double sPdr = Clip01(pdrNetOut / std::max(15.0, rIn * 0.3));
-    if (sPdr >= 0.5) {
+    const double pdrEff = approaching ? 0.0 : pdrNetOut;
+    const double sPdr = Clip01(pdrEff / std::max(15.0, rIn * 0.3));
+    if (sPdr >= theta_.thr_pdr) {
         ++hits;
     }
 
@@ -172,39 +192,67 @@ SceneEngine::ScoreResult SceneEngine::ScoreLeaving(const TickFeatures &feat, Rel
     if (hasDist && (rel == Relation::kInside || rel == Relation::kNear)) {
         if (prevDist.has_value() && distM > *prevDist + 3.0) {
             sGeo = Clip01(distM / std::max(rOut, 1.0));
-            ++hits;
-        } else if (rel == Relation::kNear) {
-            sGeo = 0.4;
+            if (rel == Relation::kNear && distM >= rIn * 0.9) {
+                sGeo = std::max(sGeo, 0.85);
+            }
         }
-    } else if (rel == Relation::kOutside) {
+    } else if (rel == Relation::kOutside && !approaching) {
         sGeo = 0.8;
     }
+    if (sGeo >= theta_.thr_geo) {
+        ++hits;
+    }
 
-    // WiFi / CELL / BLE are independent evidence channels (separate weights + hits).
-    const double sWifi = wifiDetach ? 1.0 : 0.0;
-    if (sWifi >= 0.5) {
+    // Continuous WiFi leave score from Jaccard; attach / suppress → 0.
+    double sWifi = 0.0;
+    if (!(wifiAttach || approaching || radioSuppressed)) {
+        const double thrJ = std::max(1e-3, std::min(0.99, theta_.thr_wifi_jaccard));
+        if (wifiJaccard <= thrJ) {
+            sWifi = 1.0;
+        } else {
+            sWifi = Clip01((1.0 - wifiJaccard) / (1.0 - thrJ));
+        }
+        if (sWifi < 1e-6 && wifiDetach) {
+            sWifi = 1.0;
+        }
+    }
+    if (sWifi >= theta_.thr_wifi) {
         ++hits;
     }
-    const double sCell = cellLeave ? 1.0 : 0.0;
-    if (sCell >= 0.5) {
+
+    const double sCell =
+        (radioSuppressed || approaching || wifiAttach) ? 0.0 : (cellLeave ? 1.0 : 0.0);
+    if (sCell >= theta_.thr_cell) {
         ++hits;
     }
-    const double sBle = bleDetach ? 1.0 : 0.0;
-    if (sBle >= 0.5) {
+    const double sBle = (radioSuppressed || approaching) ? 0.0 : (bleDetach ? 1.0 : 0.0);
+    if (sBle >= theta_.thr_ble) {
         ++hits;
     }
 
     const double sTime = TimePrior(feat.t_ms, centerHour, theta_.leave_window_min);
-    if (sTime >= 0.5) {
+    if (sTime >= theta_.thr_time) {
         ++hits;
     }
 
-    if (prevDist.has_value() && hasDist && distM + 12.0 < *prevDist) {
-        return {0.0, 0};
+    if (approaching || (prevDist.has_value() && hasDist && distM + 8.0 < *prevDist)) {
+        sGeo = 0.0;
+        sWifi = 0.0;
     }
 
-    out.score = Clip01(theta_.w_walk * sWalk + theta_.w_pdr * sPdr + theta_.w_geo * sGeo + theta_.w_wifi * sWifi +
-        theta_.w_cell * sCell + theta_.w_ble * sBle + theta_.w_time * sTime);
+    out.observation.walking = sWalk;
+    out.observation.pdr_outbound = sPdr;
+    out.observation.geo_outbound = sGeo;
+    out.observation.wifi_detach = sWifi;
+    out.observation.cell_detach = sCell;
+    out.observation.ble_detach = sBle;
+    out.observation.time_prior = sTime;
+    out.observation.relation_known = rel != Relation::kUnknown;
+    out.observation.inside = rel == Relation::kInside;
+    out.observation.near = rel == Relation::kNear;
+    out.observation.outside = rel == Relation::kOutside;
+    out.observation.approaching = approaching;
+    out.observation.attached = wifiAttach;
     out.hits = hits;
     return out;
 }
@@ -218,12 +266,61 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const bool hasHome = feat.has_gps && hRel != Relation::kUnknown;
     const bool hasCo = feat.has_gps && cRel != Relation::kUnknown;
 
-    const auto sh = ScoreLeaving(feat, hRel, hasHome, dHome, anchors_.home.r_in_m, anchors_.home.r_out_m,
+    auto updateApproach = [&](Relation rel, bool hasDist, double distM, Relation prevRel,
+                               const std::optional<double> &prevDist, int *streak, bool wifiAttach,
+                               bool *returnFromOutside) -> bool {
+        if (hasDist && prevDist.has_value() && distM + 3.0 < *prevDist) {
+            ++(*streak);
+        } else {
+            *streak = 0;
+        }
+        bool approaching = false;
+        if (prevRel == Relation::kOutside && (rel == Relation::kNear || rel == Relation::kInside)) {
+            approaching = true;
+            *returnFromOutside = true;
+        }
+        if (*streak >= 1 &&
+            (rel == Relation::kNear || rel == Relation::kInside || rel == Relation::kOutside)) {
+            approaching = true;
+        }
+        if (prevDist.has_value() && hasDist && distM + 8.0 < *prevDist) {
+            approaching = true;
+        }
+        if (wifiAttach) {
+            approaching = true;
+        }
+        return approaching;
+    };
+    const bool approachHome = updateApproach(hRel, hasHome, dHome, prevRelHome_, prevDistHome_, &approachHomeStreak_,
+        feat.wifi_home_attach, &returnFromOutsideHome_);
+    const bool approachCo = updateApproach(cRel, hasCo, dCo, prevRelCompany_, prevDistCompany_, &approachCompanyStreak_,
+        feat.wifi_company_attach, &returnFromOutsideCompany_);
+
+    auto noteApproachEdge = [&](bool approaching, bool *wasApproach, bool *returnFromOutside,
+                                std::optional<TickTsMs> *until) -> bool {
+        if (*wasApproach && !approaching && *returnFromOutside) {
+            *until = feat.t_ms + static_cast<TickTsMs>(theta_.radio_suppress_after_approach_s * 1000.0);
+            *returnFromOutside = false;
+        }
+        *wasApproach = approaching;
+        return until->has_value() && feat.t_ms < **until;
+    };
+    const bool radioSupHome =
+        noteApproachEdge(approachHome, &wasApproachHome_, &returnFromOutsideHome_, &radioSuppressHomeUntil_);
+    const bool radioSupCo =
+        noteApproachEdge(approachCo, &wasApproachCompany_, &returnFromOutsideCompany_, &radioSuppressCompanyUntil_);
+
+    const auto sh = BuildLeaveObservation(feat, hRel, hasHome, dHome, anchors_.home.r_in_m, anchors_.home.r_out_m,
         feat.pdr_net_out_home_m, feat.wifi_home_detach, feat.cell_leave_home, feat.ble_home_detach,
-        theta_.weekday_leave_home_hour, prevDistHome_);
-    const auto sc = ScoreLeaving(feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
+        feat.wifi_jaccard_home, feat.wifi_home_attach, theta_.weekday_leave_home_hour, prevDistHome_, approachHome,
+        radioSupHome);
+    const auto sc = BuildLeaveObservation(feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
         feat.pdr_net_out_company_m, feat.wifi_company_detach, feat.cell_leave_company, feat.ble_company_detach,
-        theta_.weekday_leave_company_hour, prevDistCompany_);
+        feat.wifi_jaccard_company, feat.wifi_company_attach, theta_.weekday_leave_company_hour, prevDistCompany_,
+        approachCo, radioSupCo);
+    const LeaveHsmmConfig hsmmConfig = HsmmConfig();
+    const auto hsmmHome = home_hsmm_.Step(sh.observation, feat.t_ms, hsmmConfig);
+    const auto hsmmCompany = company_hsmm_.Step(sc.observation, feat.t_ms, hsmmConfig);
 
     const auto etaHome = EstimateEtaOutS(hasHome, dHome, anchors_.home.r_out_m, feat.walking, feat.pdr_net_out_home_m,
         prevDistHome_, prevTMs_, feat.t_ms);
@@ -257,20 +354,22 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         return (feat.t_ms - *since) >= static_cast<TickTsMs>(theta_.away_confirm_s * 1000.0);
     };
 
-    if (allowHome && hRel == Relation::kInside && sh.score < enter) {
+    if (allowHome && hRel == Relation::kInside && hsmmHome.LeavingProbability() <= theta_.exit_leave) {
         newScene = Scene::kAtHome;
         leaveHomeSince_.reset();
         leaveHomePushed_ = false;
-    } else if (allowCompany && cRel == Relation::kInside && sc.score < enter) {
+    } else if (allowCompany && cRel == Relation::kInside && hsmmCompany.LeavingProbability() <= theta_.exit_leave) {
         newScene = Scene::kAtCompany;
         leaveCompanySince_.reset();
         leaveCompanyPushed_ = false;
     }
 
     const bool homeLeaveCand = allowHome && (hRel == Relation::kInside || hRel == Relation::kNear) &&
-        sh.score >= enter && sh.hits >= need && ArmDelayOk(feat);
+        !approachHome && prevRelHome_ != Relation::kOutside && hsmmHome.LeavingProbability() >= enter && sh.hits >= need &&
+        ArmDelayOk(feat);
     const bool coLeaveCand = allowCompany && (cRel == Relation::kInside || cRel == Relation::kNear) &&
-        sc.score >= enter && sc.hits >= need && ArmDelayOk(feat);
+        !approachCo && prevRelCompany_ != Relation::kOutside && hsmmCompany.LeavingProbability() >= enter && sc.hits >= need &&
+        ArmDelayOk(feat);
 
     std::optional<double> activeEta;
     bool leadOk = false;
@@ -284,6 +383,8 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
 
         if (hRel == Relation::kOutside) {
             pushBlock = "OUTSIDE";
+        } else if (approachHome || feat.wifi_home_attach) {
+            pushBlock = "APPROACHING";
         } else if (leaveHomePushed_) {
             pushBlock = "ALREADY_PUSHED";
         } else if (!CooldownOk(feat.t_ms)) {
@@ -305,6 +406,8 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
 
         if (cRel == Relation::kOutside) {
             pushBlock = "OUTSIDE";
+        } else if (approachCo || feat.wifi_company_attach) {
+            pushBlock = "APPROACHING";
         } else if (leaveCompanyPushed_) {
             pushBlock = "ALREADY_PUSHED";
         } else if (!CooldownOk(feat.t_ms)) {
@@ -338,12 +441,12 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         }
     }
 
-    if (allowHome && !leavingNow && hRel == Relation::kInside && sh.score < enter &&
+    if (allowHome && !leavingNow && hRel == Relation::kInside && hsmmHome.LeavingProbability() <= theta_.exit_leave &&
         persistOut(outsideCompanySince_)) {
         newScene = Scene::kAtHome;
         leaveHomePushed_ = false;
     }
-    if (allowCompany && !leavingNow && cRel == Relation::kInside && sc.score < enter &&
+    if (allowCompany && !leavingNow && cRel == Relation::kInside && hsmmCompany.LeavingProbability() <= theta_.exit_leave &&
         persistOut(outsideHomeSince_)) {
         newScene = Scene::kAtCompany;
         leaveCompanyPushed_ = false;
@@ -376,21 +479,25 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         }
     }
 
-    // Hard ban: never push departure when already outside the fence.
-    if (shouldService && intent == "DEPARTURE_NOTIFICATION" && hRel == Relation::kOutside) {
+    // Hard ban: never push departure when already outside the fence or approaching.
+    if (shouldService && intent == "DEPARTURE_NOTIFICATION" &&
+        (hRel == Relation::kOutside || approachHome || feat.wifi_home_attach)) {
         shouldService = false;
         intent = "NONE";
-        pushBlock = "OUTSIDE";
+        pushBlock = (approachHome || feat.wifi_home_attach) ? "APPROACHING" : "OUTSIDE";
         leaveHomePushed_ = false;
     }
-    if (shouldService && intent == "LEAVE_COMPANY_NOTIFICATION" && cRel == Relation::kOutside) {
+    if (shouldService && intent == "LEAVE_COMPANY_NOTIFICATION" &&
+        (cRel == Relation::kOutside || approachCo || feat.wifi_company_attach)) {
         shouldService = false;
         intent = "NONE";
-        pushBlock = "OUTSIDE";
+        pushBlock = (approachCo || feat.wifi_company_attach) ? "APPROACHING" : "OUTSIDE";
         leaveCompanyPushed_ = false;
     }
 
     scene_ = newScene;
+    prevRelHome_ = hRel;
+    prevRelCompany_ = cRel;
     if (hasHome) {
         prevDistHome_ = dHome;
     }
@@ -401,8 +508,14 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
 
     TickDecision d;
     d.scene = newScene;
-    d.score_home = sh.score;
-    d.score_company = sc.score;
+    d.score_home = hsmmHome.LeavingProbability();
+    d.score_company = hsmmCompany.LeavingProbability();
+    d.hsmm_phase_home = LeavePhaseToString(hsmmHome.phase);
+    d.hsmm_phase_company = LeavePhaseToString(hsmmCompany.phase);
+    d.hsmm_preleave_home = hsmmHome.PreLeaveProbability();
+    d.hsmm_preleave_company = hsmmCompany.PreLeaveProbability();
+    d.hsmm_outside_home = hsmmHome.OutsideProbability();
+    d.hsmm_outside_company = hsmmCompany.OutsideProbability();
     d.home_relation = hRel;
     d.company_relation = cRel;
     d.has_dist_home = hasHome;

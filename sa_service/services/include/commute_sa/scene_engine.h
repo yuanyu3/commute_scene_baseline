@@ -2,6 +2,7 @@
 
 #include "commute_sa/anchors.h"
 #include "commute_sa/geo.h"
+#include "commute_sa/leave_hsmm.h"
 #include "commute_sa/theta.h"
 
 #include <cstdint>
@@ -56,16 +57,28 @@ struct TickFeatures {
     double pdr_net_out_company_m = 0.0;
     bool wifi_home_detach = false;
     bool wifi_company_detach = false;
+    bool wifi_home_attach = false;
+    bool wifi_company_attach = false;
     bool cell_leave_home = false;
     bool cell_leave_company = false;
     bool ble_home_detach = false;
     bool ble_company_detach = false;
+    /** Continuous WiFi overlap vs soft/baseline (1=same, 0=fully different). */
+    double wifi_jaccard_home = 1.0;
+    double wifi_jaccard_company = 1.0;
 };
 
 struct TickDecision {
     Scene scene = Scene::kUnknown;
     double score_home = 0.0;
     double score_company = 0.0;
+    /** Compatibility scores now carry posterior P(LEAVING), not a weighted evidence sum. */
+    std::string hsmm_phase_home = "AT_ANCHOR";
+    std::string hsmm_phase_company = "AT_ANCHOR";
+    double hsmm_preleave_home = 0.0;
+    double hsmm_preleave_company = 0.0;
+    double hsmm_outside_home = 0.0;
+    double hsmm_outside_company = 0.0;
     Relation home_relation = Relation::kUnknown;
     Relation company_relation = Relation::kUnknown;
     bool has_dist_home = false;
@@ -81,12 +94,12 @@ struct TickDecision {
     double eta_leave_s = -1.0;
     /** True when ETA ≤ lead_max_s (or ETA unknown). lead_min is post-hoc / agent only. */
     bool lead_gate_ok = false;
-    /** Why push was blocked: NONE | COOLDOWN | UNCERTAIN | OUTSIDE | LEAD_EARLY | ALREADY_PUSHED */
+    /** Why push was blocked: NONE | COOLDOWN | UNCERTAIN | OUTSIDE | LEAD_EARLY | ALREADY_PUSHED | APPROACHING */
     std::string push_block_reason = "NONE";
 };
 
 /**
- * Realtime leave-home / leave-company scorer + FSM.
+ * Realtime leave-home / leave-company HSMM + product FSM.
  * Push is predictive: only while still INSIDE/NEAR and ETA in lead window.
  */
 class SceneEngine {
@@ -102,14 +115,16 @@ public:
     TickDecision Step(const TickFeatures &feat);
 
 private:
-    struct ScoreResult {
-        double score = 0.0;
+    struct ObservationResult {
+        LeaveObservation observation;
         int hits = 0;
     };
 
-    ScoreResult ScoreLeaving(const TickFeatures &feat, Relation rel, bool hasDist, double distM, double rIn,
-        double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double centerHour,
-        std::optional<double> prevDist) const;
+    ObservationResult BuildLeaveObservation(const TickFeatures &feat, Relation rel, bool hasDist, double distM, double rIn,
+        double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double wifiJaccard,
+        bool wifiAttach, double centerHour, std::optional<double> prevDist, bool approaching,
+        bool radioSuppressed) const;
+    LeaveHsmmConfig HsmmConfig() const;
 
     /** Seconds until dist reaches rOut; nullopt if not outbound / unknown. */
     std::optional<double> EstimateEtaOutS(bool hasDist, double distM, double rOut, bool walking, double pdrNetOut,
@@ -123,10 +138,22 @@ private:
 
     AnchorSet anchors_;
     Theta theta_;
+    LeaveHsmm home_hsmm_;
+    LeaveHsmm company_hsmm_;
     Scene scene_ = Scene::kUnknown;
     std::optional<double> prevDistHome_;
     std::optional<double> prevDistCompany_;
+    Relation prevRelHome_ = Relation::kUnknown;
+    Relation prevRelCompany_ = Relation::kUnknown;
     std::optional<TickTsMs> prevTMs_;
+    int approachHomeStreak_ = 0;
+    int approachCompanyStreak_ = 0;
+    bool wasApproachHome_ = false;
+    bool wasApproachCompany_ = false;
+    bool returnFromOutsideHome_ = false;
+    bool returnFromOutsideCompany_ = false;
+    std::optional<TickTsMs> radioSuppressHomeUntil_;
+    std::optional<TickTsMs> radioSuppressCompanyUntil_;
     std::optional<TickTsMs> leaveHomeSince_;
     std::optional<TickTsMs> leaveCompanySince_;
     std::optional<TickTsMs> lastPushAt_;

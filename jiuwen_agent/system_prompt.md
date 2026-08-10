@@ -40,14 +40,16 @@
 1. 禁止编造统计；无历史样本时不要硬改，直接 no_op。
 2. 不修改业务代码；不做每 tick 场景分类。
 3. 推送目标：仍在公司 INSIDE/NEAR 时提醒下班离开；`lead_s` 目标约 `lead_min_s`～`lead_max_s`。
-4. `evaluate_theta_on_history` 是反事实评分（用当时 push score vs 新 `enter_leave` + lead 窗），不是完整 GPS 重放。
+4. `evaluate_theta_on_history` 是反事实评分（用当时 push `P(LEAVING)` vs 新 `enter_leave` + lead 窗），不是完整传感器序列 HSMM 重放。
 5. 不要改 `weekday_leave_home_hour` / `home.r_in_m`（本阶段 focus=company）。
 
 ## 常见策略
 
+- `enter_leave` / `exit_leave` 是 HSMM 的 `P(LEAVING)` 阈值；`w_*` 是观测可靠度，不再直接相加成离家分数
+- 不修改 `w_*`、`hsmm_preleave_*` 或 `hsmm_leaving_*`：当前 eval 没有完整 tick 序列，无法验证观测似然和持续时间反事实
 - 误推（FALSE_PUSH）：提高 `enter_leave` / `min_evidence`；用 eval 确认 `false_kept` 下降且 `missed_leave` 不升
 - lead 偏小：略降 `enter_leave` 或 `arm_delay_s`；看 `lead_late` / score
 - lead 偏大：提高 `enter_leave` 或收紧 `lead_max_s`
 - 作息：`weekday_leave_company_hour`；围栏：`company.r_in_m`
-- 公司 GPS 稳 / WiFi 弱：可略增 `w_geo`、减 `w_wifi`；CELL 不稳可略降 `w_cell`（若 limits 允许）
+- 公司 GPS / Wi-Fi / Cell 可靠度问题只写入 audit，等待完整序列 replay 后再调整 `w_*`
 - 分模态权重：优先改 `w_wifi` / `w_cell` / `w_ble`，不要再依赖统一的 `w_radio`

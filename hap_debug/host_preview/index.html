@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Commute Debug Preview</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; background: #0f172a; color: #e2e8f0; }
+    header { display: flex; align-items: center; gap: 12px; padding: 16px 20px; }
+    h1 { margin: 0; font-size: 22px; }
+    .live { color: #4ade80; font-size: 14px; margin-left: auto; }
+    .card { background: #1e293b; margin: 0 12px 12px; padding: 16px; border-radius: 12px; }
+    .meta { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+    .llm { color: #c4b5fd; margin-top: 8px; font-size: 13px; }
+    .row { display: flex; gap: 8px; padding: 0 12px 12px; flex-wrap: wrap; }
+    button { background: #334155; color: #f8fafc; border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+    button:hover { background: #475569; }
+    .ev { display: flex; gap: 10px; background: #1e293b; margin: 0 12px 8px; border-radius: 10px; overflow: hidden; cursor: default; }
+    .ev.clickable { cursor: pointer; }
+    .ev.clickable:hover { outline: 1px solid #64748b; }
+    .bar { width: 4px; }
+    .body { padding: 10px 12px; flex: 1; }
+    .type { font-size: 12px; font-weight: 700; }
+    .title { margin-top: 4px; font-size: 15px; }
+    .detail { margin-top: 4px; font-size: 12px; color: #94a3b8; }
+    .hint { margin-top: 6px; font-size: 11px; color: #a78bfa; }
+    .time { float: right; color: #64748b; font-size: 11px; }
+    textarea { width: calc(100% - 24px); margin: 0 12px 12px; min-height: 90px; background: #0b1220; color: #cbd5e1; border: 1px solid #334155; border-radius: 8px; padding: 8px; }
+    .sheet-bg { position: fixed; inset: 0; background: #0009; display: none; align-items: flex-end; }
+    .sheet-bg.show { display: flex; }
+    .sheet { background: #1e293b; width: 100%; max-height: 75%; overflow: auto; border-radius: 16px 16px 0 0; padding: 16px; }
+    .change { background: #0f172a; border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+    .reason { color: #86efac; font-size: 12px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Commute Debug</h1>
+    <span id="live" class="live">○ PREVIEW</span>
+  </header>
+  <div class="card" id="status">
+    <div id="scene">Scene —</div>
+    <div class="meta" id="rels">Home — · Company —</div>
+    <div class="meta" id="scores">H —  C —</div>
+    <div class="meta" id="eta">ETA —</div>
+    <div class="llm" id="llm">LLM —</div>
+  </div>
+  <div class="row">
+    <button onclick="runDemo()">Play demo flow</button>
+    <button onclick="clearEvents()">Clear</button>
+    <button onclick="applyPaste()">Apply pasted JSON</button>
+  </div>
+  <textarea id="paste" placeholder="Paste GetProductDebugTimeline() JSON here…"></textarea>
+  <div id="list"></div>
+  <div class="sheet-bg" id="sheet" onclick="if(event.target===this)closeSheet()">
+    <div class="sheet" id="sheetBody"></div>
+  </div>
+  <script>
+    const colors = { PUSH:'#f59e0b', LABEL:'#22c55e', OUTSIDE:'#38bdf8', LLM_START:'#a78bfa', LLM_DONE:'#a78bfa', SCENE:'#94a3b8' };
+    let state = { ok:true, status:{}, events:[] };
+    function fmt(ms){ if(!ms) return '--:--:--'; const d=new Date(ms); return d.toTimeString().slice(0,8); }
+    function esc(s){ return String(s??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function openResult(ev){
+      const r = ev.result || {};
+      const changes = [...(r.changes||[])].reverse();
+      const audits = [...(r.audits||[])].reverse();
+      let html = `<div style="display:flex;align-items:center"><b>LLM 改参结果</b><button style="margin-left:auto" onclick="closeSheet()">关闭</button></div>`;
+      html += `<div class="meta" style="margin-top:8px">状态 ${esc(r.status||ev.title)} · 触发 ${esc(r.reason||'')} / ${esc(r.settle_label||'')}</div>`;
+      html += `<h3>参数变更</h3>`;
+      if (!changes.length) html += `<div class="meta">本次无 apply_theta_delta</div>`;
+      changes.forEach(c=>{
+        const d=(c.new??0)-(c.old??0);
+        const sign=d>=0?'+':'';
+        html += `<div class="change"><div>${esc(c.param)}: ${c.old} → ${c.new} (${sign}${d.toFixed(4)})</div><div class="reason">${esc(c.reason)}</div></div>`;
+      });
+      html += `<h3>Audit</h3>`;
+      if (!audits.length) html += `<div class="meta">无 write_audit</div>`;
+      audits.forEach(a => { html += `<div class="change">${esc(a.message)}</div>`; });
+      html += `<h3>模型回复摘要</h3><div class="meta">${esc(r.response_summary||ev.detail||'—')}</div>`;
+      document.getElementById('sheetBody').innerHTML = html;
+      document.getElementById('sheet').classList.add('show');
+    }
+    function closeSheet(){ document.getElementById('sheet').classList.remove('show'); }
+    function render(){
+      const st=state.status||{};
+      document.getElementById('scene').textContent = 'Scene  ' + (st.scene||'—');
+      document.getElementById('rels').textContent = `Home ${st.home_relation||'—'} · Company ${st.company_relation||'—'}`;
+      document.getElementById('scores').textContent = `H ${(st.score_home??0).toFixed?.(2)??st.score_home}  C ${(st.score_company??0).toFixed?.(2)??st.score_company}`;
+      document.getElementById('eta').textContent = `ETA ${st.eta_leave_s>=0?st.eta_leave_s+'s':'—'}  dist ${st.dist_home_m>=0?st.dist_home_m+'m':'—'}`;
+      document.getElementById('llm').textContent = `LLM  ${st.last_llm_status||'—'}  ${fmt(st.last_llm_at_ms)}`;
+      const list=document.getElementById('list');
+      list.innerHTML='';
+      [...(state.events||[])].reverse().forEach(ev=>{
+        const div=document.createElement('div');
+        div.className = 'ev' + (ev.type==='LLM_DONE' ? ' clickable' : '');
+        div.innerHTML=`<div class="bar" style="background:${colors[ev.type]||'#94a3b8'}"></div>
+          <div class="body"><span class="time">${fmt(ev.t_ms)}</span>
+          <div class="type" style="color:${colors[ev.type]||'#94a3b8'}">${esc(ev.type)}</div>
+          <div class="title">${esc(ev.title||'')}</div>
+          <div class="detail">${esc(ev.detail||'')}</div>
+          ${ev.type==='LLM_DONE'?'<div class="hint">点击查看改参明细 ›</div>':''}</div>`;
+        if (ev.type==='LLM_DONE') div.onclick = () => openResult(ev);
+        list.appendChild(div);
+      });
+    }
+    function clearEvents(){ state.events=[]; render(); }
+    function applyPaste(){
+      try { state=JSON.parse(document.getElementById('paste').value); document.getElementById('live').textContent='● PASTED'; render(); }
+      catch(e){ alert('JSON parse failed'); }
+    }
+    async function runDemo(){
+      document.getElementById('live').textContent='● DEMO';
+      const t0=Date.now();
+      const steps=[
+        {wait:0, status:{scene:'AT_HOME',home_relation:'INSIDE',company_relation:'OUTSIDE',score_home:0.2,score_company:0.1,eta_leave_s:-1,dist_home_m:8}, ev:{type:'SCENE',title:'AT_HOME',detail:'home=INSIDE'}},
+        {wait:500, status:{scene:'LEAVING_HOME',home_relation:'NEAR',score_home:0.71,eta_leave_s:120,dist_home_m:35}, ev:{type:'SCENE',title:'LEAVING_HOME',detail:'scoreH=0.71 eta=120'}},
+        {wait:400, status:{scene:'LEAVING_HOME',home_relation:'NEAR',score_home:0.78,eta_leave_s:95,should_service:true,last_intent:'DEPARTURE_NOTIFICATION'}, ev:{type:'PUSH',title:'记得带钥匙',detail:'intent=DEPARTURE_NOTIFICATION'}},
+        {wait:600, status:{scene:'LEAVING_HOME',home_relation:'OUTSIDE',score_home:0.6,eta_leave_s:0,dist_home_m:90}, ev:{type:'OUTSIDE',title:'first OUTSIDE after push',detail:'t* recorded'}},
+        {wait:300, status:{scene:'COMMUTE',home_relation:'OUTSIDE'}, ev:{type:'LABEL',title:'CONFIRMED_LEAVE',detail:'reason=AFTER_PUSH'}},
+        {wait:300, status:{last_llm_status:'PersonalizeInvoke',last_llm_at_ms:Date.now()}, ev:{type:'LLM_START',title:'AFTER_PUSH',detail:'invoke θ personalizer'}},
+        {wait:700, status:{last_llm_status:'PersonalizeInvoke',last_llm_at_ms:Date.now()}, ev:{
+          type:'LLM_DONE', title:'PersonalizeInvoke', detail:'tap for θ changes; has param deltas',
+          result:{
+            status:'PersonalizeInvoke', reason:'AFTER_PUSH', settle_label:'CONFIRMED_LEAVE',
+            response_summary:'lead 偏小，略降 enter_leave；保留 radio 权重。',
+            changes:[
+              {t_ms:t0, param:'enter_leave', old:0.58, new:0.55, reason:'CONFIRMED_LEAVE but lead_s≈20s < lead_min; lower threshold'},
+              {t_ms:t0+1, param:'arm_delay_s', old:30, new:20, reason:'push late relative to OUTSIDE'}
+            ],
+            audits:[{t_ms:t0, message:'Adjusted enter_leave and arm_delay after short lead', changes:{}}]
+          }
+        }},
+      ];
+      state={ok:true,status:{},events:[]};
+      let seq=0;
+      for (const s of steps){
+        await new Promise(r=>setTimeout(r,s.wait));
+        state.status={...state.status,...s.status};
+        state.events.push({seq:++seq,t_ms:t0+seq*1000,...s.ev});
+        render();
+      }
+    }
+    render();
+  </script>
+</body>
+</html>

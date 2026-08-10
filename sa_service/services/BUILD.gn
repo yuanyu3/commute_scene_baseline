@@ -84,6 +84,7 @@ ohos_shared_library("commuteagentservice") {
     "src/commute_sa/crs.cpp",
     "src/commute_sa/anchors.cpp",
     "src/commute_sa/theta.cpp",
+    "src/commute_sa/leave_hsmm.cpp",
     "src/commute_sa/scene_engine.cpp",
     "src/commute_sa/baseline_runtime.cpp",
     "src/commute_sa/radio_evidence.cpp",

@@ -39,6 +39,13 @@ from commute_baseline.io_data import (  # noqa: E402
     load_walking_events,
     merge_gps,
 )
+from commute_baseline.radio_evidence import (  # noqa: E402
+    RadioFeed,
+    load_ble_samples,
+    load_cell_samples,
+    load_wifi_scans,
+)
+from commute_baseline.geo import Relation  # noqa: E402
 
 CST = timezone(timedelta(hours=8))
 
@@ -119,6 +126,12 @@ def main() -> int:
     decisions = []
     pushes = []
     last_t = None
+    radio_dirs = [args.raw_dir, args.sensor_dir]
+    radio_feed = RadioFeed(
+        load_wifi_scans(radio_dirs),
+        load_cell_samples(radio_dirs),
+        load_ble_samples(radio_dirs),
+    )
 
     for p in merged:
         while wi < len(walks) and walks[wi][0] <= p.t:
@@ -132,6 +145,8 @@ def main() -> int:
         if last_t and (p.t - last_t).total_seconds() < args.tick_min_s:
             continue
         last_t = p.t
+        t_ms = ms(p.t)
+        radio_snap = radio_feed.advance(t_ms)
         feat = TickFeatures(
             t=p.t,
             lat=p.lat,
@@ -139,8 +154,23 @@ def main() -> int:
             acc=p.acc,
             walking=walk_on,
             walk_started_at=walk_started if walk_on else None,
+            wifi_home_detach=radio_snap.wifi_home_detach,
+            wifi_company_detach=radio_snap.wifi_company_detach,
+            wifi_home_attach=radio_snap.wifi_home_attach,
+            wifi_company_attach=radio_snap.wifi_company_attach,
+            cell_leave_home=radio_snap.cell_leave_home,
+            cell_leave_company=radio_snap.cell_leave_company,
+            ble_home_detach=radio_snap.ble_home_detach,
+            ble_company_detach=radio_snap.ble_company_detach,
+            wifi_jaccard_home=radio_snap.jaccard_home,
+            wifi_jaccard_company=radio_snap.jaccard_company,
         )
         d = engine.step(feat)
+        radio_feed.radio.observe_dwell(
+            t_ms,
+            d.home_relation == Relation.INSIDE,
+            d.company_relation == Relation.INSIDE,
+        )
         row = {
             "t": p.t.isoformat(),
             "t_ms": ms(p.t),

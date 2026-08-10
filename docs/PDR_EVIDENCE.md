@@ -1,6 +1,6 @@
 # PDR leave evidence
 
-权威实现：`sa_cpp/include/commute_sa/pdr_evidence.h` → `BaselineRuntime` → `SceneEngine::ScoreLeaving`。
+权威实现：`sa_cpp/include/commute_sa/pdr_evidence.h` → `BaselineRuntime` → `SceneEngine::BuildLeaveObservation` → `LeaveHsmm`。
 
 来自 `20260804_175841_sensor` / 基线算法：步行 episode 的 **净位移（米）** 作为「向外走了多远」的辅证；不是到家/公司锚点的 GPS 距离。
 
@@ -18,14 +18,15 @@
 1. `OnWalkingStarted` 开 episode，清零原点  
 2. `OnPdrPoint(x,y)` 更新净位移 / 路径（本地平面米，与 SA dump 一致）  
 3. 首次 GPS 为 `INSIDE`/`NEAR` 时 `NoteWalkContext` 打上 home 或 company 标签（本段粘住）  
-4. 无 GPS 时临时两侧都填同一 net（靠 `focus_side` + ScoreLeaving 门控）  
+4. 无 GPS 时临时两侧都填同一 net（靠 `focus_side` + HSMM/产品门控）
 5. `OnWalkingStopped` 后不再给 leave credit（`NOT_WALKING`）
 
-## 打分（与离线基线一致）
+## HSMM 观测
 
 ```text
 sPdr = clip01( pdr_net_out / max(15, r_in × 0.3) )
-score += w_pdr × sPdr          # 默认 w_pdr=0.20
+pdr_outbound = sPdr
+reliability = 0.25 + 3 × w_pdr # 默认 w_pdr=0.20
 hit   += 1  if sPdr ≥ 0.5      # 约 ≥7.5 m 或 0.15×r_in
 ```
 

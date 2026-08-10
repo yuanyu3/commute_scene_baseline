@@ -1,6 +1,6 @@
-# C++ 实时基线（无 Python）
+# C++ HSMM 实时基线（无 Python）
 
-权威实现：`sa_cpp/` → `SceneEngine` / `BaselineRuntime`。  
+权威实现：`sa_cpp/` → `LeaveHsmm` / `SceneEngine` / `BaselineRuntime`。离开判定使用显式持续时间 HSMM；细节见 [`HSMM_BASELINE.md`](HSMM_BASELINE.md)。
 已接到 `sa_service` 的 `ProactiveAgentBusinessModule` tick。
 
 默认 `theta.focus_side = "company"`：**仅下班离开公司**流程会推送（`LEAVE_COMPANY_NOTIFICATION`）；离家推送关闭。改回双边时设 `"both"`。
@@ -9,12 +9,13 @@
 
 | 头文件 | 作用 |
 |--------|------|
-| `commute_sa/scene_engine.h` | Score + FSM（原 `python/.../engine.py`） |
+| `commute_sa/leave_hsmm.h` | 四状态显式持续时间后验过滤 |
+| `commute_sa/scene_engine.h` | 语义观测 + HSMM + 产品 FSM |
 | `commute_sa/anchors.h` | 加载 `anchors.json` |
 | `commute_sa/theta.h` | 加载 / 改 θ |
 | `commute_sa/baseline_runtime.h` | SA 单例封装（含 RadioEvidence） |
 | `commute_sa/radio_evidence.h` | 在线 WiFi/CELL leave（无先验指纹） |
-| `commute_sa/pdr_evidence.h` | 步行 episode 净外向位移 → leave 打分 |
+| `commute_sa/pdr_evidence.h` | 步行 episode 净外向位移 → HSMM 观测 |
 | `commute_sa/geo.h` / `crs.h` | 距离 / CRS |
 
 详见 [RADIO_EVIDENCE.md](RADIO_EVIDENCE.md)、[PDR_EVIDENCE.md](PDR_EVIDENCE.md)。

@@ -39,17 +39,24 @@ from commute_baseline.io_data import (  # noqa: E402
     merge_gps,
     pdr_net_at,
 )
+from commute_baseline.radio_evidence import (  # noqa: E402
+    RadioFeed,
+    load_ble_samples,
+    load_cell_samples,
+    load_wifi_scans,
+)
 from commute_baseline.crs import gcj02_to_wgs84  # noqa: E402
+from commute_baseline.geo import Relation  # noqa: E402
 
 CST = timezone(timedelta(hours=8))
 
 # raw_dir name → sa_sensor_test subdir name
 SESSION_SENSOR_MAP = {
-    "20260804_174813": "20260804_175841",
-    "20260804_195251": "20260804_195251",
-    "20260805_162326": "20260805_162326",
-    "20260810_114452": "20260810_114452",
-    "20260810_114956": "20260810_114956",
+    "20260804_174813": "20260804_175841_sensor",
+    "20260804_195251": "20260804_195251_sensor",
+    "20260805_162326": "20260805_162326_sensor",
+    "20260810_114452": "20260810_114452_sensor",
+    "20260810_114956": "20260810_114956_sensor",
 }
 SESSIONS = list(SESSION_SENSOR_MAP.keys())
 
@@ -245,6 +252,15 @@ def replay_session(
     if not merged:
         return {"ok": False, "error": "no_gps", "session": raw_dir.name}
 
+    # Radio CSV usually lives under raw dump; also accept sensor_dir copies.
+    radio_dirs = [str(raw_dir)]
+    if sensor_dir.resolve() != raw_dir.resolve():
+        radio_dirs.append(str(sensor_dir))
+    wifi_scans = load_wifi_scans(radio_dirs)
+    cell_samples = load_cell_samples(radio_dirs)
+    ble_samples = load_ble_samples(radio_dirs)
+    radio_feed = RadioFeed(wifi_scans, cell_samples, ble_samples)
+
     anchors = load_anchors(str(anchors_path))
     save_anchors(str(out_dir / "anchors.json"), anchors)
     write_json(out_dir / "theta.json", {"coordinate_system": "WGS84", **theta})
@@ -288,7 +304,20 @@ def replay_session(
         if last_t and (p.t - last_t).total_seconds() < tick_min_s:
             continue
         last_t = p.t
+        t_ms = ms(p.t)
+        radio_snap = radio_feed.advance(t_ms)
         pdr_net = pdr_net_at(pdr_series, p.t) if walking_eff and pdr_series else 0.0
+        # Directional PDR: only credit outbound when distance to that anchor is rising.
+        pdr_home = pdr_net
+        pdr_co = pdr_net
+        if engine.prev_dist_home is not None:
+            # filled after first tick; refine after step using post-hoc would be late —
+            # zeroing when radio attach is safer here.
+            pass
+        if radio_snap.wifi_home_attach:
+            pdr_home = 0.0
+        if radio_snap.wifi_company_attach:
+            pdr_co = 0.0
         feat = TickFeatures(
             t=p.t,
             lat=p.lat,
@@ -296,10 +325,37 @@ def replay_session(
             acc=p.acc,
             walking=walking_eff,
             walk_started_at=walk_started if walking_eff else None,
-            pdr_net_out_home_m=pdr_net,
-            pdr_net_out_company_m=pdr_net,
+            pdr_net_out_home_m=pdr_home,
+            pdr_net_out_company_m=pdr_co,
+            wifi_home_detach=radio_snap.wifi_home_detach,
+            wifi_company_detach=radio_snap.wifi_company_detach,
+            wifi_home_attach=radio_snap.wifi_home_attach,
+            wifi_company_attach=radio_snap.wifi_company_attach,
+            cell_leave_home=radio_snap.cell_leave_home,
+            cell_leave_company=radio_snap.cell_leave_company,
+            ble_home_detach=radio_snap.ble_home_detach,
+            ble_company_detach=radio_snap.ble_company_detach,
+            wifi_jaccard_home=radio_snap.jaccard_home,
+            wifi_jaccard_company=radio_snap.jaccard_company,
         )
         d = engine.step(feat)
+        # Soft dwell warmup while INSIDE (semi-persistent fingerprint for detach).
+        radio_feed.radio.observe_dwell(
+            t_ms,
+            d.home_relation == Relation.INSIDE,
+            d.company_relation == Relation.INSIDE,
+        )
+        evidence = dict(d.evidence or {})
+        evidence["radio"] = {
+            "wifi_company_detach": radio_snap.wifi_company_detach,
+            "wifi_company_attach": radio_snap.wifi_company_attach,
+            "cell_leave_company": radio_snap.cell_leave_company,
+            "jaccard_company": round(radio_snap.jaccard_company, 3),
+            "jaccard_churn": round(radio_snap.jaccard_churn, 3),
+            "company_dwell_ready": radio_snap.company_dwell_ready,
+            "n_strong": radio_snap.n_strong,
+            "reason": radio_snap.reason,
+        }
         row = {
             "t": p.t.isoformat(),
             "t_ms": ms(p.t),
@@ -319,11 +375,23 @@ def replay_session(
             "uncertainty": d.uncertainty,
             "eta_leave_s": d.eta_leave_s,
             "push_block_reason": d.push_block_reason,
-            "evidence": d.evidence,
+            "evidence": evidence,
         }
         decisions.append(row)
         if d.should_service:
             pushes.append(row)
+
+    soft_path = out_dir / "radio_soft.json"
+    soft_path.write_text(radio_feed.radio.export_soft_json() + "\n", encoding="utf-8")
+    write_json(
+        out_dir / "radio_feed_stats.json",
+        {
+            "wifi_scans": len(wifi_scans),
+            "cell_samples": len(cell_samples),
+            "ble_samples": len(ble_samples),
+            "soft": json.loads(radio_feed.radio.export_soft_json()),
+        },
+    )
 
     company_pushes = [p for p in pushes if p["scene"] == "LEAVING_COMPANY" or p["service_intent"] == "LEAVE_COMPANY_NOTIFICATION"]
 

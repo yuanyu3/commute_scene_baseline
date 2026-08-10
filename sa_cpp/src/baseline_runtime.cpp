@@ -145,20 +145,28 @@ TickDecision BaselineRuntime::OnTick(
     feat.walk_started_at_ms = walkStartedAtMs_;
     feat.wifi_home_detach = radioSnap.wifi_home_detach;
     feat.wifi_company_detach = radioSnap.wifi_company_detach;
+    feat.wifi_home_attach = radioSnap.wifi_home_attach;
+    feat.wifi_company_attach = radioSnap.wifi_company_attach;
     feat.cell_leave_home = radioSnap.cell_leave_home;
     feat.cell_leave_company = radioSnap.cell_leave_company;
     feat.ble_home_detach = radioSnap.ble_home_detach;
     feat.ble_company_detach = radioSnap.ble_company_detach;
+    feat.wifi_jaccard_home = radioSnap.jaccard_home;
+    feat.wifi_jaccard_company = radioSnap.jaccard_company;
     if (engine_ != nullptr) {
         if (!FocusAllowsHome(engine_->GetTheta().focus_side)) {
             feat.wifi_home_detach = false;
+            feat.wifi_home_attach = false;
             feat.cell_leave_home = false;
             feat.ble_home_detach = false;
+            feat.wifi_jaccard_home = 1.0;
         }
         if (!FocusAllowsCompany(engine_->GetTheta().focus_side)) {
             feat.wifi_company_detach = false;
+            feat.wifi_company_attach = false;
             feat.cell_leave_company = false;
             feat.ble_company_detach = false;
+            feat.wifi_jaccard_company = 1.0;
         }
     }
 

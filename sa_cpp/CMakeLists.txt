@@ -10,6 +10,7 @@ add_library(commute_sa
     src/sensor_events_writer.cpp
     src/anchors.cpp
     src/theta.cpp
+    src/leave_hsmm.cpp
     src/scene_engine.cpp
     src/baseline_runtime.cpp
     src/radio_evidence.cpp
@@ -35,6 +36,9 @@ if(COMMUTE_SA_BUILD_SMOKE)
 
     add_executable(commute_scene_smoke tests/smoke_scene_engine.cpp)
     target_link_libraries(commute_scene_smoke PRIVATE commute_sa)
+
+    add_executable(commute_hsmm_smoke tests/smoke_leave_hsmm.cpp)
+    target_link_libraries(commute_hsmm_smoke PRIVATE commute_sa)
 
     add_executable(commute_radio_smoke tests/smoke_radio_evidence.cpp)
     target_link_libraries(commute_radio_smoke PRIVATE commute_sa)

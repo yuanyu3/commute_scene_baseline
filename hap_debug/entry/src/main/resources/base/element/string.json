@@ -1,0 +1,5 @@
+{
+  "module_desc": "Commute SceneEngine / LLM debug timeline",
+  "EntryAbility_desc": "Debug viz entry",
+  "EntryAbility_label": "Commute Debug"
+}

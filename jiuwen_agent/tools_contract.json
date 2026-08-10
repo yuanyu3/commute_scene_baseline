@@ -146,7 +146,7 @@
 
       "category": "action",
 
-      "description": "Apply one clipped theta/fence delta and persist",
+      "description": "Apply one clipped theta/fence delta and persist. enter_leave/exit_leave are HSMM P(LEAVING) thresholds; modality weights are observation reliabilities.",
 
       "input_schema": {
 

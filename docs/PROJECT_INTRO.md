@@ -57,7 +57,7 @@
 ### 单 tick 流程（简述）
 
 1. GPS 相对家/公司锚点 → `INSIDE` / `NEAR` / `OUTSIDE`
-2. `ScoreLeaving`：行走、PDR、距离外扩、**在线 WiFi/Cell 脱离**（见 `docs/RADIO_EVIDENCE.md`）、时段先验加权；**距离明显变近则离开分清零**
+2. `LeaveHsmm`：将行走、PDR、距离外扩、**在线 WiFi/Cell 脱离**（见 `docs/RADIO_EVIDENCE.md`）和时段先验作为观测，结合状态持续时间输出 `P(LEAVING)`；距离变近/重新附着强化返回锚点概率
 3. 分数 ≥ `enter_leave` 且 hits ≥ `min_evidence` 且过 `arm_delay` → 进入 `LEAVING_*`
 4. **预测推送门控**（带钥匙必须在完全离家前）：
    - 仅 `INSIDE` / `NEAR`（**禁止 OUTSIDE 推**）

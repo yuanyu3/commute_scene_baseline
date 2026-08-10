@@ -1,0 +1,9 @@
+{
+  "name": "commute_debug_hap",
+  "version": "1.0.0",
+  "description": "Commute SceneEngine / LLM debug visualization HAP",
+  "main": "",
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}

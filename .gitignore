@@ -20,9 +20,11 @@ examples/**/run_data/
 **/query.json
 **/smoke_product/
 sa_cpp/*_smoke_tmp/
+sa_cpp/*_smoke_run/
 sa_cpp/offline_tools_run/
 sa_cpp/**/smoke_*/
 **/*_smoke_tmp/
+**/*_smoke_run/
 
 # Build artifacts
 **/build/

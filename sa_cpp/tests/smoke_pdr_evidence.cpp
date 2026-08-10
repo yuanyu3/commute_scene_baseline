@@ -1,6 +1,7 @@
 #include "commute_sa/pdr_evidence.h"
 #include "commute_sa/scene_engine.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 
@@ -47,7 +48,7 @@ int main()
         return 1;
     }
 
-    // ScoreLeaving integration: walk + pdr should reach enter with min_evidence=2.
+    // SceneEngine integration: walk + PDR should raise the HSMM leave posterior.
     AnchorSet anchors = DefaultAnchors();
     anchors.company.lat = 40.05;
     anchors.company.lon = 116.17;
@@ -59,6 +60,9 @@ int main()
     theta.min_evidence = 2;
     theta.arm_delay_s = 0.0;
     theta.w_time = 0.0;  // ignore clock prior for smoke
+    theta.hsmm_preleave_min_s = 5.0;
+    theta.hsmm_preleave_mean_s = 20.0;
+    theta.hsmm_preleave_max_s = 90.0;
     SceneEngine eng(anchors, theta);
 
     TickFeatures feat;
@@ -71,22 +75,32 @@ int main()
     feat.has_walk_started = true;
     feat.walk_started_at_ms = feat.t_ms - 30000;
     feat.pdr_net_out_company_m = 20.0;
-    // Advance prev dist so geo can also hit on next step — first step just scores.
+    // First tick initializes the filter; it must not jump directly to LEAVING.
     auto d1 = eng.Step(feat);
-    std::cout << "scoreC=" << d1.score_company << " hitsC=" << d1.hits_company
-              << " scene=" << SceneToString(d1.scene) << "\n";
-    if (d1.score_company < 0.30) {
-        std::cerr << "FAIL: PDR+walk should contribute meaningful leave score\n";
+    std::cout << "pLeaveC=" << d1.score_company << " hitsC=" << d1.hits_company
+               << " scene=" << SceneToString(d1.scene) << "\n";
+    if (d1.score_company > 0.05) {
+        std::cerr << "FAIL: HSMM jumped to LEAVING on its initialization tick\n";
         return 1;
     }
-    // Second tick with growing GPS distance → geo hit too.
-    feat.t_ms += 2000;
-    feat.lat = anchors.company.lat + 0.00025;  // ~28m north
-    auto d2 = eng.Step(feat);
-    std::cout << "scoreC2=" << d2.score_company << " hitsC2=" << d2.hits_company
+
+    TickDecision d2 = d1;
+    double maxLeaveProbability = 0.0;
+    for (int i = 0; i < 14; ++i) {
+        feat.t_ms += 5000;
+        feat.lat = anchors.company.lat + 0.00005 * (i + 1);
+        d2 = eng.Step(feat);
+        maxLeaveProbability = std::max(maxLeaveProbability, d2.score_company);
+    }
+    std::cout << "pLeaveC2=" << d2.score_company << " maxPLeave=" << maxLeaveProbability
+              << " hitsC2=" << d2.hits_company << " phase=" << d2.hsmm_phase_company
               << " scene=" << SceneToString(d2.scene) << " should=" << d2.should_service << "\n";
     if (d2.hits_company < 2) {
         std::cerr << "FAIL: expected >=2 evidence hits with walk+pdr(+geo)\n";
+        return 1;
+    }
+    if (maxLeaveProbability < 0.30) {
+        std::cerr << "FAIL: sustained PDR+walk+geo did not raise HSMM leave posterior\n";
         return 1;
     }
 

@@ -68,6 +68,10 @@ void RadioEvidence::Reset(bool keepSoft)
     company_detach_streak_ = 0;
     home_detach_since_ms_ = 0;
     company_detach_since_ms_ = 0;
+    home_attach_streak_ = 0;
+    company_attach_streak_ = 0;
+    home_attach_since_ms_ = 0;
+    company_attach_since_ms_ = 0;
     cell_home_streak_ = 0;
     cell_company_streak_ = 0;
     ble_home_streak_ = 0;
@@ -357,6 +361,53 @@ bool RadioEvidence::TemporalChurnLocked(int64_t tMs, const WifiScanSample &cur, 
     return false;
 }
 
+bool RadioEvidence::NStrongSurgeLocked(int64_t tMs, const WifiScanSample &cur) const
+{
+    if (wifiHistory_.size() < 2) {
+        return false;
+    }
+    int nCur = 0;
+    for (const auto &ap : cur.aps) {
+        if (!ap.bssid.empty() && ap.rssi >= cfg_.rssi_strong) {
+            ++nCur;
+        }
+    }
+    const WifiScanSample *base = nullptr;
+    for (auto it = wifiHistory_.rbegin(); it != wifiHistory_.rend(); ++it) {
+        if (tMs - it->t_ms >= cfg_.churn_baseline_ms && tMs - it->t_ms <= cfg_.churn_baseline_ms * 3) {
+            base = &(*it);
+            break;
+        }
+    }
+    if (base == nullptr) {
+        return false;
+    }
+    int nBase = 0;
+    for (const auto &ap : base->aps) {
+        if (!ap.bssid.empty() && ap.rssi >= cfg_.rssi_strong) {
+            ++nBase;
+        }
+    }
+    if (nCur >= nBase + cfg_.attach_n_strong_delta) {
+        return true;
+    }
+    if (nBase <= 2 && nCur >= cfg_.attach_n_strong_abs) {
+        return true;
+    }
+    return false;
+}
+
+bool RadioEvidence::AttachAgainstDwellLocked(const DwellState &st, const WifiScanSample &cur, double jaccard) const
+{
+    if (!st.ready || st.soft_set.empty()) {
+        return false;
+    }
+    if (jaccard < cfg_.jaccard_attach) {
+        return false;
+    }
+    return StrongSet(cur, cfg_.rssi_min).size() >= 2;
+}
+
 bool RadioEvidence::TemporalBleChurnLocked(int64_t tMs, double *jaccardOut, std::string *why) const
 {
     if (bleHistory_.size() < 4) {
@@ -469,6 +520,32 @@ RadioDetachSnapshot RadioEvidence::Evaluate(int64_t tMs)
 
     out.wifi_home_detach = latch(rawHome, &home_detach_streak_, &home_detach_since_ms_);
     out.wifi_company_detach = latch(rawCo, &company_detach_streak_, &company_detach_since_ms_);
+
+    bool rawAttHome = false;
+    bool rawAttCo = false;
+    if (curWifi != nullptr) {
+        out.n_strong = 0;
+        for (const auto &ap : curWifi->aps) {
+            if (!ap.bssid.empty() && ap.rssi >= cfg_.rssi_strong) {
+                ++out.n_strong;
+            }
+        }
+        const bool surge = NStrongSurgeLocked(tMs, *curWifi);
+        rawAttHome = AttachAgainstDwellLocked(home_, *curWifi, out.jaccard_home) || surge;
+        rawAttCo = AttachAgainstDwellLocked(company_, *curWifi, out.jaccard_company) || surge;
+    }
+    out.wifi_home_attach = latch(rawAttHome, &home_attach_streak_, &home_attach_since_ms_);
+    out.wifi_company_attach = latch(rawAttCo, &company_attach_streak_, &company_attach_since_ms_);
+    if (out.wifi_home_attach) {
+        out.wifi_home_detach = false;
+        home_detach_streak_ = 0;
+        home_detach_since_ms_ = 0;
+    }
+    if (out.wifi_company_attach) {
+        out.wifi_company_detach = false;
+        company_detach_streak_ = 0;
+        company_detach_since_ms_ = 0;
+    }
 
     std::string whyBle;
     double bleJac = 1.0;

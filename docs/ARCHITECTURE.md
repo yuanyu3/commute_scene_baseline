@@ -20,7 +20,7 @@
 ┌─────────────────────────────────────────────────────────┐
 │ 基线（无 LLM）                                           │
 │ 锚点(home/company) → 关系(INSIDE/NEAR/OUTSIDE)          │
-│ → 特征 → Score → 状态机 → 可选推送                       │
+│ → 语义观测 → 显式持续时间 HSMM → 产品门控 → 可选推送     │
 └──────────────────────────┬──────────────────────────────┘
                            ▼
               事后自标注 t* + 推送对错日志
@@ -66,7 +66,7 @@
 ## 4. 推送时序（预测离家）
 
 ```text
-条件：home ∈ {INSIDE,NEAR} 且 score/hits/arm_delay 达标
+条件：home ∈ {INSIDE,NEAR} 且 P(LEAVING)/hits/arm_delay 达标
       且 ETA_out ≤ lead_max_s（太早不推）
       且 非 OUTSIDE（完全离家后不推「带钥匙」）
 t_push = 上述条件首次满足的 tick（同一离开 episode 只推一次）
@@ -86,7 +86,7 @@ lead   = t* − t_push
 |------|------------|------|
 | SA 工程 | `sa_service/` | Ability + dump(WGS84) + PDR/LeaveCar + ProactiveAgent |
 | 轻量 dump | `sa_cpp/` | 主机可编，不依赖 OHOS |
-| 实时场景 | `python/commute_baseline/` | Score + FSM，无 LLM |
+| 实时场景 | `sa_cpp/` | HSMM + 产品 FSM，无 LLM |
 | 改参 Agent | `jiuwen_agent/` | 低频改 θ |
 | 锚点 | `config/anchors.json` | 推断管线 |
 | Jiuwen 运行时 | 外部（如 bbpjiuwen-linux） | 仅宿主 |
