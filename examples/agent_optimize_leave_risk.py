@@ -57,6 +57,14 @@ def endpoint(base_url: str) -> str:
     return base if base.endswith("/chat/completions") else base + "/chat/completions"
 
 
+def authorization_value(api_key: str) -> str:
+    """Accept either a bare key or a value already prefixed with Bearer."""
+    value = api_key.strip()
+    if value[:7].lower() == "bearer ":
+        value = value[7:].strip()
+    return f"Bearer {value}"
+
+
 def call_agent(url: str, api_key: str, model: str, system: str, prompt: str) -> tuple[str, dict]:
     body = {
         "model": model,
@@ -67,7 +75,7 @@ def call_agent(url: str, api_key: str, model: str, system: str, prompt: str) -> 
     request = urllib.request.Request(
         url,
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        headers={"Authorization": authorization_value(api_key), "Content-Type": "application/json"},
         method="POST",
     )
     try:

@@ -9,6 +9,9 @@ then reviews locally measured grouped cross-validation results. The local proces
 rejects invalid candidates and refuses any Agent selection with false-push groups
 or missed leave groups.
 
+`SA_AGENT_API_KEY` may be either a bare key or an existing `Bearer <key>` value;
+the client normalizes both forms to exactly one `Bearer` prefix.
+
 Run:
 
 ```powershell
