@@ -48,6 +48,8 @@ using TickTsMs = int64_t;
 struct TickFeatures {
     TickTsMs t_ms = 0;
     bool has_gps = false;
+    /** Platform semantic location: 2=inside company, 1=outside company gate. */
+    int32_t gps_source_type = 0;
     double lat = 0.0;
     double lon = 0.0;
     double acc = 0.0;

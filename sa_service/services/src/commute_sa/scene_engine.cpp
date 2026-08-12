@@ -279,8 +279,15 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     wasWalking_ = feat.walking;
     double dHome = 0.0;
     double dCo = 0.0;
-    const Relation hRel = RelTo(feat, anchors_.home, &dHome);
-    const Relation cRel = RelTo(feat, anchors_.company, &dCo);
+    Relation hRel = RelTo(feat, anchors_.home, &dHome);
+    Relation cRel = RelTo(feat, anchors_.company, &dCo);
+    // source_type is the platform's company-gate semantic. It takes priority
+    // over a noisy coordinate fence: 1=already outside, 2=inside company.
+    if (feat.gps_source_type == 1) {
+        cRel = Relation::kOutside;
+    } else if (feat.gps_source_type == 2) {
+        cRel = Relation::kInside;
+    }
     const bool hasHome = feat.has_gps && hRel != Relation::kUnknown;
     const bool hasCo = feat.has_gps && cRel != Relation::kUnknown;
 

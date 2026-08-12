@@ -29,6 +29,8 @@ class RiskRow:
     route: str
     t_ms: int
     truth_t_ms: int | None
+    gps_source_type: int
+    returning_to_company: bool
     features: Dict[str, float]
 
 
@@ -51,10 +53,10 @@ def _load_xyz(session: Path, prefix: str) -> List[tuple[int, float]]:
 def _load_sensor_events(session: Path):
     pdr = []
     walking_events = []
-    gps_type1 = []
+    gps_types = []
     path = session / "sensor_events.csv"
     if not path.is_file():
-        return pdr, walking_events, gps_type1
+        return pdr, walking_events, gps_types
     origin = None
     cumulative = 0.0
     previous = None
@@ -87,11 +89,12 @@ def _load_sensor_events(session: Path):
             elif event == "GPS_REPORT":
                 try:
                     body = json.loads(row["payload_json"])
-                    if int(body.get("source_type") or 0) == 1:
-                        gps_type1.append(t_ms)
+                    source_type = int(body.get("source_type") or 0)
+                    if source_type in (1, 2):
+                        gps_types.append((t_ms, source_type))
                 except (ValueError, TypeError, json.JSONDecodeError):
                     pass
-    return pdr, sorted(walking_events), sorted(gps_type1)
+    return pdr, sorted(walking_events), sorted(gps_types)
 
 
 def _latest(series: Sequence, times: Sequence[int], t_ms: int):
@@ -122,7 +125,7 @@ def extract_session_rows(
     tick_s: int = 5,
     truth_mode: str = "gps_type1",
 ) -> List[RiskRow]:
-    pdr, walking_events, type1 = _load_sensor_events(session)
+    pdr, walking_events, gps_types = _load_sensor_events(session)
     acc = _load_xyz(session, "acc")
     gyro = _load_xyz(session, "gyro")
     mag = _load_xyz(session, "mag")
@@ -132,11 +135,18 @@ def extract_session_rows(
     if not all_times:
         return []
     start, end = min(all_times), max(all_times)
-    if label == "LEAVE" and truth_mode == "walking_started" and walking_events:
-        started = [t for t, state in walking_events if state == 1]
-        truth = min(started) if started else None
-    else:
-        truth = min(type1) if label == "LEAVE" and type1 else None
+    starts_outside = bool(gps_types and gps_types[0][1] == 1)
+    # The only departure truth is the first 2 -> 1 transition. A session that
+    # starts at type=1 is an outside/returning trace, never a leave episode.
+    truth = None
+    previous_type = None
+    for t_ms, source_type in gps_types:
+        if previous_type == 2 and source_type == 1:
+            truth = t_ms
+            break
+        previous_type = source_type
+    if label != "LEAVE" or starts_outside:
+        truth = None
     if truth is not None:
         end = min(end, truth)
 
@@ -144,6 +154,7 @@ def extract_session_rows(
     walk_t = [x[0] for x in walking_events]
     cell_t = [x.t_ms for x in cells]
     wifi_t = [x.t_ms for x in wifi]
+    gps_t = [x[0] for x in gps_types]
     mag_values = [v for _, v in mag]
     mag_center = float(np.median(mag_values)) if mag_values else 0.0
     mag_scale = float(np.median(np.abs(np.asarray(mag_values) - mag_center))) if mag_values else 1.0
@@ -151,6 +162,8 @@ def extract_session_rows(
     mag_norm = [(t, (v - mag_center) / mag_scale) for t, v in mag]
     rows = []
     for t_ms in range(start, end + 1, tick_s * 1000):
+        current_gps = _latest(gps_types, gps_t, t_ms)
+        gps_source_type = current_gps[1] if current_gps else 0
         current_walk = _latest(walking_events, walk_t, t_ms)
         walking = float(bool(current_walk and current_walk[1]))
         walk_started = 0
@@ -206,7 +219,10 @@ def extract_session_rows(
             ids = [x.cell_id for x in cells if lo <= x.t_ms <= t_ms and x.cell_id]
             features[f"cell_unique_{window}s"] = float(len(set(ids)))
             features[f"cell_changes_{window}s"] = float(sum(a != b for a, b in zip(ids, ids[1:])))
-        rows.append(RiskRow(group_id, session.name, label, route, t_ms, truth, features))
+        rows.append(RiskRow(
+            group_id, session.name, label, route, t_ms, truth,
+            gps_source_type, starts_outside, features,
+        ))
     return rows
 
 

@@ -54,13 +54,19 @@ def main():
         hsmm = LeaveHsmm(); streak = 0; push = None; timeline = []
         for row in samples:
             risk = model.predict(row.features)
+            outside = row.gps_source_type == 1
+            inside = row.gps_source_type == 2
             result = hsmm.step(LeaveObservation(
                 walking=row.features.get("walking", 0.0), risk_available=True,
                 risk_30s=risk[30], risk_60s=risk[60], risk_120s=risk[120],
-                relation_known=True, inside=True,
+                relation_known=bool(row.gps_source_type), inside=inside, outside=outside,
+                approaching=row.returning_to_company and inside,
             ), datetime.fromtimestamp(row.t_ms / 1000, tz=timezone.utc), {"w_risk": 1.2})
             smooth = result.probability[LeavePhase.PRE_LEAVE] + result.probability[LeavePhase.LEAVING]
-            eligible = risk[120] >= risk_threshold and smooth >= 0.50 and row.features.get("walking", 0) > 0
+            eligible = (
+                not row.returning_to_company and not outside and inside and
+                risk[120] >= risk_threshold and smooth >= 0.50 and row.features.get("walking", 0) > 0
+            )
             streak = streak + 1 if eligible else 0
             should_push = push is None and streak >= consecutive
             if should_push:
@@ -70,6 +76,8 @@ def main():
                 "risk_30s": round(risk[30], 6), "risk_60s": round(risk[60], 6),
                 "risk_120s": round(risk[120], 6), "hsmm_preleave": round(result.probability[LeavePhase.PRE_LEAVE], 6),
                 "hsmm_leaving": round(result.probability[LeavePhase.LEAVING], 6),
+                "gps_source_type": row.gps_source_type,
+                "returning_to_company": row.returning_to_company,
                 "eligible": eligible, "push": should_push,
             })
         truth = samples[0].truth_t_ms
@@ -79,9 +87,10 @@ def main():
         summary.append(item)
         (out / f"{session}.json").write_text(json.dumps({"summary": item, "timeline": timeline}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (out / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    with (out / "summary.csv").open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=list(summary[0]))
-        writer.writeheader(); writer.writerows(summary)
+    if summary:
+        with (out / "summary.csv").open("w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=list(summary[0]))
+            writer.writeheader(); writer.writerows(summary)
     for item in summary:
         print(item)
     return 0

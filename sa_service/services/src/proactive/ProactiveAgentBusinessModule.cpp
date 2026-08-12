@@ -1439,7 +1439,7 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
     if (commute_sa::BaselineRuntime::GetInstance().Enabled()) {
         const bool hasGps = tick.has_gps && tick.gps.valid;
         baselineDec = commute_sa::BaselineRuntime::GetInstance().OnTick(tick.observed_at, hasGps, tick.gps.latitude,
-            tick.gps.longitude, tick.gps.horizontal_accuracy_m, tick.gps.valid);
+            tick.gps.longitude, tick.gps.horizontal_accuracy_m, tick.gps.valid, tick.gps.source_type);
         CAMERA_AGENT_LOG_INFO(
             "SceneEngine tick=%{public}s scene=%{public}s pLeaveH=%{public}.2f pLeaveC=%{public}.2f "
             "push=%{public}d intent=%{public}s eta=%{public}.1f block=%{public}s pdr=%{public}s",

@@ -27,7 +27,8 @@ public:
     /** Feed PDR local planar meters (thread-safe vs OnTick). */
     void OnPdrPoint(int64_t tMs, double xM, double yM);
 
-    TickDecision OnTick(int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid);
+    TickDecision OnTick(int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid,
+        int32_t gpsSourceType = 0);
 
     SceneEngine *Engine();
     RadioEvidence *Radio();

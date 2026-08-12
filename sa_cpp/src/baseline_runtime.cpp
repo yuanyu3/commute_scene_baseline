@@ -131,7 +131,7 @@ void BaselineRuntime::OnPdrPoint(int64_t tMs, double xM, double yM)
 }
 
 TickDecision BaselineRuntime::OnTick(
-    int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid)
+    int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid, int32_t gpsSourceType)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     TickDecision empty;
@@ -143,6 +143,7 @@ TickDecision BaselineRuntime::OnTick(
     TickFeatures feat;
     feat.t_ms = tMs;
     feat.has_gps = hasGps && gpsValid;
+    feat.gps_source_type = gpsSourceType;
     feat.lat = lat;
     feat.lon = lon;
     feat.acc = accM;
