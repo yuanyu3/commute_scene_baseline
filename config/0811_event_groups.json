@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "truth": "User behavior annotation; first GPS source_type=1 is delayed outdoor confirmation",
+  "groups": [
+    {"id": "g1056", "sessions": ["20260811_105613"], "label": "LEAVE", "route": "elevator_or_other"},
+    {"id": "g1414", "sessions": ["20260811_141451"], "label": "LEAVE", "route": "elevator_or_other"},
+    {"id": "g1426", "sessions": ["20260811_142617", "20260811_142618"], "label": "UNKNOWN", "route": "gate_approach"},
+    {"id": "g1510", "sessions": ["20260811_151051", "20260811_151053", "20260811_151055"], "label": "LEAVE", "route": "elevator_or_other"},
+    {"id": "g1533", "sessions": ["20260811_153329", "20260811_153330", "20260811_153331"], "label": "LEAVE", "route": "elevator_or_other"},
+    {"id": "g1540", "sessions": ["20260811_154046", "20260811_154047", "20260811_154048"], "label": "LEAVE", "route": "elevator_or_other"},
+    {"id": "g1547", "sessions": ["20260811_154708", "20260811_154710", "20260811_154712"], "label": "LEAVE", "route": "elevator_or_other"},
+    {"id": "g1554", "sessions": ["20260811_155449", "20260811_155451", "20260811_155453"], "label": "LEAVE", "route": "elevator_or_other"},
+    {"id": "g1637", "sessions": ["20260811_163706", "20260811_163707", "20260811_163708"], "label": "INDOOR_ACTIVITY", "route": "fifth_floor_walk"},
+    {"id": "g1639", "sessions": ["20260811_163910", "20260811_163911", "20260811_163914"], "label": "INDOOR_ACTIVITY", "route": "fifth_floor_walk"},
+    {"id": "g1649", "sessions": ["20260811_164935", "20260811_164937", "20260811_164938"], "label": "LEAVE", "route": "elevator_or_other"},
+    {"id": "g1656", "sessions": ["20260811_165659", "20260811_165700", "20260811_165701"], "label": "LEAVE", "route": "walk_downstairs"},
+    {"id": "g1740", "sessions": ["20260811_174007", "20260811_174008", "20260811_174017"], "label": "LEAVE", "route": "walk_downstairs"}
+  ]
+}

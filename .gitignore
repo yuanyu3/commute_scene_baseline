@@ -4,8 +4,10 @@ sa_service/etc/agent.env
 **/*.pem
 **/credentials*.json
 
-# Offline Python replay (not part of product upload)
-/python/
+# Offline Python replay reference implementation. Keep caches and generated data ignored below.
+/python/*
+!/python/commute_baseline/
+!/python/commute_baseline/*.py
 
 # Local datasets & run outputs
 /data/
