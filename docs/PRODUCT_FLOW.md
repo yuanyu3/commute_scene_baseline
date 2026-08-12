@@ -3,7 +3,8 @@
 ```text
 1) 采集        Ability 硬件 dump（WGS84）+ 离开窗口稀疏样本
 2) 标准化判定  每 tick → SceneEngine（无 LLM）→ 预测推送（仍在家 + ETA≤lead_max）
-3) 更新参数    PersonalizationController 触发时 → 在线 LLM 改 θ
+3) 个性化      PersonalizationController 触发时 → Agent 生成候选策略/参数
+4) 验证部署    语义历史反事实回放 → policy.json 原子提交或回滚
 ```
 
 推送约束：`OUTSIDE` 不发「带钥匙」；同一离开 episode 只推一次；首次 `OUTSIDE` 记 `t*`/`lead_s` 并立刻 `CONFIRMED_LEAVE` 改参；若约 20min 内从未 `OUTSIDE` 则 `FALSE_PUSH` 再改参。
@@ -28,6 +29,8 @@
 |------|------|
 | `anchors.json` | 家/公司锚点（WGS84） |
 | `theta.json` | SceneEngine 参数 θ |
+| `policy.json` | 端侧策略解释器当前生效的高层策略 |
+| `policy_history.jsonl` | 日终反事实评估所需的标注语义样本 |
 | `leave_episodes.jsonl` | 推送记录 + settle 标签（CONFIRMED_LEAVE / FALSE_PUSH） |
 | `leave_window_samples.jsonl` | 推送后离开窗口内稀疏 GPS/行走 |
 | `param_changes.jsonl` | θ 变更审计 |

@@ -96,6 +96,13 @@ std::string CommitTrial(const std::string &p)
 {
     return commute_sa::CommitThetaTrialAction(p);
 }
+std::string GetPolicy(const std::string &p) { return commute_sa::GetPersonalizationPolicyAction(p); }
+std::string GetPolicyCatalog(const std::string &p) { return commute_sa::GetPolicyCatalogAction(p); }
+std::string BeginPolicyTrial(const std::string &p) { return commute_sa::BeginPolicyTrialAction(p); }
+std::string ApplyPolicy(const std::string &p) { return commute_sa::ApplyPolicyCandidateAction(p); }
+std::string EvalPolicy(const std::string &p) { return commute_sa::EvaluatePolicyOnHistoryAction(p); }
+std::string RevertPolicy(const std::string &p) { return commute_sa::RevertPolicyTrialAction(p); }
+std::string CommitPolicy(const std::string &p) { return commute_sa::CommitPolicyTrialAction(p); }
 
 }  // namespace
 
@@ -129,10 +136,25 @@ std::vector<std::string> RegisterPersonalizerTools()
         {{"message", "text", "string", true}, {"changes", "object", "object", false}}, &WriteAudit);
     Reg("request_anchor_reestimate", "Queue anchor re-inference",
         {{"which", "home|company|both", "string", true}}, &ReqAnchor);
+    Reg("get_personalization_policy", "Return active bounded high-level strategy", {}, &GetPolicy);
+    Reg("get_policy_catalog", "Return allowed strategy templates and bounds", {}, &GetPolicyCatalog);
+    Reg("begin_policy_trial", "Snapshot active policy before a strategy experiment", {}, &BeginPolicyTrial);
+    Reg("apply_policy_candidate", "Apply one validated policy template candidate",
+        {{"template_name", "catalog template", "string", true},
+            {"probability_threshold", "optional bounded override", "number", false},
+            {"min_duration_s", "optional bounded override", "number", false},
+            {"min_independent_evidence", "optional bounded override", "integer", false},
+            {"gps_mode", "IGNORE|OPTIONAL|REQUIRED", "string", false}}, &ApplyPolicy);
+    Reg("evaluate_policy_on_history", "Counterfactual replay on semantic policy_history",
+        {{"limit", "max semantic samples", "integer", false}}, &EvalPolicy);
+    Reg("revert_policy_trial", "Restore policy snapshot", {}, &RevertPolicy);
+    Reg("commit_policy_trial", "Activate candidate and clear trial", {}, &CommitPolicy);
 
     return {"get_theta", "get_anchors", "get_error_stats", "get_leave_episode", "get_leave_window_samples",
         "get_leave_sensor_summary", "get_param_limits", "evaluate_theta_on_history", "begin_theta_trial",
-        "revert_theta_trial", "commit_theta_trial", "apply_theta_delta", "write_audit", "request_anchor_reestimate"};
+        "revert_theta_trial", "commit_theta_trial", "apply_theta_delta", "write_audit", "request_anchor_reestimate",
+        "get_personalization_policy", "get_policy_catalog", "begin_policy_trial", "apply_policy_candidate",
+        "evaluate_policy_on_history", "revert_policy_trial", "commit_policy_trial"};
 }
 
 }  // namespace personalizer

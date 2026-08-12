@@ -60,6 +60,9 @@ public:
     void AppendSparseSample(int64_t tMs, int64_t tPushMs, double lat, double lon, double acc, bool walking,
         const std::string &homeRelation, double distHomeM);
 
+    /** Buffer semantic candidate ticks; they are persisted with a label when an episode settles. */
+    void ObservePolicyFeatures(const TickFeatures &features, const TickDecision &decision);
+
     void AppendPersonalizeJob(int64_t createdAtMs, const std::string &reason, const std::string &lastIntent,
         const std::string &lastScene, int64_t lastPushAtMs, const Theta &theta);
 
@@ -107,6 +110,7 @@ private:
     std::ofstream sparseSamples_;  // leave window GPS/walk only
     std::ofstream auditLog_;
     std::ofstream anchorJobs_;
+    std::ofstream policyHistory_;
     int64_t activePushMs_ = 0;
     std::string activeIntent_;
     int64_t tStarOutsideMs_ = 0;  // first OUTSIDE after active push (t*)
@@ -120,6 +124,23 @@ private:
     bool missedCompanyEmitted_ = false;
     uint64_t auditSeq_ = 0;
     uint64_t anchorJobSeq_ = 0;
+
+    struct PolicyHistoryRow {
+        int64_t t_ms = 0;
+        std::string side;
+        double preleave_probability = 0.0;
+        double leaving_probability = 0.0;
+        int hits = 0;
+        bool walking = false;
+        double pdr_net_out_m = 0.0;
+        bool wifi_detach = false;
+        bool cell_leave = false;
+        bool ble_detach = false;
+        bool has_usable_gps = false;
+    };
+    std::deque<PolicyHistoryRow> policyBuffer_;
+    int64_t lastPolicySampleMs_ = 0;
+    void FlushPolicyHistoryLocked(const std::string &side, const std::string &label, int64_t outcomeMs);
 
     struct PendingAnchorJob {
         std::string job_id;

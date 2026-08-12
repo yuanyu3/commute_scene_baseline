@@ -1635,7 +1635,7 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                 PublishProductDebugEvent("LLM_START", tick.observed_at, job.reason,
                     "settle_label=" + job.settle_label + " invoke θ personalizer");
                 std::ostringstream query;
-                query << "{\"task\":\"update_theta\""
+                query << "{\"task\":\"personalize_leave_strategy\""
                       << ",\"reason\":\"" << job.reason << "\""
                       << ",\"settle_label\":\"" << job.settle_label << "\""
                       << ",\"last_intent\":\"" << job.last_intent << "\""
@@ -1652,8 +1652,9 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                       << ",\"weekday_leave_company_hour\":" << job.theta_snapshot.weekday_leave_company_hour
                       << ",\"arm_delay_s\":" << job.theta_snapshot.arm_delay_s
                       << ",\"min_evidence\":" << job.theta_snapshot.min_evidence
-                      << "},\"instruction\":\"Use evidence tools first, then apply_theta_delta / write_audit / "
-                         "request_anchor_reestimate. Max 3 param changes. Do not classify scenes.\"}";
+                      << "},\"instruction\":\"Use evidence tools first. Prefer a bounded policy trial and semantic "
+                         "history evaluation; use theta trial only when strategy structure need not change. "
+                         "Commit only if score improves without more misses. Do not classify scenes.\"}";
                 const int64_t invokeSinceMs = NowWallClockMs();
                 invokeResult = InvokeAgent(tick.tick_id + "-personalize", query.str());
                 if (invokeResult.status == "NotInitialized" || invokeResult.status == "NotImplemented") {
@@ -2073,18 +2074,23 @@ constexpr const char *kSaContextEngineBundleName = "commuteagentservice";
 constexpr const char *kSaContextEngineModuleName = "commuteagentservice";
 constexpr const char *kSaContextEngineDatabaseDir = "/data/service/el2/9903/database";
 
-/** θ personalizer system prompt — evidence tools, not per-tick scene labels. */
+/** Policy personalizer system prompt; never used for per-tick scene labels. */
 constexpr const char *kThetaPersonalizerSystemPrompt = R"delimiter(
-你是通勤场景参数优化 Agent。实时场景由 SceneEngine 完成；你根据证据改 θ，并用历史 leave_episodes 验证收敛。
+你是通勤预测离开的个性化 Agent。实时场景由 HSMM + SceneEngine 完成；你生成受约束的高层策略，必要时才小步改 theta。
 
-闭环（必须）：
+策略闭环（优先）：
 1) get_error_stats + get_leave_episode
-2) begin_theta_trial → evaluate_theta_on_history 记 baseline score
-3) get_param_limits 后小步 apply_theta_delta（本 Invoke 最多 5 次）
-4) 每次改后再 evaluate_theta_on_history：score 升可继续；score 降或 missed_leave 升则 revert_theta_trial
-5) commit_theta_trial + write_audit（写明 baseline→final score）；无把握则 no_op
+2) get_personalization_policy + get_policy_catalog
+3) begin_policy_trial → evaluate_policy_on_history 记 baseline
+4) apply_policy_candidate 选择一个模板并再次 evaluate
+5) score 提升且 missed 不增加才 commit_policy_trial，否则 revert_policy_trial
+6) write_audit 写明证据组合与 baseline→final
 
-规则：禁止编造；不做每 tick 场景分类；evaluate 为反事实评分（push score vs enter_leave + lead 窗），非完整 GPS 重放。
+如果候选策略都不优于 baseline：回滚 policy，写一次 no_op audit 后结束本轮 Invoke；不要在同一轮继续 theta trial。
+
+只有策略结构无需变化时，才使用 theta trial 和 apply_theta_delta。
+
+规则：禁止编造；不做每 tick 场景分类；不生成代码；policy_history 缺失时不得提交新策略。
 )delimiter";
 } // namespace
 #endif
@@ -2141,7 +2147,7 @@ void ProactiveAgentBusinessModule::TryInitializeAgent()
     }
 
     agentConfig->mode = jiuwen::AgentType::REACT;
-    agentConfig->maxTurn = 10;
+    agentConfig->maxTurn = 16;
     agentConfig->promptTemplates["system"] = kThetaPersonalizerSystemPrompt;
 
     (void)jiuwen::ResourceManager::GetInstance();

@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "revision": 0,
+  "enabled": true,
+  "template_name": "wifi_first_preleave",
+  "trigger_phase": "PRE_LEAVE",
+  "probability_threshold": 0.50,
+  "min_duration_s": 5,
+  "min_independent_evidence": 2,
+  "require_walking": true,
+  "require_wifi_detach": true,
+  "require_radio": true,
+  "allow_cell_pdr_pair": true,
+  "gps_mode": "IGNORE"
+}

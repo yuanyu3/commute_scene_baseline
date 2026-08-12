@@ -88,6 +88,7 @@ bool ProductStore::Init(const std::string &rootDir)
     sparseSamples_.close();
     auditLog_.close();
     anchorJobs_.close();
+    policyHistory_.close();
     root_ = rootDir;
     if (!EnsureDir(root_)) {
         inited_ = false;
@@ -99,8 +100,9 @@ bool ProductStore::Init(const std::string &rootDir)
     sparseSamples_.open(root_ + "/leave_window_samples.jsonl", std::ios::out | std::ios::app);
     auditLog_.open(root_ + "/audit.jsonl", std::ios::out | std::ios::app);
     anchorJobs_.open(root_ + "/anchor_reestimate_jobs.jsonl", std::ios::out | std::ios::app);
+    policyHistory_.open(root_ + "/policy_history.jsonl", std::ios::out | std::ios::app);
     inited_ = leaveEpisodes_.is_open() && paramChanges_.is_open() && personalizeJobs_.is_open() &&
-        auditLog_.is_open() && anchorJobs_.is_open();
+        auditLog_.is_open() && anchorJobs_.is_open() && policyHistory_.is_open();
     return inited_;
 }
 
@@ -211,6 +213,7 @@ bool ProductStore::ObserveMissedLeave(int64_t tMs, const std::string &homeRelati
             << "\",\"t_star_ms\":" << *outsideSince << ",\"lead_s\":null,\"away_confirm_s\":" << awayConfirmS
             << ",\"lookback_s\":" << lookbackS << "}";
         AppendLine(leaveEpisodes_, oss.str());
+        FlushPolicyHistoryLocked(side, "MISSED_LEAVE", *outsideSince);
         if (sideOut) {
             *sideOut = side;
         }
@@ -235,6 +238,10 @@ void ProductStore::AppendLeaveLabel(int64_t tLabelMs, int64_t tPushMs, const std
     const std::string &homeRelation, bool hasDistHome, double distHomeM)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    const std::string side = activeIntent_ == "LEAVE_COMPANY_NOTIFICATION" ? "company" : "home";
+    const int64_t outcomeMs = (label == "CONFIRMED_LEAVE" && tStarOutsideMs_ > 0) ? tStarOutsideMs_ :
+        ((label == "FALSE_PUSH" && tPushMs > 0) ? tPushMs : tLabelMs);
+    FlushPolicyHistoryLocked(side, label, outcomeMs);
     std::ostringstream oss;
     oss << std::setprecision(8) << "{\"type\":\"label\",\"t_label_ms\":" << tLabelMs << ",\"t_push_ms\":" << tPushMs
         << ",\"label\":\"" << Esc(label) << "\",\"home_relation\":\"" << Esc(homeRelation)
@@ -252,6 +259,66 @@ void ProductStore::AppendLeaveLabel(int64_t tLabelMs, int64_t tPushMs, const std
         activeIntent_.clear();
         tStarOutsideMs_ = 0;
     }
+}
+
+void ProductStore::ObservePolicyFeatures(const TickFeatures &f, const TickDecision &d)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!inited_ || !policyHistory_.is_open() || (lastPolicySampleMs_ > 0 && f.t_ms - lastPolicySampleMs_ < 5000)) {
+        return;
+    }
+    const bool radioHome = f.wifi_home_detach || f.cell_leave_home || f.ble_home_detach;
+    const bool radioCompany = f.wifi_company_detach || f.cell_leave_company || f.ble_company_detach;
+    if (!f.walking && !radioHome && !radioCompany && d.hsmm_preleave_home < 0.05 && d.hsmm_preleave_company < 0.05) {
+        return;
+    }
+    lastPolicySampleMs_ = f.t_ms;
+    auto add = [&](const std::string &side, double preleave, double leaving, int hits, double pdr,
+                   bool wifi, bool cell, bool ble, Relation rel) {
+        PolicyHistoryRow row;
+        row.t_ms = f.t_ms;
+        row.side = side;
+        row.preleave_probability = preleave;
+        row.leaving_probability = leaving;
+        row.hits = hits;
+        row.walking = f.walking;
+        row.pdr_net_out_m = pdr;
+        row.wifi_detach = wifi;
+        row.cell_leave = cell;
+        row.ble_detach = ble;
+        row.has_usable_gps = f.has_gps && rel != Relation::kUnknown;
+        policyBuffer_.push_back(row);
+    };
+    add("home", d.hsmm_preleave_home, d.score_home, d.hits_home, f.pdr_net_out_home_m,
+        f.wifi_home_detach, f.cell_leave_home, f.ble_home_detach, d.home_relation);
+    add("company", d.hsmm_preleave_company, d.score_company, d.hits_company, f.pdr_net_out_company_m,
+        f.wifi_company_detach, f.cell_leave_company, f.ble_company_detach, d.company_relation);
+    const int64_t keepAfter = f.t_ms - 30 * 60 * 1000;
+    while (!policyBuffer_.empty() && policyBuffer_.front().t_ms < keepAfter) policyBuffer_.pop_front();
+}
+
+void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::string &label, int64_t outcomeMs)
+{
+    const int64_t begin = outcomeMs - 10 * 60 * 1000;
+    for (const auto &row : policyBuffer_) {
+        if (row.side != side || row.t_ms < begin || row.t_ms > outcomeMs) continue;
+        std::ostringstream out;
+        out << std::setprecision(8) << "{\"t_ms\":" << row.t_ms << ",\"outcome_t_ms\":" << outcomeMs
+            << ",\"side\":\"" << Esc(side) << "\",\"label\":\"" << Esc(label)
+            << "\",\"preleave_probability\":" << row.preleave_probability
+            << ",\"leaving_probability\":" << row.leaving_probability << ",\"hits\":" << row.hits
+            << ",\"walking\":" << (row.walking ? "true" : "false")
+            << ",\"wifi_detach\":" << (row.wifi_detach ? "true" : "false")
+            << ",\"cell_leave\":" << (row.cell_leave ? "true" : "false")
+            << ",\"ble_detach\":" << (row.ble_detach ? "true" : "false")
+            << ",\"pdr_net_out_m\":" << row.pdr_net_out_m
+            << ",\"geo_outbound\":false,\"has_usable_gps\":" << (row.has_usable_gps ? "true" : "false")
+            << ",\"lead_s\":" << static_cast<double>(outcomeMs - row.t_ms) / 1000.0 << "}";
+        AppendLine(policyHistory_, out.str());
+    }
+    policyBuffer_.erase(std::remove_if(policyBuffer_.begin(), policyBuffer_.end(), [&](const PolicyHistoryRow &row) {
+        return row.side == side && row.t_ms <= outcomeMs;
+    }), policyBuffer_.end());
 }
 
 void ProductStore::AppendSparseSample(int64_t tMs, int64_t tPushMs, double lat, double lon, double acc, bool walking,

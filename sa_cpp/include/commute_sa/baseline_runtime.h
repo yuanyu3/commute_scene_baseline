@@ -38,6 +38,7 @@ public:
     /** Persist current θ after personalize apply. */
     bool PersistTheta() const;
     bool ApplyThetaDeltaAndPersist(const std::string &param, double delta, const std::string &reason);
+    bool ApplyPersonalizationPolicyAndPersist(const PersonalizationPolicy &policy);
 
     std::string RadioDebugJson(int64_t tMs) const;
     std::string PdrDebugJson() const;

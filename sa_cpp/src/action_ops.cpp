@@ -5,14 +5,19 @@
 #include "commute_sa/baseline_runtime.h"
 #include "commute_sa/evidence_query.h"
 #include "commute_sa/product_store.h"
+#include "commute_sa/personalization_policy.h"
 #include "commute_sa/theta.h"
 #include "commute_sa/theta_eval.h"
 
 #include <chrono>
 #include <cmath>
 #include <algorithm>
+#include <fstream>
+#include <map>
 #include <mutex>
+#include <limits>
 #include <sstream>
+#include <vector>
 
 namespace commute_sa {
 namespace {
@@ -100,6 +105,20 @@ bool ExtractNumber(const std::string &json, const char *key, double *out)
     }
     *out = v;
     return true;
+}
+
+bool ExtractBool(const std::string &json, const char *key, bool *out)
+{
+    const std::string needle = std::string("\"") + key + "\"";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) return false;
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) return false;
+    pos = json.find_first_not_of(" \t\r\n", pos + 1);
+    if (pos == std::string::npos) return false;
+    if (json.compare(pos, 4, "true") == 0) { *out = true; return true; }
+    if (json.compare(pos, 5, "false") == 0) { *out = false; return true; }
+    return false;
 }
 
 /** Extract raw object/string value after key (for changes blob). */
@@ -292,6 +311,39 @@ bool ReadParamValue(const Theta &t, const std::string &param, double *out)
         return true;
     }
     return false;
+}
+
+std::mutex gPolicyTrialMutex;
+bool gPolicyTrialActive = false;
+PersonalizationPolicy gPolicyTrialSnapshot;
+bool gPolicyCandidateApplied = false;
+double gPolicyBaselineScore = std::numeric_limits<double>::quiet_NaN();
+double gPolicyCandidateScore = std::numeric_limits<double>::quiet_NaN();
+int gPolicyBaselineMissed = -1;
+int gPolicyCandidateMissed = -1;
+
+std::string RootDir();
+
+PersonalizationPolicy LoadLivePolicy()
+{
+    if (BaselineRuntime::GetInstance().Enabled() && BaselineRuntime::GetInstance().Engine() != nullptr) {
+        return BaselineRuntime::GetInstance().Engine()->GetPersonalizationPolicy();
+    }
+    PersonalizationPolicy policy = DefaultPersonalizationPolicy();
+    LoadPersonalizationPolicyFromFile(RootDir() + "/policy.json", &policy, nullptr);
+    return policy;
+}
+
+bool PersistPolicy(const PersonalizationPolicy &policy, std::string *err)
+{
+    if (BaselineRuntime::GetInstance().Enabled() && BaselineRuntime::GetInstance().Engine() != nullptr) {
+        if (!BaselineRuntime::GetInstance().ApplyPersonalizationPolicyAndPersist(policy)) {
+            if (err) *err = "live policy persist failed";
+            return false;
+        }
+        return true;
+    }
+    return SavePersonalizationPolicyToFile(RootDir() + "/policy.json", policy, err);
 }
 
 std::string RootDir()
@@ -526,6 +578,209 @@ std::string CommitThetaTrialAction(const std::string & /*paramsJson*/)
     }
     return "{\"ok\":true,\"trial_active\":false,\"note\":\"kept current theta (already persisted by "
            "apply_theta_delta)\"}";
+}
+
+std::string GetPersonalizationPolicyAction(const std::string & /*paramsJson*/)
+{
+    return std::string("{\"ok\":true,\"trial_active\":") + (gPolicyTrialActive ? "true" : "false") +
+        ",\"policy\":" + PersonalizationPolicyToJson(LoadLivePolicy()) + "}";
+}
+
+std::string GetPolicyCatalogAction(const std::string & /*paramsJson*/)
+{
+    return std::string("{\"ok\":true,\"catalog\":") + PersonalizationPolicyCatalogJson() + "}";
+}
+
+std::string BeginPolicyTrialAction(const std::string & /*paramsJson*/)
+{
+    std::lock_guard<std::mutex> lock(gPolicyTrialMutex);
+    if (gPolicyTrialActive) return "{\"ok\":false,\"error\":\"policy trial already active\"}";
+    gPolicyTrialSnapshot = LoadLivePolicy();
+    gPolicyTrialActive = true;
+    gPolicyCandidateApplied = false;
+    gPolicyBaselineScore = std::numeric_limits<double>::quiet_NaN();
+    gPolicyCandidateScore = std::numeric_limits<double>::quiet_NaN();
+    gPolicyBaselineMissed = -1;
+    gPolicyCandidateMissed = -1;
+    return std::string("{\"ok\":true,\"trial_active\":true,\"snapshot\":") +
+        PersonalizationPolicyToJson(gPolicyTrialSnapshot) + "}";
+}
+
+std::string ApplyPolicyCandidateAction(const std::string &paramsJson)
+{
+    std::lock_guard<std::mutex> lock(gPolicyTrialMutex);
+    if (!gPolicyTrialActive) return "{\"ok\":false,\"error\":\"begin_policy_trial required\"}";
+    std::string name;
+    if (!ExtractString(paramsJson, "template_name", &name)) {
+        return "{\"ok\":false,\"error\":\"missing template_name\"}";
+    }
+    PersonalizationPolicy candidate;
+    std::string err;
+    if (!BuildPolicyTemplate(name, &candidate, &err)) {
+        return "{\"ok\":false,\"error\":\"" + Esc(err) + "\",\"catalog\":" +
+            PersonalizationPolicyCatalogJson() + "}";
+    }
+    candidate.revision = LoadLivePolicy().revision + 1;
+    double value = 0.0;
+    bool flag = false;
+    std::string text;
+    if (ExtractNumber(paramsJson, "probability_threshold", &value)) candidate.probability_threshold = value;
+    if (ExtractNumber(paramsJson, "min_duration_s", &value)) candidate.min_duration_s = value;
+    if (ExtractNumber(paramsJson, "min_independent_evidence", &value)) candidate.min_independent_evidence = static_cast<int>(value);
+    if (ExtractBool(paramsJson, "require_walking", &flag)) candidate.require_walking = flag;
+    if (ExtractBool(paramsJson, "require_wifi_detach", &flag)) candidate.require_wifi_detach = flag;
+    if (ExtractBool(paramsJson, "require_radio", &flag)) candidate.require_radio = flag;
+    if (ExtractBool(paramsJson, "allow_cell_pdr_pair", &flag)) candidate.allow_cell_pdr_pair = flag;
+    if (ExtractString(paramsJson, "gps_mode", &text)) candidate.gps_mode = text;
+    if (!ValidatePersonalizationPolicy(candidate, &err)) {
+        return "{\"ok\":false,\"error\":\"" + Esc(err) + "\"}";
+    }
+    if (!PersistPolicy(candidate, &err)) {
+        return "{\"ok\":false,\"error\":\"" + Esc(err) + "\"}";
+    }
+    gPolicyCandidateApplied = true;
+    gPolicyCandidateScore = std::numeric_limits<double>::quiet_NaN();
+    gPolicyCandidateMissed = -1;
+    return std::string("{\"ok\":true,\"trial_active\":true,\"candidate\":") +
+        PersonalizationPolicyToJson(candidate) + "}";
+}
+
+std::string EvaluatePolicyOnHistoryAction(const std::string &paramsJson)
+{
+    double limitValue = 5000.0;
+    ExtractNumber(paramsJson, "limit", &limitValue);
+    const int limit = std::max(1, std::min(20000, static_cast<int>(limitValue)));
+    const std::string path = RootDir() + "/policy_history.jsonl";
+    std::ifstream in(path);
+    if (!in) {
+        return "{\"ok\":false,\"error\":\"policy_history.jsonl missing\",\"required_fields\":[\"label\",\"preleave_probability\",\"leaving_probability\",\"hits\",\"walking\",\"wifi_detach\",\"cell_leave\",\"ble_detach\",\"pdr_net_out_m\",\"evidence_duration_s\"]}";
+    }
+    struct EvalRow { PolicyEvidence evidence; double explicit_duration_s = -1.0; double lead_s = -1.0; };
+    struct EvalEpisode { std::string label; std::vector<EvalRow> rows; };
+    std::map<std::string, EvalEpisode> episodes;
+    int n = 0;
+    std::string line;
+    while (n < limit && std::getline(in, line)) {
+        std::string label;
+        if (!ExtractString(line, "label", &label)) continue;
+        EvalRow row;
+        double value = 0.0;
+        if (ExtractNumber(line, "t_ms", &value)) row.evidence.t_ms = static_cast<int64_t>(value);
+        ExtractNumber(line, "preleave_probability", &row.evidence.preleave_probability);
+        ExtractNumber(line, "leaving_probability", &row.evidence.leaving_probability);
+        if (ExtractNumber(line, "hits", &value)) row.evidence.baseline_hits = static_cast<int>(value);
+        ExtractBool(line, "walking", &row.evidence.walking);
+        ExtractNumber(line, "pdr_net_out_m", &row.evidence.pdr_net_out_m);
+        ExtractBool(line, "wifi_detach", &row.evidence.wifi_detach);
+        ExtractBool(line, "cell_leave", &row.evidence.cell_leave);
+        ExtractBool(line, "ble_detach", &row.evidence.ble_detach);
+        ExtractBool(line, "geo_outbound", &row.evidence.geo_outbound);
+        ExtractBool(line, "has_usable_gps", &row.evidence.has_usable_gps);
+        ExtractNumber(line, "evidence_duration_s", &row.explicit_duration_s);
+        ExtractNumber(line, "lead_s", &row.lead_s);
+        std::string side = "unknown";
+        ExtractString(line, "side", &side);
+        double outcome = static_cast<double>(row.evidence.t_ms);
+        ExtractNumber(line, "outcome_t_ms", &outcome);
+        const std::string key = side + ":" + std::to_string(static_cast<int64_t>(outcome)) + ":" + label;
+        episodes[key].label = label;
+        episodes[key].rows.push_back(row);
+        ++n;
+    }
+
+    const PersonalizationPolicy policy = LoadLivePolicy();
+    int confirmed = 0, falseCases = 0, matchedConfirmed = 0, matchedFalse = 0;
+    double score = 0.0;
+    for (auto &entry : episodes) {
+        auto &episode = entry.second;
+        std::sort(episode.rows.begin(), episode.rows.end(), [](const EvalRow &a, const EvalRow &b) {
+            return a.evidence.t_ms < b.evidence.t_ms;
+        });
+        bool matched = false;
+        int64_t runStart = 0;
+        int64_t previousMatch = 0;
+        double matchedLead = -1.0;
+        for (const auto &row : episode.rows) {
+            if (!MatchPersonalizationPolicy(policy, row.evidence).matched) {
+                runStart = 0;
+                previousMatch = 0;
+                continue;
+            }
+            if (previousMatch > 0 && row.evidence.t_ms - previousMatch > 15000) runStart = 0;
+            if (runStart == 0) runStart = row.evidence.t_ms;
+            previousMatch = row.evidence.t_ms;
+            const double observedDuration = row.explicit_duration_s >= 0.0 ? row.explicit_duration_s :
+                static_cast<double>(row.evidence.t_ms - runStart) / 1000.0;
+            if (observedDuration >= policy.min_duration_s) {
+                matched = true;
+                matchedLead = row.lead_s;
+                break;
+            }
+        }
+        if (episode.label == "CONFIRMED_LEAVE" || episode.label == "DEPARTURE_INTENT" ||
+            episode.label == "MISSED_LEAVE") {
+            ++confirmed;
+            if (matched) { ++matchedConfirmed; score += 2.0; } else { score -= 4.0; }
+            if (matchedLead >= 0.0) {
+                if (matchedLead >= 15.0 && matchedLead <= 300.0) score += 1.0;
+                else score -= 0.5;
+            }
+        } else if (episode.label == "FALSE_PUSH") {
+            ++falseCases;
+            if (matched) { ++matchedFalse; score -= 3.0; } else { score += 1.0; }
+        }
+    }
+    std::ostringstream out;
+    const int missed = confirmed - matchedConfirmed;
+    if (gPolicyTrialActive) {
+        if (gPolicyCandidateApplied) {
+            gPolicyCandidateScore = score;
+            gPolicyCandidateMissed = missed;
+        } else {
+            gPolicyBaselineScore = score;
+            gPolicyBaselineMissed = missed;
+        }
+    }
+    out << "{\"ok\":true,\"method\":\"semantic_policy_counterfactual\",\"trial_active\":"
+        << (gPolicyTrialActive ? "true" : "false") << ",\"n_samples\":" << n
+        << ",\"n_episodes\":" << episodes.size()
+        << ",\"confirmed\":" << confirmed << ",\"false_cases\":" << falseCases
+        << ",\"matched_confirmed\":" << matchedConfirmed << ",\"matched_false\":" << matchedFalse
+        << ",\"missed\":" << missed << ",\"score\":" << score
+        << ",\"policy\":" << PersonalizationPolicyToJson(policy) << "}";
+    return out.str();
+}
+
+std::string RevertPolicyTrialAction(const std::string & /*paramsJson*/)
+{
+    std::lock_guard<std::mutex> lock(gPolicyTrialMutex);
+    if (!gPolicyTrialActive) return "{\"ok\":false,\"error\":\"no active policy trial\"}";
+    std::string err;
+    if (!PersistPolicy(gPolicyTrialSnapshot, &err)) return "{\"ok\":false,\"error\":\"" + Esc(err) + "\"}";
+    gPolicyTrialActive = false;
+    gPolicyCandidateApplied = false;
+    return std::string("{\"ok\":true,\"trial_active\":false,\"policy\":") +
+        PersonalizationPolicyToJson(gPolicyTrialSnapshot) + "}";
+}
+
+std::string CommitPolicyTrialAction(const std::string & /*paramsJson*/)
+{
+    std::lock_guard<std::mutex> lock(gPolicyTrialMutex);
+    if (!gPolicyTrialActive) return "{\"ok\":false,\"error\":\"no active policy trial\"}";
+    if (!gPolicyCandidateApplied || std::isnan(gPolicyBaselineScore) || std::isnan(gPolicyCandidateScore)) {
+        return "{\"ok\":false,\"error\":\"baseline and candidate evaluation required before commit\"}";
+    }
+    if (gPolicyCandidateScore <= gPolicyBaselineScore || gPolicyCandidateMissed > gPolicyBaselineMissed) {
+        std::ostringstream rejected;
+        rejected << "{\"ok\":false,\"error\":\"candidate did not improve safely; revert required\""
+                 << ",\"baseline_score\":" << gPolicyBaselineScore << ",\"candidate_score\":" << gPolicyCandidateScore
+                 << ",\"baseline_missed\":" << gPolicyBaselineMissed << ",\"candidate_missed\":" << gPolicyCandidateMissed << "}";
+        return rejected.str();
+    }
+    gPolicyTrialActive = false;
+    gPolicyCandidateApplied = false;
+    return std::string("{\"ok\":true,\"trial_active\":false,\"policy\":") +
+        PersonalizationPolicyToJson(LoadLivePolicy()) + "}";
 }
 
 }  // namespace commute_sa

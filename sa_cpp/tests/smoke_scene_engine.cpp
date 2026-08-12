@@ -97,6 +97,44 @@ int main()
         }
     }
 
+    // A validated high-level policy can trigger on PRE_LEAVE using radio+motion
+    // while GPS still places the user inside the company fence.
+    SceneEngine policyEngine(anchors, theta);
+    PersonalizationPolicy policy;
+    BuildPolicyTemplate("wifi_first_preleave", &policy, nullptr);
+    policy.probability_threshold = 0.35;
+    policy.min_duration_s = 0.0;
+    policyEngine.SetPersonalizationPolicy(policy);
+    TickFeatures fp;
+    fp.t_ms = f.t_ms + 20000;
+    fp.has_gps = true;
+    fp.lat = anchors.company.lat;
+    fp.lon = anchors.company.lon;
+    fp.acc = 20.0;
+    policyEngine.Step(fp);  // establish AT_COMPANY
+    fp.walking = true;
+    fp.has_walk_started = true;
+    fp.walk_started_at_ms = fp.t_ms - 30000;
+    fp.wifi_company_detach = true;
+    fp.cell_leave_company = true;
+    fp.pdr_net_out_company_m = 5.0;
+    fp.wifi_jaccard_company = 0.0;
+    bool policyPushed = false;
+    for (int i = 0; i < 12 && !policyPushed; ++i) {
+        fp.t_ms += 5000;
+        const auto dp = policyEngine.Step(fp);
+        policyPushed = dp.should_service;
+        if (policyPushed && (dp.policy_template != "wifi_first_preleave" ||
+            dp.hsmm_preleave_company < policy.probability_threshold)) {
+            std::cerr << "FAIL: policy push did not come from PRE_LEAVE gate\n";
+            return 1;
+        }
+    }
+    if (!policyPushed) {
+        std::cerr << "FAIL: wifi_first_preleave policy never pushed\n";
+        return 1;
+    }
+
     BaselineRuntime::GetInstance().Init("D:/huawei/commute_scene_baseline/config/anchors.json",
         "D:/huawei/commute_scene_baseline/config/theta_default.json");
     BaselineRuntime::GetInstance().OnWalkingStarted(f.t_ms - 30000);
@@ -110,6 +148,7 @@ int main()
         std::cerr << "home/company too close\n";
         return 1;
     }
-    std::cout << "home-company sep_m=" << sep << " pushed_in_walk=" << (pushed ? 1 : 0) << "\nok\n";
+    std::cout << "home-company sep_m=" << sep << " pushed_in_walk=" << (pushed ? 1 : 0)
+              << " policy_preleave_push=" << (policyPushed ? 1 : 0) << "\nok\n";
     return 0;
 }

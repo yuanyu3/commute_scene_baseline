@@ -40,6 +40,7 @@ from commute_baseline.io_data import (  # noqa: E402
     pdr_net_at,
 )
 from commute_baseline.radio_evidence import (  # noqa: E402
+    RadioEvidence,
     RadioFeed,
     load_ble_samples,
     load_cell_samples,
@@ -55,6 +56,7 @@ SESSION_SENSOR_MAP = {
     "20260804_174813": "20260804_175841_sensor",
     "20260804_195251": "20260804_195251_sensor",
     "20260805_162326": "20260805_162326_sensor",
+    "20260809_230509": "20260809_230510_sensor",
     "20260810_114452": "20260810_114452_sensor",
     "20260810_114956": "20260810_114956_sensor",
 }
@@ -236,6 +238,7 @@ def replay_session(
     out_dir: Path,
     anchors_path: Path,
     theta: Dict[str, Any],
+    company_radio_fingerprint: Optional[Path] = None,
     tick_min_s: float = 8.0,
     settle_s: float = 1200.0,
 ) -> Dict[str, Any]:
@@ -259,7 +262,10 @@ def replay_session(
     wifi_scans = load_wifi_scans(radio_dirs)
     cell_samples = load_cell_samples(radio_dirs)
     ble_samples = load_ble_samples(radio_dirs)
-    radio_feed = RadioFeed(wifi_scans, cell_samples, ble_samples)
+    radio = RadioEvidence()
+    if company_radio_fingerprint is not None and company_radio_fingerprint.is_file():
+        radio.import_company_site_fingerprint_file(str(company_radio_fingerprint))
+    radio_feed = RadioFeed(wifi_scans, cell_samples, ble_samples, radio=radio)
 
     anchors = load_anchors(str(anchors_path))
     save_anchors(str(out_dir / "anchors.json"), anchors)
@@ -323,6 +329,7 @@ def replay_session(
             lat=p.lat,
             lon=p.lon,
             acc=p.acc,
+            gps_source_type=p.source_type,
             walking=walking_eff,
             walk_started_at=walk_started if walking_eff else None,
             pdr_net_out_home_m=pdr_home,
@@ -764,6 +771,11 @@ def main() -> int:
     ap.add_argument("--out-root", default=str(ROOT / "output" / "leave_company_5sessions"))
     ap.add_argument("--anchors", default=str(ROOT / "config" / "anchors.json"))
     ap.add_argument("--theta", default=str(ROOT / "config" / "theta_default.json"))
+    ap.add_argument(
+        "--company-radio-fingerprint",
+        default=str(ROOT / "config" / "company_radio_fingerprint.json"),
+        help="local cross-session company WiFi/Cell/BLE profile; ignored when absent",
+    )
     ap.add_argument("--sessions", nargs="*", default=SESSIONS)
     ap.add_argument("--iters", type=int, default=2, help="replay → update θ → replay cycles")
     ap.add_argument(
@@ -779,6 +791,11 @@ def main() -> int:
     out_root.mkdir(parents=True, exist_ok=True)
 
     theta_path = Path(args.theta)
+    fingerprint_path = Path(args.company_radio_fingerprint)
+    print(
+        "company radio fingerprint: "
+        + (str(fingerprint_path) if fingerprint_path.is_file() else "not loaded")
+    )
     theta_body = json.loads(theta_path.read_text(encoding="utf-8"))
     limits = theta_body.pop("param_limits", {})
     # ensure limits for iteration params
@@ -832,6 +849,7 @@ def main() -> int:
                 out_dir=iter_dir / name,
                 anchors_path=Path(args.anchors),
                 theta=theta,
+                company_radio_fingerprint=fingerprint_path,
             )
             summary["sensor_dir"] = str(sensor_dir)
             summaries.append(summary)

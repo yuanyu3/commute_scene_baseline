@@ -77,6 +77,14 @@ std::string CallCommitThetaTrial(const std::string &params)
     return commute_sa::CommitThetaTrialAction(params);
 }
 
+std::string CallGetPolicy(const std::string &p) { return commute_sa::GetPersonalizationPolicyAction(p); }
+std::string CallGetPolicyCatalog(const std::string &p) { return commute_sa::GetPolicyCatalogAction(p); }
+std::string CallBeginPolicyTrial(const std::string &p) { return commute_sa::BeginPolicyTrialAction(p); }
+std::string CallApplyPolicy(const std::string &p) { return commute_sa::ApplyPolicyCandidateAction(p); }
+std::string CallEvaluatePolicy(const std::string &p) { return commute_sa::EvaluatePolicyOnHistoryAction(p); }
+std::string CallRevertPolicy(const std::string &p) { return commute_sa::RevertPolicyTrialAction(p); }
+std::string CallCommitPolicy(const std::string &p) { return commute_sa::CommitPolicyTrialAction(p); }
+
 ErrorCode RegisterOne(const char *name, const char *desc,
     const std::vector<std::tuple<std::string, std::string, std::string, bool>> &params,
     ActionToolBase::Handler handler)
@@ -100,6 +108,13 @@ const std::vector<std::string> &ActionToolNames()
         "begin_theta_trial",
         "revert_theta_trial",
         "commit_theta_trial",
+        "get_personalization_policy",
+        "get_policy_catalog",
+        "begin_policy_trial",
+        "apply_policy_candidate",
+        "evaluate_policy_on_history",
+        "revert_policy_trial",
+        "commit_policy_trial",
     };
     return kNames;
 }
@@ -140,6 +155,20 @@ std::vector<std::string> RegisterActionTools()
     RegisterOne("revert_theta_trial", "Restore θ to begin_theta_trial snapshot", {}, &CallRevertThetaTrial);
 
     RegisterOne("commit_theta_trial", "Keep current θ and clear trial snapshot", {}, &CallCommitThetaTrial);
+
+    RegisterOne("get_personalization_policy", "Return active bounded high-level strategy", {}, &CallGetPolicy);
+    RegisterOne("get_policy_catalog", "Return allowed strategy templates and bounds", {}, &CallGetPolicyCatalog);
+    RegisterOne("begin_policy_trial", "Snapshot active strategy before counterfactual experiment", {}, &CallBeginPolicyTrial);
+    RegisterOne("apply_policy_candidate", "Apply a validated strategy template candidate",
+        {{"template_name", "confirmed_leaving|wifi_first_preleave|radio_motion_preleave|conservative_preleave", "string", true},
+            {"probability_threshold", "optional bounded override", "number", false},
+            {"min_duration_s", "optional bounded override", "number", false},
+            {"min_independent_evidence", "optional bounded override", "integer", false},
+            {"gps_mode", "IGNORE|OPTIONAL|REQUIRED", "string", false}}, &CallApplyPolicy);
+    RegisterOne("evaluate_policy_on_history", "Counterfactual replay against semantic policy_history.jsonl",
+        {{"limit", "max semantic samples", "integer", false}}, &CallEvaluatePolicy);
+    RegisterOne("revert_policy_trial", "Restore policy snapshot", {}, &CallRevertPolicy);
+    RegisterOne("commit_policy_trial", "Keep active candidate policy", {}, &CallCommitPolicy);
 
     return ActionToolNames();
 }

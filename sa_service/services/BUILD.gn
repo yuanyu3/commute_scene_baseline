@@ -91,6 +91,7 @@ ohos_shared_library("commuteagentservice") {
     "src/commute_sa/pdr_evidence.cpp",
     "src/commute_sa/anchor_reestimate.cpp",
     "src/commute_sa/personalization.cpp",
+    "src/commute_sa/personalization_policy.cpp",
     "src/commute_sa/product_store.cpp",
     "src/commute_sa/evidence_query.cpp",
     "src/commute_sa/action_ops.cpp",

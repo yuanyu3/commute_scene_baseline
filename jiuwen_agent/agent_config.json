@@ -1,16 +1,16 @@
 {
 
-  "name": "commute_theta_personalizer",
+  "name": "commute_policy_personalizer",
 
   "framework": "jiuwen",
 
   "agent_type": "REACT",
 
-  "max_turn": 10,
+  "max_turn": 16,
 
   "stream": false,
 
-  "description": "Low-frequency personalization: evidence + try/evaluate/revert θ on history. Not per tick.",
+  "description": "Low-frequency personalization: evidence discovery plus bounded policy/theta counterfactual trials. Not per tick.",
 
   "system_prompt_file": "system_prompt.md",
 
@@ -33,6 +33,20 @@
     ],
 
     "action": [
+
+      "get_personalization_policy",
+
+      "get_policy_catalog",
+
+      "begin_policy_trial",
+
+      "apply_policy_candidate",
+
+      "evaluate_policy_on_history",
+
+      "revert_policy_trial",
+
+      "commit_policy_trial",
 
       "get_param_limits",
 
@@ -78,7 +92,7 @@
 
     "query": "commute_sa::EvidenceQuery",
 
-    "actions": "commute_sa::action_ops + theta_eval",
+    "actions": "commute_sa::action_ops + personalization_policy + theta_eval",
 
     "host": "OHOS SA ProactiveAgentBusinessModule::TryInitializeAgent"
 

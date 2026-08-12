@@ -244,6 +244,62 @@
 
       "output_schema": {"ok": "bool", "job_id": "string", "status": "queued"}
 
+    },
+
+    {
+      "name": "get_personalization_policy",
+      "category": "policy",
+      "description": "Return the active bounded high-level policy",
+      "input_schema": {},
+      "output_schema": {"ok": "bool", "trial_active": "bool", "policy": "object"}
+    },
+
+    {
+      "name": "get_policy_catalog",
+      "category": "policy",
+      "description": "Return allowed templates, operators and override bounds",
+      "input_schema": {},
+      "output_schema": {"ok": "bool", "catalog": "object"}
+    },
+
+    {
+      "name": "begin_policy_trial",
+      "category": "policy",
+      "description": "Snapshot the active policy before a strategy experiment",
+      "input_schema": {},
+      "output_schema": {"ok": "bool", "trial_active": "bool", "snapshot": "object"}
+    },
+
+    {
+      "name": "apply_policy_candidate",
+      "category": "policy",
+      "description": "Apply one validated strategy template with bounded overrides",
+      "input_schema": {"template_name": "string", "probability_threshold": "number optional", "min_duration_s": "number optional", "min_independent_evidence": "int optional", "gps_mode": "IGNORE|OPTIONAL|REQUIRED optional"},
+      "output_schema": {"ok": "bool", "candidate": "object"}
+    },
+
+    {
+      "name": "evaluate_policy_on_history",
+      "category": "policy",
+      "description": "Counterfactual score on labeled semantic policy_history.jsonl",
+      "input_schema": {"limit": "int optional"},
+      "output_schema": {"ok": "bool", "score": "number", "matched_confirmed": "int", "matched_false": "int", "missed": "int"}
+    },
+
+    {
+      "name": "revert_policy_trial",
+      "category": "policy",
+      "description": "Restore the policy snapshot",
+      "input_schema": {},
+      "output_schema": {"ok": "bool"}
+    },
+
+    {
+      "name": "commit_policy_trial",
+      "category": "policy",
+      "description": "Accept the active candidate and clear the trial",
+      "input_schema": {},
+      "output_schema": {"ok": "bool", "policy": "object"}
     }
 
   ]

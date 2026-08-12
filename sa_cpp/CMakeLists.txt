@@ -17,6 +17,7 @@ add_library(commute_sa
     src/pdr_evidence.cpp
     src/anchor_reestimate.cpp
     src/personalization.cpp
+    src/personalization_policy.cpp
     src/product_store.cpp
     src/evidence_query.cpp
     src/action_ops.cpp

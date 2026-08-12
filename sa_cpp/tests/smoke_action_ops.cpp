@@ -21,6 +21,12 @@ static void WriteFixture(const std::string &root)
     std::ofstream th(root + "/theta.json", std::ios::trunc);
     th << "{\"enter_leave\":0.58,\"w_walk\":0.25,\"arm_delay_s\":25,\"min_evidence\":2,"
           "\"lead_min_s\":90,\"lead_max_s\":240}\n";
+    std::ofstream policy(root + "/policy.json", std::ios::trunc);
+    policy << "{\"schema_version\":1,\"revision\":0,\"enabled\":true,"
+              "\"template_name\":\"confirmed_leaving\",\"trigger_phase\":\"LEAVING\","
+              "\"probability_threshold\":0.58,\"min_duration_s\":0,\"min_independent_evidence\":2,"
+              "\"require_walking\":false,\"require_wifi_detach\":false,\"require_radio\":false,"
+              "\"allow_cell_pdr_pair\":true,\"gps_mode\":\"OPTIONAL\"}\n";
     std::ofstream ep(root + "/leave_episodes.jsonl", std::ios::trunc);
     ep << "{\"type\":\"push\",\"t_push_ms\":1000,\"intent\":\"LEAVE_COMPANY_NOTIFICATION\","
           "\"score_home\":0.1,\"score_company\":0.50}\n";
@@ -28,6 +34,14 @@ static void WriteFixture(const std::string &root)
     ep << "{\"type\":\"push\",\"t_push_ms\":2000,\"intent\":\"LEAVE_COMPANY_NOTIFICATION\","
           "\"score_home\":0.1,\"score_company\":0.70}\n";
     ep << "{\"type\":\"label\",\"t_push_ms\":2000,\"label\":\"CONFIRMED_LEAVE\",\"lead_s\":120}\n";
+    std::ofstream ph(root + "/policy_history.jsonl", std::ios::trunc);
+    ph << "{\"t_ms\":1500,\"label\":\"FALSE_PUSH\",\"preleave_probability\":0.55,"
+          "\"leaving_probability\":0.62,\"hits\":2,\"walking\":true,\"wifi_detach\":false,"
+          "\"cell_leave\":true,\"ble_detach\":false,\"pdr_net_out_m\":2,\"evidence_duration_s\":6}\n";
+    ph << "{\"t_ms\":2500,\"label\":\"CONFIRMED_LEAVE\",\"preleave_probability\":0.68,"
+          "\"leaving_probability\":0.30,\"hits\":3,\"walking\":true,\"wifi_detach\":true,"
+          "\"cell_leave\":true,\"ble_detach\":false,\"pdr_net_out_m\":4,\"evidence_duration_s\":8,"
+          "\"lead_s\":43}\n";
 }
 
 int main()
@@ -83,6 +97,23 @@ int main()
     const std::string audit = commute_sa::WriteAuditAction("{\"message\":\"trial smoke ok\"}");
     if (audit.find("\"ok\":true") == std::string::npos) {
         std::cerr << "FAIL audit\n";
+        return 1;
+    }
+
+    const std::string policyBegin = commute_sa::BeginPolicyTrialAction("{}");
+    const std::string policyBaseline = commute_sa::EvaluatePolicyOnHistoryAction("{}");
+    const std::string policyApply = commute_sa::ApplyPolicyCandidateAction(
+        "{\"template_name\":\"wifi_first_preleave\",\"probability_threshold\":0.50,\"min_duration_s\":5}");
+    const std::string policyEval = commute_sa::EvaluatePolicyOnHistoryAction("{}");
+    const std::string policyCommit = commute_sa::CommitPolicyTrialAction("{}");
+    std::cout << "policy_begin=" << policyBegin << "\npolicy_baseline=" << policyBaseline << "\npolicy_apply=" << policyApply
+              << "\npolicy_eval=" << policyEval << "\npolicy_commit=" << policyCommit << "\n";
+    if (policyBegin.find("\"ok\":true") == std::string::npos ||
+        policyApply.find("\"template_name\":\"wifi_first_preleave\"") == std::string::npos ||
+        policyEval.find("\"matched_confirmed\":1") == std::string::npos ||
+        policyEval.find("\"matched_false\":0") == std::string::npos ||
+        policyCommit.find("\"ok\":true") == std::string::npos) {
+        std::cerr << "FAIL policy trial\n";
         return 1;
     }
 

@@ -17,6 +17,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import shutil
@@ -37,9 +38,12 @@ from commute_baseline.io_data import (  # noqa: E402
     load_location_csv_dir,
     load_sensor_gps,
     load_walking_events,
+    load_pdr_net_series,
+    pdr_net_at,
     merge_gps,
 )
 from commute_baseline.radio_evidence import (  # noqa: E402
+    RadioEvidence,
     RadioFeed,
     load_ble_samples,
     load_cell_samples,
@@ -77,8 +81,26 @@ def main() -> int:
     ap.add_argument("--home-gcj", default="40.011181,116.32677")
     ap.add_argument("--settle-s", type=float, default=1200.0, help="AFTER_PUSH settle seconds")
     ap.add_argument("--tick-min-s", type=float, default=8.0)
+    ap.add_argument(
+        "--outdoor-source-types",
+        default="1",
+        help="comma-separated GPS source types treated as an outdoor confirmation",
+    )
+    ap.add_argument(
+        "--stop-at-motion",
+        action="store_true",
+        help="truncate replay at the last acc/gyro/mag/rv/baro sample",
+    )
     ap.add_argument("--run-personalizer", action="store_true", help="call WSL personalizer_llm")
+    ap.add_argument(
+        "--company-radio-fingerprint",
+        default=str(ROOT / "config" / "company_radio_fingerprint.json"),
+        help="local cross-session company WiFi/Cell/BLE profile; ignored when absent",
+    )
     args = ap.parse_args()
+    outdoor_source_types = {
+        int(part.strip()) for part in args.outdoor_source_types.split(",") if part.strip()
+    }
 
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -89,6 +111,28 @@ def main() -> int:
     sensor = load_sensor_gps(args.sensor_dir)
     merged = merge_gps(raw, sensor)
     walks = load_walking_events(args.sensor_dir)
+    pdr_series = load_pdr_net_series(args.sensor_dir)
+    motion_stop = None
+    if args.stop_at_motion:
+        motion_prefixes = ("acc_data_", "gyro_data_", "mag_data_", "rv_data_", "baro_data_")
+        last_wall_ms = None
+        for path in sorted(Path(args.raw_dir).glob("*_data_*.csv")):
+            if not path.name.startswith(motion_prefixes):
+                continue
+            with path.open(newline="", encoding="utf-8-sig") as f:
+                for row in csv.reader(f):
+                    if not row or row[0] == "wallTsMs":
+                        continue
+                    try:
+                        wall_ms = int(float(row[0]))
+                    except (ValueError, TypeError):
+                        continue
+                    last_wall_ms = wall_ms if last_wall_ms is None else max(last_wall_ms, wall_ms)
+        if last_wall_ms is not None:
+            motion_stop = datetime.fromtimestamp(last_wall_ms / 1000.0, tz=CST)
+            merged = [p for p in merged if p.t <= motion_stop]
+            walks = [w for w in walks if w[0] <= motion_stop]
+            print(f"replay stop_at_motion={motion_stop.isoformat()}")
     print(f"GPS raw={len(raw)} sensor={len(sensor)} merged={len(merged)} walks={len(walks)}")
     if not merged:
         print("ERROR: no GPS points", file=sys.stderr)
@@ -127,10 +171,19 @@ def main() -> int:
     pushes = []
     last_t = None
     radio_dirs = [args.raw_dir, args.sensor_dir]
+    radio = RadioEvidence()
+    fingerprint_path = Path(args.company_radio_fingerprint)
+    if fingerprint_path.is_file():
+        radio.import_company_site_fingerprint_file(str(fingerprint_path))
+        shutil.copy2(fingerprint_path, out / "company_radio_fingerprint.json")
+        print(f"loaded company radio fingerprint from {fingerprint_path}")
+    else:
+        print("company radio fingerprint not found; using session-only radio evidence")
     radio_feed = RadioFeed(
         load_wifi_scans(radio_dirs),
         load_cell_samples(radio_dirs),
         load_ble_samples(radio_dirs),
+        radio=radio,
     )
 
     for p in merged:
@@ -147,13 +200,17 @@ def main() -> int:
         last_t = p.t
         t_ms = ms(p.t)
         radio_snap = radio_feed.advance(t_ms)
+        pdr_net_out = pdr_net_at(pdr_series, p.t)
         feat = TickFeatures(
             t=p.t,
             lat=p.lat,
             lon=p.lon,
             acc=p.acc,
+            gps_source_type=p.source_type,
             walking=walk_on,
             walk_started_at=walk_started if walk_on else None,
+            pdr_net_out_home_m=pdr_net_out,
+            pdr_net_out_company_m=pdr_net_out,
             wifi_home_detach=radio_snap.wifi_home_detach,
             wifi_company_detach=radio_snap.wifi_company_detach,
             wifi_home_attach=radio_snap.wifi_home_attach,
@@ -177,6 +234,7 @@ def main() -> int:
             "lat": p.lat,
             "lon": p.lon,
             "acc": p.acc,
+            "gps_source_type": p.source_type,
             "walking": walk_on,
             "scene": d.scene.value,
             "score_home": d.score_home,
@@ -187,6 +245,13 @@ def main() -> int:
             "company_relation": d.company_relation.value,
             "should_service": d.should_service,
             "service_intent": d.service_intent,
+            "hsmm_preleave_home": d.hsmm_preleave_home,
+            "hsmm_preleave_company": d.hsmm_preleave_company,
+            "hsmm_outside_home": d.hsmm_outside_home,
+            "hsmm_outside_company": d.hsmm_outside_company,
+            "hits_home": d.evidence.get("hits_home", 0),
+            "hits_company": d.evidence.get("hits_company", 0),
+            "evidence": d.evidence,
             "uncertainty": d.uncertainty,
             "eta_leave_s": d.eta_leave_s,
             "lead_gate_ok": d.lead_gate_ok,
@@ -205,9 +270,11 @@ def main() -> int:
     # Product leave_episodes + sparse samples + settle labels
     episodes_path = out / "leave_episodes.jsonl"
     samples_path = out / "leave_window_samples.jsonl"
+    policy_history_path = out / "policy_history.jsonl"
     by_t = {r["t_ms"]: r for r in decisions}
     sorted_dec = sorted(decisions, key=lambda r: r["t_ms"])
 
+    policy_rows = []
     with episodes_path.open("w", encoding="utf-8") as ep, samples_path.open("w", encoding="utf-8") as sp:
         for push in pushes:
             t_push = push["t_ms"]
@@ -235,6 +302,8 @@ def main() -> int:
             )
 
             t_star = None
+            truth_source = ""
+            reliable_return = False
             last_rel = push["home_relation"] if "HOME" in push["service_intent"] or push["scene"] == "LEAVING_HOME" else push["company_relation"]
             last_dist = push["dist_home_m"] if last_rel == push["home_relation"] else push["dist_company_m"]
             use_home = push["scene"] == "LEAVING_HOME" or push["service_intent"] == "DEPARTURE_NOTIFICATION"
@@ -266,15 +335,28 @@ def main() -> int:
                 if rel_now != "UNKNOWN":
                     last_rel = rel_now
                     last_dist = dist_now
+                outdoor_fix = (
+                    r.get("gps_source_type") in outdoor_source_types
+                )
                 if t_star is None and rel_now == "OUTSIDE":
                     t_star = r["t_ms"]
+                    truth_source = "ANCHOR_OUTSIDE"
+                elif t_star is None and outdoor_fix:
+                    # Product-specific delayed truth: an outdoor GPS source
+                    # confirms the earlier predictive leave even if the coarse
+                    # anchor fence remains INSIDE.
+                    t_star = r["t_ms"]
+                    truth_source = "OUTDOOR_GPS"
+                elif rel_now == "INSIDE" and outdoor_fix:
+                    reliable_return = True
 
-            # Early confirm on first OUTSIDE; else FALSE_PUSH at settle timeout.
+            # A later outdoor fix confirms departure even if the coarse fence
+            # remains inside, or the user returns before replay ends.
             settle_t = t_push + int(args.settle_s * 1000)
             if t_star is not None:
                 label = "CONFIRMED_LEAVE"
                 t_label = t_star
-            elif last_rel == "INSIDE":
+            elif reliable_return:
                 label = "FALSE_PUSH"
                 t_label = min(settle_t, sorted_dec[-1]["t_ms"] if sorted_dec else settle_t)
             else:
@@ -295,16 +377,68 @@ def main() -> int:
                         "anchor_relation": last_rel,
                         "dist_home_m": last_dist if use_home and last_dist is not None else -1,
                         "t_star_ms": t_star,
+                        "truth_source": truth_source,
                         "lead_s": lead_s,
                     },
                     ensure_ascii=False,
                 )
                 + "\n"
             )
+            # Keep only semantic evidence for the Agent. The policy evaluator
+            # reconstructs minimum evidence duration from consecutive ticks.
+            side = "home" if use_home else "company"
+            outcome_ms = t_star if t_star is not None else t_push
+            for r in sorted_dec:
+                if r["t_ms"] < t_push - 600000 or r["t_ms"] > outcome_ms:
+                    continue
+                ev = r.get("evidence", {}).get(side, {})
+                policy_rows.append(
+                    {
+                        "t_ms": r["t_ms"],
+                        "outcome_t_ms": outcome_ms,
+                        "side": side,
+                        "label": label,
+                        "preleave_probability": r["hsmm_preleave_home"] if side == "home" else r["hsmm_preleave_company"],
+                        "leaving_probability": r["score_home"] if side == "home" else r["score_company"],
+                        "hits": ev.get("hits", r.get("hits_home", 0) if side == "home" else r.get("hits_company", 0)),
+                        "walking": r["walking"],
+                        "pdr_net_out_m": ev.get("pdr_net_out", 0.0),
+                        "wifi_detach": ev.get("wifi_detach", False),
+                        "cell_leave": ev.get("cell_leave", False),
+                        "ble_detach": ev.get("ble_detach", False),
+                        "geo_outbound": float(ev.get("s_geo", 0.0)) >= float(theta.get("thr_geo", 0.5)),
+                        "has_usable_gps": r["home_relation"] != "UNKNOWN" if side == "home" else r["company_relation"] != "UNKNOWN",
+                        "lead_s": lead_s,
+                    }
+                )
             print(
                 f"LABEL {label} push@{push['t']} t_label={t_label} lead_s={lead_s} "
                 f"anchor_rel={last_rel} dist={last_dist}"
             )
+
+    policy_history_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in policy_rows) +
+        ("\n" if policy_rows else ""), encoding="utf-8"
+    )
+    (out / "policy.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "revision": 0,
+                "enabled": True,
+                "template_name": "wifi_first_preleave",
+                "trigger_phase": "PRE_LEAVE",
+                "probability_threshold": 0.50,
+                "min_duration_s": 5,
+                "min_independent_evidence": 2,
+                "require_walking": True,
+                "require_wifi_detach": True,
+                "require_radio": True,
+                "allow_cell_pdr_pair": True,
+                "gps_mode": "IGNORE",
+            }, ensure_ascii=False, indent=2
+        ) + "\n", encoding="utf-8"
+    )
 
     # Link sensor session for evidence tools (wifi/gps windows)
     for name in ("wifi_data", "cell_data", "mag_data", "location_data"):
@@ -352,6 +486,7 @@ def main() -> int:
         f"- sensor-dir: `{args.sensor_dir}`",
         f"- out-dir: `{out}`",
         f"- GPS merged: {len(merged)}, ticks: {len(decisions)}, pushes: {len(pushes)}",
+        f"- company radio fingerprint: {'loaded' if fingerprint_path.is_file() else 'not loaded'}",
         f"- scenes: {dict(scene_counts)}",
         "",
         "## Pushes",
@@ -370,6 +505,7 @@ def main() -> int:
         f"- `{samples_path.name}`",
         f"- `theta.json` / `anchors.json`",
         f"- `replay_decisions.json`",
+        f"- `policy.json` / `{policy_history_path.name}`",
         "",
     ]
     (out / "SUMMARY.md").write_text("\n".join(summary) + "\n", encoding="utf-8")
@@ -389,7 +525,7 @@ def main() -> int:
             "bash",
             "-lc",
             f"cd /mnt/d/huawei/commute_scene_baseline && "
-            f"bash examples/personalizer_llm/run.sh {env_file} {wsl_out} --debug",
+            f"bash examples/personalizer_llm/run.sh {env_file} {wsl_out} --no-fixture --debug",
         ]
         print("running:", " ".join(cmd))
         subprocess.run(cmd, check=False)

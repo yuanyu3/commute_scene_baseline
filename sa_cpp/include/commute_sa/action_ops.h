@@ -19,6 +19,15 @@ std::string BeginThetaTrialAction(const std::string &paramsJson);
 std::string RevertThetaTrialAction(const std::string &paramsJson);
 std::string CommitThetaTrialAction(const std::string &paramsJson);
 
+/** Bounded high-level policy trial: template/feature composition, replay, commit or rollback. */
+std::string GetPersonalizationPolicyAction(const std::string &paramsJson);
+std::string GetPolicyCatalogAction(const std::string &paramsJson);
+std::string BeginPolicyTrialAction(const std::string &paramsJson);
+std::string ApplyPolicyCandidateAction(const std::string &paramsJson);
+std::string EvaluatePolicyOnHistoryAction(const std::string &paramsJson);
+std::string RevertPolicyTrialAction(const std::string &paramsJson);
+std::string CommitPolicyTrialAction(const std::string &paramsJson);
+
 /** Static param_limits for agent guidance. */
 std::string GetParamLimitsJson();
 

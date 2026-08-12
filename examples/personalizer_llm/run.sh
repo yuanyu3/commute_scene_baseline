@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build + run theta personalizer against real DeepSeek (WSL / Linux).
+# Build + run policy personalizer against an OpenAI-compatible API (WSL / Linux).
 # Credentials are read by personalizer_llm from agent.env — do not source the file in bash
 # (values may contain spaces, e.g. "Bearer sk-...").
 #

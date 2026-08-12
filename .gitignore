@@ -14,6 +14,7 @@ sa_service/etc/agent.env
 **/export_*/
 examples/personalizer_llm/export_*/
 examples/personalizer_llm/run_data/
+examples/personalizer_llm/run_data_*/
 examples/**/run_data/
 **/agent_trace.jsonl
 **/agent_result.json

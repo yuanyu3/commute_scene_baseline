@@ -47,6 +47,12 @@ void BaselineRuntime::Init(const std::string &anchorsPath, const std::string &th
     }
     delete engine_;
     engine_ = new SceneEngine(anchors, theta);
+    PersonalizationPolicy policy = DefaultPersonalizationPolicy();
+    const std::string root = ProductStore::GetInstance().RootDir();
+    if (!root.empty()) {
+        LoadPersonalizationPolicyFromFile(root + "/policy.json", &policy, nullptr);
+    }
+    engine_->SetPersonalizationPolicy(policy);
     radio_.Reset(false);
     pdr_.Reset();
     std::string softJson;
@@ -194,6 +200,7 @@ TickDecision BaselineRuntime::OnTick(
     }
 
     TickDecision dec = engine_->Step(feat);
+    ProductStore::GetInstance().ObservePolicyFeatures(feat, dec);
     if (FocusAllowsHome(engine_->GetTheta().focus_side) || FocusAllowsCompany(engine_->GetTheta().focus_side)) {
         const Relation dwellHome =
             FocusAllowsHome(engine_->GetTheta().focus_side) ? dec.home_relation : Relation::kOutside;
@@ -284,6 +291,20 @@ bool BaselineRuntime::ApplyThetaDeltaAndPersist(const std::string &param, double
     engine_->SetTheta(t);
     ProductStore::GetInstance().AppendParamChange(NowMs(), param, oldV, newV, reason);
     return ProductStore::GetInstance().SaveTheta(t);
+}
+
+bool BaselineRuntime::ApplyPersonalizationPolicyAndPersist(const PersonalizationPolicy &policy)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (engine_ == nullptr || !ValidatePersonalizationPolicy(policy, nullptr)) {
+        return false;
+    }
+    const std::string root = ProductStore::GetInstance().RootDir();
+    if (root.empty() || !SavePersonalizationPolicyToFile(root + "/policy.json", policy, nullptr)) {
+        return false;
+    }
+    engine_->SetPersonalizationPolicy(policy);
+    return true;
 }
 
 std::string BaselineRuntime::RadioDebugJson(int64_t tMs) const

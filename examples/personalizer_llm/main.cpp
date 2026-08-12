@@ -147,13 +147,22 @@ std::string PrepareFixture(const std::string &root)
         "  \"home\": {\"id\":\"home\",\"lat\":40.05,\"lon\":116.17,\"r_in_m\":50,\"r_out_m\":90,\"method\":\"seed\"},\n"
         "  \"company\": {\"id\":\"co\",\"lat\":40.0,\"lon\":116.3,\"r_in_m\":80,\"r_out_m\":120,\"method\":\"seed\"}\n}\n");
     WriteFile(root + "/leave_episodes.jsonl",
-        "{\"type\":\"push\",\"t_push_ms\":1700000000000,\"intent\":\"DEPARTURE_NOTIFICATION\","
-        "\"scene\":\"LEAVING_HOME\",\"score_home\":0.72,\"dist_home_m\":55,\"walking\":true}\n"
+        "{\"type\":\"push\",\"t_push_ms\":1700000000000,\"intent\":\"LEAVE_COMPANY_NOTIFICATION\","
+        "\"scene\":\"LEAVING_COMPANY\",\"score_home\":0.1,\"score_company\":0.72,\"dist_home_m\":55,\"walking\":true}\n"
         "{\"type\":\"label\",\"t_label_ms\":1700001200000,\"t_push_ms\":1700000000000,"
-        "\"label\":\"FALSE_PUSH\",\"home_relation\":\"INSIDE\",\"dist_home_m\":12}\n");
+        "\"label\":\"FALSE_PUSH\",\"side\":\"company\",\"home_relation\":\"INSIDE\",\"dist_home_m\":12}\n");
     WriteFile(root + "/leave_window_samples.jsonl",
         "{\"t_ms\":1700000060000,\"t_push_ms\":1700000000000,\"lat\":40.0501,\"lon\":116.1702,"
         "\"acc\":15,\"walking\":true,\"home_relation\":\"NEAR\",\"dist_home_m\":48}\n");
+    WriteFile(root + "/policy_history.jsonl",
+        "{\"t_ms\":1700000000000,\"label\":\"FALSE_PUSH\",\"preleave_probability\":0.55,"
+        "\"leaving_probability\":0.60,\"hits\":2,\"walking\":true,\"wifi_detach\":false,"
+        "\"cell_leave\":true,\"ble_detach\":false,\"pdr_net_out_m\":2,\"geo_outbound\":false,"
+        "\"has_usable_gps\":false,\"evidence_duration_s\":6}\n"
+        "{\"t_ms\":1700001000000,\"label\":\"CONFIRMED_LEAVE\",\"preleave_probability\":0.67,"
+        "\"leaving_probability\":0.30,\"hits\":3,\"walking\":true,\"wifi_detach\":true,"
+        "\"cell_leave\":true,\"ble_detach\":false,\"pdr_net_out_m\":4,\"geo_outbound\":false,"
+        "\"has_usable_gps\":false,\"evidence_duration_s\":8,\"lead_s\":43}\n");
     WriteFile(session + "/wifi_data_smoke.csv",
         "wallTsMs,bssid,ssid,rssi,freq,power_mode\n"
         "1699999700000,aa:bb:cc:dd:ee:01,HomeWiFi,-45,2412,HIGH_STILL\n"
@@ -279,12 +288,12 @@ std::string BuildQueryFromEpisodes(const std::string &dataRoot)
         label = grabStr(lastLabel, "label");
     }
     std::ostringstream q;
-    q << "{\"task\":\"update_theta\",\"reason\":\"AFTER_PUSH\",\"focus_side\":\"company\",\"last_intent\":\""
+    q << "{\"task\":\"personalize_leave_strategy\",\"reason\":\"AFTER_PUSH\",\"focus_side\":\"company\",\"last_intent\":\""
       << intent << "\",\"last_scene\":\"" << scene << "\",\"last_push_at_ms\":" << tPush << ",\"label\":\""
       << label
-      << "\",\"instruction\":\"focus_side=company. Use evidence tools then begin_theta_trial / "
-         "apply_theta_delta / evaluate_theta_on_history; revert if score drops; finally "
-         "commit_theta_trial + write_audit. Max 5 applies. Prefer FALSE_PUSH / lead issues on company.\"}";
+      << "\",\"instruction\":\"focus_side=company. Use evidence tools, then prefer begin_policy_trial / "
+         "apply_policy_candidate / evaluate_policy_on_history. Revert if score drops or misses rise; commit and "
+         "write_audit only after improvement. Use theta trial only if no structural strategy change is needed.\"}";
     return q.str();
 }
 
@@ -478,7 +487,7 @@ int main(int argc, char **argv)
         // Prefer project prompt (company-focus personalization); fall back to embedded.
         const std::string promptPath = "jiuwen_agent/system_prompt.md";
         std::string loaded = ReadFile(promptPath);
-        if (noFixture && !loaded.empty()) {
+        if (!loaded.empty()) {
             cfg->promptTemplates["system"] = loaded;
             std::cout << "system prompt ← " << promptPath << " (" << loaded.size() << " bytes)\n";
         } else {
@@ -511,11 +520,7 @@ int main(int argc, char **argv)
     auto req = std::make_shared<Request>();
     req->sessionId = "personalize-host-1";
     req->requestId = "personalize-req-1";
-    req->query = noFixture ? BuildQueryFromEpisodes(dataRoot)
-                           : "{\"task\":\"update_theta\",\"reason\":\"AFTER_PUSH\",\"last_intent\":\"DEPARTURE_"
-                             "NOTIFICATION\",\"last_scene\":\"LEAVING_HOME\",\"last_push_at_ms\":1700000000000,"
-                             "\"instruction\":\"Use evidence tools then apply_theta_delta or write_audit. Max 3 "
-                             "param changes.\"}";
+    req->query = BuildQueryFromEpisodes(dataRoot);
     std::cout << "query=" << req->query << "\n";
     // Always dump stream payloads to agent_trace.jsonl (so you can open it after any run).
     // DEBUG adds: TRACE mode, jiuwen DEBUG logs, prettier turn/tool banners.

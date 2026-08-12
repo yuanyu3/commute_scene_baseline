@@ -3,6 +3,7 @@
 #include "commute_sa/anchors.h"
 #include "commute_sa/geo.h"
 #include "commute_sa/leave_hsmm.h"
+#include "commute_sa/personalization_policy.h"
 #include "commute_sa/theta.h"
 
 #include <cstdint>
@@ -96,6 +97,9 @@ struct TickDecision {
     bool lead_gate_ok = false;
     /** Why push was blocked: NONE | COOLDOWN | UNCERTAIN | OUTSIDE | LEAD_EARLY | ALREADY_PUSHED | APPROACHING */
     std::string push_block_reason = "NONE";
+    /** Active bounded policy and its last gate result, for audit/debug APIs. */
+    std::string policy_template = "confirmed_leaving";
+    std::string policy_match_reason = "NONE";
 };
 
 /**
@@ -110,6 +114,8 @@ public:
     const Theta &GetTheta() const;
     void SetAnchors(const AnchorSet &anchors);
     const AnchorSet &GetAnchors() const;
+    void SetPersonalizationPolicy(const PersonalizationPolicy &policy);
+    const PersonalizationPolicy &GetPersonalizationPolicy() const;
     Scene CurrentScene() const;
 
     TickDecision Step(const TickFeatures &feat);
@@ -128,7 +134,7 @@ private:
 
     /** Seconds until dist reaches rOut; nullopt if not outbound / unknown. */
     std::optional<double> EstimateEtaOutS(bool hasDist, double distM, double rOut, bool walking, double pdrNetOut,
-        std::optional<double> prevDist, std::optional<TickTsMs> prevT, TickTsMs tMs) const;
+        std::optional<double> prevDist, std::optional<TickTsMs> prevT, TickTsMs tMs, bool gpsReliable) const;
 
     bool LeadWindowOk(const std::optional<double> &etaS, std::string *blockReason) const;
 
@@ -138,6 +144,7 @@ private:
 
     AnchorSet anchors_;
     Theta theta_;
+    PersonalizationPolicy policy_;
     LeaveHsmm home_hsmm_;
     LeaveHsmm company_hsmm_;
     Scene scene_ = Scene::kUnknown;
@@ -162,6 +169,10 @@ private:
     /** One push per leave episode; reset when back to AT_* */
     bool leaveHomePushed_ = false;
     bool leaveCompanyPushed_ = false;
+    std::optional<TickTsMs> lastWalkStopMs_;
+    bool wasWalking_ = false;
+    std::optional<TickTsMs> policyHomeMatchSince_;
+    std::optional<TickTsMs> policyCompanyMatchSince_;
 };
 
 }  // namespace commute_sa

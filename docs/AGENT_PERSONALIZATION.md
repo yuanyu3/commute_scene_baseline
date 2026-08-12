@@ -1,10 +1,26 @@
-# Jiuwen 改参 Agent
+# Jiuwen 策略个性化 Agent
 
 ## 定位
 
 - **不做**每 tick 场景推理（由基线完成）。
 - **只在**误差门控 / 日终 / 锚点重估时 `Invoke`。
 - 使用 Jiuwen `AgentType::REACT` 或 `PLAN_EXECUTE`，`maxTurn≥3`，**启用 Tool**。
+- 优先生成受约束策略并做反事实回放；策略结构不需重新编译 HAP。
+
+## 高层策略 API
+
+| Tool | 用途 |
+|------|------|
+| `get_personalization_policy` | 当前生效的 `policy.json` |
+| `get_policy_catalog` | 端侧预编译模板与可覆盖字段边界 |
+| `begin_policy_trial` | 快照当前策略 |
+| `apply_policy_candidate` | 应用经校验的候选模板 |
+| `evaluate_policy_on_history` | 用 `policy_history.jsonl` 语义样本做反事实评分 |
+| `revert_policy_trial` / `commit_policy_trial` | 回滚或原子接受候选 |
+
+内置模板：`confirmed_leaving`、`wifi_first_preleave`、`radio_motion_preleave`、`conservative_preleave`。实时引擎只解释这些白名单算子；Agent 不能注入代码或任意表达式。
+
+`policy_history.jsonl` 每行是已标注的候选时刻，包含 PRE_LEAVE/LEAVING 概率、walking、WiFi/Cell/BLE、PDR、有效 GPS 和 lead。端侧只缓冲最近 30 分钟语义 tick，episode settle 时落盘最近 10 分钟；评估器按连续 tick 重建证据持续时间。
 
 ## 与场景 Agent 分离
 
