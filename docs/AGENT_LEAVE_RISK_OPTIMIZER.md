@@ -29,6 +29,10 @@ python examples\agent_optimize_leave_risk.py `
   --out output\agent_leave_risk_0811_0812
 ```
 
+Groups may use `truth_mode: walking_started` when the user has confirmed an
+intent episode but no outdoor GPS confirmation exists. This is an intent label,
+not proof that the user left the company.
+
 Outputs include the aggregate dataset profile, API response trace, candidate
 evaluations, Agent review, and the selected portable model. The API key is read at
 runtime and is never written to output. Use a separate output directory

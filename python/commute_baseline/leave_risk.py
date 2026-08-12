@@ -120,6 +120,7 @@ def extract_session_rows(
     wifi_core: set[str],
     company_cells: set[int],
     tick_s: int = 5,
+    truth_mode: str = "gps_type1",
 ) -> List[RiskRow]:
     pdr, walking_events, type1 = _load_sensor_events(session)
     acc = _load_xyz(session, "acc")
@@ -131,7 +132,11 @@ def extract_session_rows(
     if not all_times:
         return []
     start, end = min(all_times), max(all_times)
-    truth = min(type1) if label == "LEAVE" and type1 else None
+    if label == "LEAVE" and truth_mode == "walking_started" and walking_events:
+        started = [t for t, state in walking_events if state == 1]
+        truth = min(started) if started else None
+    else:
+        truth = min(type1) if label == "LEAVE" and type1 else None
     if truth is not None:
         end = min(end, truth)
 
@@ -218,8 +223,8 @@ def load_event_rows(data_root: Path, groups_path: Path, fingerprint_path: Path) 
             session = data_root / name
             if session.is_dir():
                 out.extend(extract_session_rows(
-                    session, group["id"], group["label"], group.get("route", "unknown"),
-                    wifi_core, company_cells,
+                session, group["id"], group["label"], group.get("route", "unknown"),
+                    wifi_core, company_cells, truth_mode=group.get("truth_mode", "gps_type1"),
                 ))
     return out
 
