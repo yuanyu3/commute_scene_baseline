@@ -20,6 +20,15 @@ python examples\agent_optimize_leave_risk.py `
   --out output\agent_leave_risk_v1
 ```
 
+For a combined multi-day dataset, pass a manifest:
+
+```powershell
+python examples\agent_optimize_leave_risk.py `
+  --dataset-manifest config\leave_risk_dataset_0811_0812.json `
+  --env-file sa_service\etc\agent.env `
+  --out output\agent_leave_risk_0811_0812
+```
+
 Outputs include the aggregate dataset profile, API response trace, candidate
 evaluations, Agent review, and the selected portable model. The API key is read at
 runtime and is never written to output. Use a separate output directory

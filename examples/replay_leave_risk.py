@@ -27,13 +27,24 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "output" / "leave_risk_v2" / "replay"))
     ap.add_argument("--risk-threshold", type=float)
     ap.add_argument("--consecutive", type=int)
+    ap.add_argument("--auto-discover", action="store_true", help="Replay every session directory under data-root as an unlabeled test session")
     args = ap.parse_args()
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     model = PortableRiskModel.load(args.model)
     model_body = json.loads(Path(args.model).read_text(encoding="utf-8"))
     risk_threshold = args.risk_threshold or float(model_body.get("report", {}).get("risk_threshold", 0.60))
     consecutive = args.consecutive or int(model_body.get("report", {}).get("consecutive_ticks", 3))
-    rows = load_event_rows(Path(args.data_root), Path(args.groups), Path(args.fingerprint))
+    if args.auto_discover:
+        from commute_baseline.leave_risk import extract_session_rows
+        fp = json.loads(Path(args.fingerprint).read_text(encoding="utf-8"))["company"]
+        wifi_core = {x.lower() for x in fp.get("wifi", {}).get("bssids", [])}
+        company_cells = {int(x) for x in fp.get("cell", {}).get("cell_ids", [])}
+        rows = []
+        for session in sorted(Path(args.data_root).iterdir()):
+            if session.is_dir():
+                rows.extend(extract_session_rows(session, "AUTO", "UNKNOWN", "unknown", wifi_core, company_cells))
+    else:
+        rows = load_event_rows(Path(args.data_root), Path(args.groups), Path(args.fingerprint))
     sessions = defaultdict(list)
     for row in rows:
         sessions[row.session].append(row)

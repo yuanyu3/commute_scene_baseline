@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "datasets": [
+    {"name": "0811", "data_root": "D:\\huawei\\data\\0811", "groups": "config/0811_event_groups.json"},
+    {"name": "0812", "data_root": "D:\\huawei\\data\\0812", "groups": "config/0812_event_groups.json"}
+  ]
+}

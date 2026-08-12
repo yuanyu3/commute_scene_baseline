@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "truth": "All 0812 sessions are user-confirmed non-leave hard negatives",
+  "groups": [
+    {"id": "g0812_1054", "sessions": ["20260812_105415", "20260812_105416", "20260812_105417"], "label": "INDOOR_ACTIVITY", "route": "fifth_floor_walk"},
+    {"id": "g0812_1101", "sessions": ["20260812_110128", "20260812_110131", "20260812_110132"], "label": "INDOOR_ACTIVITY", "route": "elevator_to_third_floor_return"},
+    {"id": "g0812_1115", "sessions": ["20260812_111456", "20260812_111501", "20260812_111502"], "label": "INDOOR_ACTIVITY", "route": "elevator_to_first_floor_return"}
+  ]
+}

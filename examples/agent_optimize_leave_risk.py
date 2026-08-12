@@ -179,13 +179,38 @@ def review_results(env: dict[str, str], profile: dict, evaluated: list[dict], ou
     safe = [x for x in evaluated if x["summary"]["false_push_groups"] == 0 and x["summary"]["leave_groups_detected"] == x["summary"]["leave_groups"]]
     system = """You are a conservative ML reviewer. Select one candidate only from the supplied evaluated candidates.
 Return JSON only: {\"selected_candidate\": string, \"reason\": string, \"reject\": [string]}.
-Never select a candidate with false_push_groups > 0 or missed leave groups. Prefer higher worst_route_recall, then higher leave lead.
-This is offline evidence, not proof of production generalization."""
-    prompt = json.dumps({"task": "Review measured candidates", "profile": profile, "evaluated": evaluated, "safe_candidates": [x["candidate"] for x in safe]}, ensure_ascii=False)
+Never select a candidate with false_push_groups > 0 or missed leave groups. If no candidate is safe, return selected_candidate as null and explain that no model should be exported.
+Prefer higher worst_route_recall, then higher leave lead. This is offline evidence, not proof of production generalization."""
+    compact = []
+    for item in evaluated:
+        summary = item["summary"]
+        compact.append({
+            "candidate": item["candidate"],
+            "feature_group": item["feature_group"],
+            "risk_threshold": item["risk_threshold"],
+            "consecutive_ticks": item["consecutive_ticks"],
+            "leave_detected": summary["leave_detected"],
+            "leave_sessions": summary["leave_sessions"],
+            "leave_groups_detected": summary["leave_groups_detected"],
+            "leave_groups": summary["leave_groups"],
+            "false_pushes": summary["false_pushes"],
+            "false_push_groups": summary["false_push_groups"],
+            "inconsistent_replica_groups": summary["inconsistent_replica_groups"],
+            "worst_route_recall": item["worst_route_recall"],
+            "lead_median_s": summary["lead_median_s"],
+            "selection_score": item["selection_score"],
+            "safe_by_local_gate": item in safe,
+        })
+    prompt = json.dumps({"task": "Review measured candidates", "profile": profile, "evaluated_candidates": compact, "safe_candidates": [x["candidate"] for x in safe], "safety_rule": "false_push_groups must equal 0 and leave_groups_detected must equal leave_groups"}, ensure_ascii=False)
     text, raw = call_agent(endpoint(env["SA_AGENT_BASE_URL"]), env["SA_AGENT_API_KEY"], env.get("SA_AGENT_MODEL", "deepseek-chat"), system, prompt)
     (out / "agent_review_raw.json").write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     review = parse_json_object(text)
     selected = review.get("selected_candidate")
+    if not safe:
+        if selected is not None:
+            review["local_rejection"] = f"No candidate passed local safety gate; Agent proposed {selected}, but no model was exported."
+        review["selected_candidate"] = None
+        return review
     if selected not in {x["candidate"] for x in safe}:
         raise ValueError(f"Agent selected unsafe or unknown candidate: {selected}")
     return review
@@ -198,13 +223,24 @@ def main() -> int:
     ap.add_argument("--fingerprint", default=str(ROOT / "config" / "company_radio_fingerprint.json"))
     ap.add_argument("--env-file", default=str(ROOT / "sa_service" / "etc" / "agent.env"))
     ap.add_argument("--out", default=str(ROOT / "output" / "agent_leave_risk_v1"))
+    ap.add_argument("--dataset-manifest", help="JSON manifest containing multiple data-root/groups pairs")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     env = read_env(Path(args.env_file))
     if not env.get("SA_AGENT_BASE_URL") or not env.get("SA_AGENT_API_KEY") or env["SA_AGENT_API_KEY"].startswith("YOUR_"):
         raise RuntimeError("Missing usable SA_AGENT_BASE_URL/SA_AGENT_API_KEY")
-    rows = load_event_rows(Path(args.data_root), Path(args.groups), Path(args.fingerprint))
+    if args.dataset_manifest:
+        manifest_path = Path(args.dataset_manifest)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        rows = []
+        for spec in manifest["datasets"]:
+            group_path = Path(spec["groups"])
+            if not group_path.is_absolute():
+                group_path = ROOT / group_path
+            rows.extend(load_event_rows(Path(spec["data_root"]), group_path, Path(args.fingerprint)))
+    else:
+        rows = load_event_rows(Path(args.data_root), Path(args.groups), Path(args.fingerprint))
     names = feature_names(rows)
     profile = compact_profile(rows)
     (out / "dataset_profile.json").write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -217,6 +253,9 @@ def main() -> int:
     (out / "evaluated_candidates.json").write_text(json.dumps(evaluated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     review = review_results(env, profile, evaluated, out)
     (out / "agent_review.json").write_text(json.dumps(review, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if review.get("selected_candidate") is None:
+        print(json.dumps({"selected": None, "reason": review.get("reason", ""), "local_rejection": review.get("local_rejection", "No safe candidate"), "candidates": [{"candidate": x["candidate"], "false_push_groups": x["summary"]["false_push_groups"], "leave_groups_detected": x["summary"]["leave_groups_detected"], "leave_groups": x["summary"]["leave_groups"]} for x in evaluated]}, ensure_ascii=False, indent=2))
+        return 2
     chosen = next(x for x in evaluated if x["candidate"] == review["selected_candidate"])
     disabled = tuple(chosen["disabled_prefixes"])
     active, models = fit_models(rows, names, disabled)
