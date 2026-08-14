@@ -56,15 +56,15 @@
 
 ### 单 tick 流程（简述）
 
-1. GPS 相对家/公司锚点 → `INSIDE` / `NEAR` / `OUTSIDE`
+1. 相对位置：家侧仍用 GPS 围栏；**公司侧在附近时以 `source_type` 为准**（`2`=公司内，`1`=公司外 / 出大门），`r_in`/`r_out` 只作附近辅助
 2. `LeaveHsmm`：将行走、PDR、距离外扩、**在线 WiFi/Cell 脱离**（见 `docs/RADIO_EVIDENCE.md`）和时段先验作为观测，结合状态持续时间输出 `P(LEAVING)`；距离变近/重新附着强化返回锚点概率
-3. 分数 ≥ `enter_leave` 且 hits ≥ `min_evidence` 且过 `arm_delay` → 进入 `LEAVING_*`
+3. `P(LEAVING)` ≥ `enter_leave` 且过 `arm_delay` → 进入 `LEAVING_*`
 4. **预测推送门控**（带钥匙必须在完全离家前）：
    - 仅 `INSIDE` / `NEAR`（**禁止 OUTSIDE 推**）
    - `eta_leave_s` ≤ `lead_max_s`（太早不推）
    - 同一离开 episode **只推一次**
 
-**ETA**：估计距穿过围栏外径 `r_out` 还有多少秒（外扩速度或默认步行 ~1.2 m/s）。  
+**ETA**：家侧估计距穿过围栏外径 `r_out` 还有多少秒；公司侧室内（`source_type=2`）不采信围栏 ETA，GNSS（`1`）视为已出大门。  
 **LEAD**：事后 `lead_s = t* − t_push`，其中 `t*` 为推送后首次 `OUTSIDE`；目标约 `lead_min_s`～`lead_max_s`（默认 90～240s）。
 
 ---
@@ -86,7 +86,7 @@
 - **Evidence**：`get_theta` / `get_error_stats` / `get_leave_episode` / sensor windows …
 - **Action**：`apply_theta_delta` / `write_audit` / `request_anchor_reestimate` …
 
-策略示例：误推提高 `enter_leave` / `min_evidence` / `w_radio`；确认离开但 lead 偏小则略降阈值或 `arm_delay`。改参后应用 `evaluate_theta_on_history` 在历史 episode 上验证，变差则 `revert_theta_trial`。
+策略示例：误推提高 `enter_leave` 或降低噪声通道 `w_*`；确认离开但 lead 偏小则略降阈值或 `arm_delay`。改参后应用 `evaluate_theta_on_history` 在历史离开窗口上回放 HSMM，变差则 `revert_theta_trial`。
 
 ---
 

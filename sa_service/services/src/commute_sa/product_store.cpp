@@ -274,7 +274,7 @@ void ProductStore::ObservePolicyFeatures(const TickFeatures &f, const TickDecisi
     }
     lastPolicySampleMs_ = f.t_ms;
     auto add = [&](const std::string &side, double preleave, double leaving, int hits, double pdr,
-                   bool wifi, bool cell, bool ble, Relation rel) {
+                   bool wifi, bool cell, bool ble, Relation rel, const LeaveObservation &obs) {
         PolicyHistoryRow row;
         row.t_ms = f.t_ms;
         row.side = side;
@@ -287,12 +287,17 @@ void ProductStore::ObservePolicyFeatures(const TickFeatures &f, const TickDecisi
         row.cell_leave = cell;
         row.ble_detach = ble;
         row.has_usable_gps = f.has_gps && rel != Relation::kUnknown;
+        row.baro_available = f.baro_available;
+        row.baro_baseline_ready = f.baro_baseline_ready;
+        row.baro_descent_m = f.baro_descent_m;
+        row.baro_lower_platform = f.baro_lower_platform;
+        row.hsmm_obs = obs;
         policyBuffer_.push_back(row);
     };
     add("home", d.hsmm_preleave_home, d.score_home, d.hits_home, f.pdr_net_out_home_m,
-        f.wifi_home_detach, f.cell_leave_home, f.ble_home_detach, d.home_relation);
+        f.wifi_home_detach, f.cell_leave_home, f.ble_home_detach, d.home_relation, d.hsmm_obs_home);
     add("company", d.hsmm_preleave_company, d.score_company, d.hits_company, f.pdr_net_out_company_m,
-        f.wifi_company_detach, f.cell_leave_company, f.ble_company_detach, d.company_relation);
+        f.wifi_company_detach, f.cell_leave_company, f.ble_company_detach, d.company_relation, d.hsmm_obs_company);
     const int64_t keepAfter = f.t_ms - 30 * 60 * 1000;
     while (!policyBuffer_.empty() && policyBuffer_.front().t_ms < keepAfter) policyBuffer_.pop_front();
 }
@@ -313,6 +318,26 @@ void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::
             << ",\"ble_detach\":" << (row.ble_detach ? "true" : "false")
             << ",\"pdr_net_out_m\":" << row.pdr_net_out_m
             << ",\"geo_outbound\":false,\"has_usable_gps\":" << (row.has_usable_gps ? "true" : "false")
+            << ",\"baro_available\":" << (row.baro_available ? "true" : "false")
+            << ",\"baro_baseline_ready\":" << (row.baro_baseline_ready ? "true" : "false")
+            << ",\"baro_descent_m\":" << row.baro_descent_m
+            << ",\"baro_lower_platform\":" << (row.baro_lower_platform ? "true" : "false")
+            << ",\"obs_walking\":" << row.hsmm_obs.walking
+            << ",\"obs_pdr_outbound\":" << row.hsmm_obs.pdr_outbound
+            << ",\"obs_geo_outbound\":" << row.hsmm_obs.geo_outbound
+            << ",\"obs_wifi_detach\":" << row.hsmm_obs.wifi_detach
+            << ",\"obs_cell_detach\":" << row.hsmm_obs.cell_detach
+            << ",\"obs_ble_detach\":" << row.hsmm_obs.ble_detach
+            << ",\"obs_time_prior\":" << row.hsmm_obs.time_prior
+            << ",\"obs_baro_descending\":" << row.hsmm_obs.baro_descending
+            << ",\"obs_baro_lower_platform\":" << row.hsmm_obs.baro_lower_platform
+            << ",\"obs_baro_available\":" << (row.hsmm_obs.baro_available ? "true" : "false")
+            << ",\"obs_relation_known\":" << (row.hsmm_obs.relation_known ? "true" : "false")
+            << ",\"obs_inside\":" << (row.hsmm_obs.inside ? "true" : "false")
+            << ",\"obs_near\":" << (row.hsmm_obs.near ? "true" : "false")
+            << ",\"obs_outside\":" << (row.hsmm_obs.outside ? "true" : "false")
+            << ",\"obs_approaching\":" << (row.hsmm_obs.approaching ? "true" : "false")
+            << ",\"obs_attached\":" << (row.hsmm_obs.attached ? "true" : "false")
             << ",\"lead_s\":" << static_cast<double>(outcomeMs - row.t_ms) / 1000.0 << "}";
         AppendLine(policyHistory_, out.str());
     }
@@ -523,6 +548,7 @@ bool ProductStore::SaveTheta(const Theta &theta) const
         << "  \"w_ble\": " << theta.w_ble << ",\n"
         << "  \"w_radio\": " << (theta.w_wifi + theta.w_cell + theta.w_ble) << ",\n"
         << "  \"w_time\": " << theta.w_time << ",\n"
+        << "  \"w_baro\": " << theta.w_baro << ",\n"
         << "  \"weekday_leave_home_hour\": " << theta.weekday_leave_home_hour << ",\n"
         << "  \"weekday_leave_company_hour\": " << theta.weekday_leave_company_hour << ",\n"
         << "  \"leave_window_min\": " << theta.leave_window_min << ",\n"

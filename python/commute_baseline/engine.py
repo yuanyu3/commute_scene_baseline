@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -10,6 +10,10 @@ from typing import Any, Dict, Optional
 from .anchors import Anchor, AnchorSet
 from .geo import Relation, relation_to_anchor
 from .hsmm import LeaveHsmm, LeaveObservation, LeavePhase
+
+# Location source_type near company: 2 = still inside, 1 = already outside the gate.
+GPS_SOURCE_OUTDOOR = 1
+GPS_SOURCE_INDOOR = 2
 
 
 class Scene(str, Enum):
@@ -81,7 +85,14 @@ DEFAULT_THETA: Dict[str, Any] = {
     "gps_low_quality_zero_m": 120.0,
     "gps_min_weight": 0.05,
     "gps_approach_min_weight": 0.50,
+    # Company: source_type 2=inside / 1=outside the gate; r_in/r_out is vicinity only.
+    "company_source_vicinity_m": 400.0,
     "focus_side": "all",
+    # Relative vertical-distance gate.  This is physical height, not a
+    # building-specific floor count, so it transfers across buildings.
+    "baro_gate_enabled": True,
+    "baro_min_descent_m": 12.0,
+    "w_baro": 0.20,
 }
 
 
@@ -91,7 +102,7 @@ class TickFeatures:
     lat: Optional[float] = None
     lon: Optional[float] = None
     acc: Optional[float] = None
-    gps_source_type: int = 1
+    gps_source_type: int = 0
     gps_trust: float = 1.0
     walking: bool = False
     walk_started_at: Optional[datetime] = None
@@ -108,6 +119,16 @@ class TickFeatures:
     # Continuous radio features for scoring (1.0 = identical to soft/baseline).
     wifi_jaccard_home: float = 1.0
     wifi_jaccard_company: float = 1.0
+    baro_available: bool = False
+    # Positive means lower than the origin platform.
+    baro_descent_m: float = 0.0
+    # Origin platform was established from a short stable baro window while
+    # company-workplace radio evidence was present.
+    baro_baseline_ready: bool = False
+    baro_stable_platform: bool = False
+    baro_descending: float = 0.0
+    baro_lower_platform: bool = False
+    baro_mode: str = "OFF"
 
 
 @dataclass
@@ -132,6 +153,16 @@ class TickDecision:
     eta_leave_s: float = -1.0
     lead_gate_ok: bool = False
     push_block_reason: str = "NONE"
+
+
+def _focus_allows_home(focus: str) -> bool:
+    f = (focus or "").lower()
+    return f in ("", "both", "home", "all")
+
+
+def _focus_allows_company(focus: str) -> bool:
+    f = (focus or "").lower()
+    return f in ("", "both", "company", "all")
 
 
 def _clip01(x: float) -> float:
@@ -188,6 +219,7 @@ def score_leaving_anchor(
     prev_dist: Optional[float],
     approaching: bool = False,
     radio_suppressed: bool = False,
+    gps_dist_unreliable: bool = False,
 ) -> tuple[float, Dict[str, Any], int]:
     """Per-channel leave scores → weighted sum; hits use per-channel thresholds."""
     ev: Dict[str, Any] = {}
@@ -214,14 +246,18 @@ def score_leaving_anchor(
     ev["pdr_net_out"] = round(pdr_eff, 2)
 
     s_geo = 0.0
-    if dist_m is not None and rel in (Relation.INSIDE, Relation.NEAR):
-        if prev_dist is not None and dist_m > prev_dist + 3:
-            s_geo = _clip01(dist_m / max(r_out, 1))
-            if rel == Relation.NEAR and dist_m >= r_in * 0.9:
-                s_geo = max(s_geo, 0.85)
-        # No static NEAR leave credit.
+    if not gps_dist_unreliable:
+        if dist_m is not None and rel in (Relation.INSIDE, Relation.NEAR):
+            if prev_dist is not None and dist_m > prev_dist + 3:
+                s_geo = _clip01(dist_m / max(r_out, 1))
+                if rel == Relation.NEAR and dist_m >= r_in * 0.9:
+                    s_geo = max(s_geo, 0.85)
+            # No static NEAR leave credit.
+        elif rel == Relation.OUTSIDE and not approaching:
+            s_geo = 0.8
     elif rel == Relation.OUTSIDE and not approaching:
-        s_geo = 0.8
+        # source_type 2→1 (or GNSS while near company) is the precise gate-leave.
+        s_geo = 1.0
     s_geo *= _clip01(float(feat.gps_trust))
     if s_geo >= thr_geo:
         hits += 1
@@ -263,7 +299,7 @@ def score_leaving_anchor(
     ev["radio_suppressed"] = radio_suppressed
 
     # Soft anti-return; hard approach gate also in SceneEngine.step.
-    if prev_dist is not None and dist_m is not None and dist_m + 8 < prev_dist:
+    if (not gps_dist_unreliable) and prev_dist is not None and dist_m is not None and dist_m + 8 < prev_dist:
         ev["toward_anchor"] = True
         return 0.0, ev, 0
     if approaching:
@@ -316,6 +352,7 @@ class SceneEngine:
         self._was_walking = False
         self._hsmm_home = LeaveHsmm()
         self._hsmm_company = LeaveHsmm()
+        self._prev_gps_source_type = 0
 
     def _rel(self, feat: TickFeatures, anchor: Anchor) -> tuple[Relation, Optional[float]]:
         if feat.lat is None or feat.lon is None:
@@ -333,6 +370,48 @@ class SceneEngine:
             anchor.r_in_m,
             anchor.r_out_m,
         )
+
+    def _gps_fix_usable(self, feat: TickFeatures) -> bool:
+        if feat.lat is None or feat.lon is None:
+            return False
+        max_acc = float(self.theta["max_gps_acc_m"])
+        if feat.acc is not None and feat.acc > max_acc and feat.acc > float(
+            self.theta["allow_network_dwell_acc_m"]
+        ):
+            return False
+        return True
+
+    def _company_rel(self, feat: TickFeatures) -> tuple[Relation, Optional[float], bool]:
+        """Company relation: source_type 2/1 when near campus; GPS fence is auxiliary."""
+        if feat.lat is None or feat.lon is None:
+            return Relation.UNKNOWN, None, False
+        geo_rel, dist = relation_to_anchor(
+            feat.lat,
+            feat.lon,
+            self.anchors.company.lat,
+            self.anchors.company.lon,
+            self.anchors.company.r_in_m,
+            self.anchors.company.r_out_m,
+        )
+        vicinity = max(
+            float(self.theta.get("company_source_vicinity_m", 400.0)),
+            float(self.anchors.company.r_out_m),
+        )
+        sticky = self.scene in (Scene.AT_COMPANY, Scene.LEAVING_COMPANY)
+        near = (
+            sticky
+            or feat.wifi_company_attach
+            or dist <= vicinity
+            or geo_rel in (Relation.INSIDE, Relation.NEAR)
+        )
+        if near:
+            if feat.gps_source_type == GPS_SOURCE_INDOOR:
+                return Relation.INSIDE, dist, True
+            if feat.gps_source_type == GPS_SOURCE_OUTDOOR:
+                return Relation.OUTSIDE, dist, True
+        if not self._gps_fix_usable(feat):
+            return Relation.UNKNOWN, dist, near
+        return geo_rel, dist, near
 
     def _cooldown_ok(self, t: datetime) -> bool:
         if self._last_push_at is None:
@@ -457,19 +536,36 @@ class SceneEngine:
         self._was_walking = feat.walking
         home, company = self.anchors.home, self.anchors.company
         h_rel, d_home = self._rel(feat, home)
-        c_rel, d_co = self._rel(feat, company)
+        c_rel, d_co, near_company = self._company_rel(feat)
         gps_trust = self._gps_trust(feat)
+        company_source_indoor = near_company and feat.gps_source_type == GPS_SOURCE_INDOOR
+        company_source_outdoor = near_company and feat.gps_source_type == GPS_SOURCE_OUTDOOR
+        company_source_gate = company_source_indoor or company_source_outdoor
+        company_gate_leave = company_source_outdoor and self._prev_gps_source_type == GPS_SOURCE_INDOOR
 
         approach_h = self._update_approach(
             "home", h_rel, d_home, self.prev_rel_home, self.prev_dist_home, gps_trust
         )
-        approach_c = self._update_approach(
-            "company", c_rel, d_co, self.prev_rel_company, self.prev_dist_company, gps_trust
-        )
+        if company_source_gate:
+            self._approach_company_streak = 0
+            approach_c = False
+            if self._prev_gps_source_type == GPS_SOURCE_OUTDOOR and company_source_indoor:
+                approach_c = True
+                self._return_from_outside_company = True
+            if feat.wifi_company_attach:
+                approach_c = True
+            if company_gate_leave:
+                approach_c = False
+        else:
+            approach_c = self._update_approach(
+                "company", c_rel, d_co, self.prev_rel_company, self.prev_dist_company, gps_trust
+            )
         if feat.wifi_home_attach:
             approach_h = True
         if feat.wifi_company_attach:
             approach_c = True
+        if company_gate_leave:
+            approach_c = False
 
         radio_sup_h = self._note_approach_edge("home", approach_h, feat.t)
         radio_sup_c = self._note_approach_edge("company", approach_c, feat.t)
@@ -509,13 +605,18 @@ class SceneEngine:
             self.prev_dist_company,
             approaching=approach_c,
             radio_suppressed=radio_sup_c,
+            gps_dist_unreliable=company_source_gate,
         )
         eh["approaching"] = approach_h
         ec["approaching"] = approach_c
         eh["gps_trust"] = round(gps_trust, 3)
         ec["gps_trust"] = round(gps_trust, 3)
+        ec["gps_source_type"] = feat.gps_source_type
+        ec["company_source_gate"] = company_source_gate
+        ec["company_gate_leave"] = company_gate_leave
 
         def hsmm_observation(ev: Dict[str, Any], rel: Relation, approaching: bool, attached: bool) -> LeaveObservation:
+            baro_ready = feat.baro_available and feat.baro_baseline_ready
             return LeaveObservation(
                 walking=float(ev.get("s_walk", 0.0)),
                 pdr_outbound=float(ev.get("s_pdr", 0.0)),
@@ -530,14 +631,17 @@ class SceneEngine:
                 outside=rel == Relation.OUTSIDE,
                 approaching=approaching,
                 attached=attached,
+                baro_descending=feat.baro_descending if baro_ready else 0.0,
+                baro_lower_platform=1.0 if baro_ready and feat.baro_lower_platform else 0.0,
+                baro_available=baro_ready,
             )
 
-        hsmm_home = self._hsmm_home.step(
-            hsmm_observation(eh, h_rel, approach_h, feat.wifi_home_attach), feat.t, self.theta
-        )
-        hsmm_company = self._hsmm_company.step(
-            hsmm_observation(ec, c_rel, approach_c, feat.wifi_company_attach), feat.t, self.theta
-        )
+        obs_h = hsmm_observation(eh, h_rel, approach_h, feat.wifi_home_attach)
+        obs_c = hsmm_observation(ec, c_rel, approach_c, feat.wifi_company_attach)
+        hsmm_home = self._hsmm_home.step(obs_h, feat.t, self.theta)
+        hsmm_company = self._hsmm_company.step(obs_c, feat.t, self.theta)
+        eh["obs"] = asdict(obs_h)
+        ec["obs"] = asdict(obs_c)
         # Compatibility fields carry posterior P(LEAVING), matching the C++ product engine.
         sh = hsmm_home.leaving_probability
         sc = hsmm_company.leaving_probability
@@ -549,9 +653,14 @@ class SceneEngine:
         eta_home = self._estimate_eta_out_s(
             d_home, home.r_out_m, feat.walking, feat.pdr_net_out_home_m, self.prev_dist_home, feat.t, gps_trust
         )
-        eta_co = self._estimate_eta_out_s(
-            d_co, company.r_out_m, feat.walking, feat.pdr_net_out_company_m, self.prev_dist_company, feat.t, gps_trust
-        )
+        if company_source_outdoor:
+            eta_co = 0.0
+        elif company_source_indoor:
+            eta_co = None
+        else:
+            eta_co = self._estimate_eta_out_s(
+                d_co, company.r_out_m, feat.walking, feat.pdr_net_out_company_m, self.prev_dist_company, feat.t, gps_trust
+            )
 
         need = int(self.theta["min_evidence"])
         should_service = False
@@ -559,6 +668,8 @@ class SceneEngine:
         push_block = "NONE"
         new_scene = self.scene
         active_eta: Optional[float] = None
+        allow_home = _focus_allows_home(str(self.theta.get("focus_side", "all")))
+        allow_company = _focus_allows_company(str(self.theta.get("focus_side", "all")))
 
         if h_rel == Relation.OUTSIDE:
             self._outside_home_since = self._outside_home_since or feat.t
@@ -570,99 +681,31 @@ class SceneEngine:
             self._outside_company_since = None
 
         exit_leave = float(self.theta["exit_leave"])
-        if h_rel == Relation.INSIDE and sh <= exit_leave:
+        if allow_home and h_rel == Relation.INSIDE and sh <= exit_leave:
             new_scene = Scene.AT_HOME
             self._leave_home_since = None
             self._leave_home_pushed = False
-        elif c_rel == Relation.INSIDE and sc <= exit_leave:
+        elif allow_company and c_rel == Relation.INSIDE and sc <= exit_leave:
             new_scene = Scene.AT_COMPANY
             self._leave_company_since = None
             self._leave_company_pushed = False
 
-        # Predictive candidate: use PRE_LEAVE posterior plus independent
-        # physical/radio evidence. LEAVING/OUTSIDE remains confirmation.
-        pre_h = hsmm_home.probability[LeavePhase.PRE_LEAVE]
-        pre_c = hsmm_company.probability[LeavePhase.PRE_LEAVE]
-        pre_enter = float(self.theta.get("enter_preleave", 0.50))
-        pre_need = int(self.theta.get("preleave_min_evidence", 2))
-
-        def predictive_gate(
-            rel: Relation,
-            approaching: bool,
-            previous_rel: Relation,
-            preleave_probability: float,
-            hits: int,
-            wifi_detach: bool,
-            cell_detach: bool,
-            ble_detach: bool,
-            geo_score: float,
-            pdr_m: float,
-            recent_geo: bool,
-        ) -> bool:
-            radio_ok = wifi_detach or cell_detach or ble_detach
-            walking_ok = (not bool(self.theta.get("preleave_require_walking", True))) or feat.walking
-            radio_gate_ok = (not bool(self.theta.get("preleave_require_radio", True))) or radio_ok
-            wifi_gate_ok = (not bool(self.theta.get("preleave_require_wifi", True))) or wifi_detach
-            min_geo = float(self.theta.get("preleave_min_geo", 0.20))
-            # Require a recent outward cue. Cumulative PDR alone is ambiguous
-            # because it can come from wandering inside the site.
-            pdr_min = float(self.theta.get("preleave_pdr_min_m", 4.0))
-            movement_ok = (
-                geo_score >= min_geo
-                or recent_geo
-                or ((wifi_detach or cell_detach or ble_detach) and pdr_m >= pdr_min)
-            )
-            arm_ok = self._arm_delay_ok(feat) or self._elevator_resume_ok(feat, radio_ok, pdr_m)
-            return (
-                rel in (Relation.INSIDE, Relation.NEAR)
-                and not approaching
-                and previous_rel != Relation.OUTSIDE
-                and preleave_probability >= pre_enter
-                and hits >= pre_need
-                and walking_ok
-                and radio_gate_ok
-                and wifi_gate_ok
-                and movement_ok
-                and arm_ok
-            )
-
-        geo_memory_s = float(self.theta.get("preleave_geo_memory_s", 30.0))
-        if float(eh.get("s_geo", 0.0)) >= float(self.theta.get("preleave_min_geo", 0.40)):
-            self._recent_geo_home_until = feat.t + timedelta(seconds=geo_memory_s)
-        if float(ec.get("s_geo", 0.0)) >= float(self.theta.get("preleave_min_geo", 0.40)):
-            self._recent_geo_company_until = feat.t + timedelta(seconds=geo_memory_s)
-        recent_geo_home = (
-            self._recent_geo_home_until is not None and feat.t <= self._recent_geo_home_until
+        enter = float(self.theta["enter_leave"])
+        home_leave_cand = (
+            allow_home
+            and h_rel in (Relation.INSIDE, Relation.NEAR)
+            and not approach_h
+            and self.prev_rel_home != Relation.OUTSIDE
+            and sh >= enter
+            and self._arm_delay_ok(feat)
         )
-        recent_geo_company = (
-            self._recent_geo_company_until is not None and feat.t <= self._recent_geo_company_until
-        )
-
-        home_leave_cand = predictive_gate(
-            h_rel,
-            approach_h,
-            self.prev_rel_home,
-            pre_h,
-            hh,
-            feat.wifi_home_detach,
-            feat.cell_leave_home,
-            feat.ble_home_detach,
-            float(eh.get("s_geo", 0.0)),
-            float(feat.pdr_net_out_home_m),
-            recent_geo_home,
-        )
-        co_leave_cand = predictive_gate(
-            c_rel,
-            approach_c,
-            self.prev_rel_company,
-            pre_c,
-            hc,
-            feat.wifi_company_detach,
-            feat.cell_leave_company,
-            feat.ble_company_detach,
-            float(ec.get("s_geo", 0.0)),
-            float(feat.pdr_net_out_company_m),
-            recent_geo_company,
+        co_leave_cand = (
+            allow_company
+            and c_rel in (Relation.INSIDE, Relation.NEAR)
+            and not approach_c
+            and self.prev_rel_company != Relation.OUTSIDE
+            and sc >= enter
+            and self._arm_delay_ok(feat)
         )
 
         lead_ok = False
@@ -755,14 +798,6 @@ class SceneEngine:
             uncertainty = "LOW"
         elif max_hits < need:
             uncertainty = "HIGH"
-        if should_service and uncertainty == "HIGH":
-            should_service = False
-            intent = "NONE"
-            push_block = "UNCERTAIN"
-            if new_scene == Scene.LEAVING_HOME:
-                self._leave_home_pushed = False
-            if new_scene == Scene.LEAVING_COMPANY:
-                self._leave_company_pushed = False
 
         self.scene = new_scene
         self.prev_rel_home = h_rel
@@ -772,6 +807,7 @@ class SceneEngine:
         if d_co is not None:
             self.prev_dist_company = d_co
         self.prev_t = feat.t
+        self._prev_gps_source_type = feat.gps_source_type
 
         return TickDecision(
             scene=new_scene,

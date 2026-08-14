@@ -30,6 +30,9 @@ struct LeaveObservation {
     bool outside = false;
     bool approaching = false;
     bool attached = false;
+    double baro_descending = 0.0;
+    double baro_lower_platform = 0.0;
+    bool baro_available = false;
 };
 
 struct LeaveHsmmConfig {
@@ -41,7 +44,7 @@ struct LeaveHsmmConfig {
     double leaving_max_s = 600.0;
     double max_gap_s = 300.0;
     /** Reliability of walking, PDR, geo, Wi-Fi, Cell, BLE and time observations. */
-    std::array<double, 7> reliability {{1.0, 1.0, 1.0, 0.8, 0.6, 0.4, 0.8}};
+    std::array<double, 9> reliability {{1.0, 1.0, 1.0, 0.8, 0.6, 0.4, 0.8, 0.8, 0.8}};
 };
 
 struct LeaveHsmmResult {

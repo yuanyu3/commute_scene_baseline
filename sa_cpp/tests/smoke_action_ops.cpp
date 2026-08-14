@@ -102,17 +102,21 @@ int main()
 
     const std::string policyBegin = commute_sa::BeginPolicyTrialAction("{}");
     const std::string policyBaseline = commute_sa::EvaluatePolicyOnHistoryAction("{}");
-    const std::string policyApply = commute_sa::ApplyPolicyCandidateAction(
+    const std::string policyRejected = commute_sa::ApplyPolicyCandidateAction(
         "{\"template_name\":\"wifi_first_preleave\",\"probability_threshold\":0.50,\"min_duration_s\":5}");
+    const std::string policyApply = commute_sa::ApplyPolicyCandidateAction(
+        "{\"template_name\":\"confirmed_leaving\"}");
     const std::string policyEval = commute_sa::EvaluatePolicyOnHistoryAction("{}");
-    const std::string policyCommit = commute_sa::CommitPolicyTrialAction("{}");
-    std::cout << "policy_begin=" << policyBegin << "\npolicy_baseline=" << policyBaseline << "\npolicy_apply=" << policyApply
-              << "\npolicy_eval=" << policyEval << "\npolicy_commit=" << policyCommit << "\n";
+    const std::string policyRevert = commute_sa::RevertPolicyTrialAction("{}");
+    std::cout << "policy_begin=" << policyBegin << "\npolicy_baseline=" << policyBaseline
+              << "\npolicy_rejected=" << policyRejected << "\npolicy_apply=" << policyApply
+              << "\npolicy_eval=" << policyEval << "\npolicy_revert=" << policyRevert << "\n";
     if (policyBegin.find("\"ok\":true") == std::string::npos ||
-        policyApply.find("\"template_name\":\"wifi_first_preleave\"") == std::string::npos ||
-        policyEval.find("\"matched_confirmed\":1") == std::string::npos ||
-        policyEval.find("\"matched_false\":0") == std::string::npos ||
-        policyCommit.find("\"ok\":true") == std::string::npos) {
+        policyBaseline.find("\"ok\":true") == std::string::npos ||
+        policyRejected.find("\"ok\":false") == std::string::npos ||
+        policyApply.find("\"template_name\":\"confirmed_leaving\"") == std::string::npos ||
+        policyEval.find("\"ok\":true") == std::string::npos ||
+        policyRevert.find("\"ok\":true") == std::string::npos) {
         std::cerr << "FAIL policy trial\n";
         return 1;
     }

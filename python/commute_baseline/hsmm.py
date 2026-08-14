@@ -35,6 +35,9 @@ class LeaveObservation:
     risk_30s: float = 0.0
     risk_60s: float = 0.0
     risk_120s: float = 0.0
+    baro_descending: float = 0.0
+    baro_lower_platform: float = 0.0
+    baro_available: bool = False
 
 
 @dataclass
@@ -114,30 +117,41 @@ class LeaveHsmm:
             obs.cell_detach,
             obs.ble_detach,
             obs.time_prior,
+            obs.baro_descending,
+            obs.baro_lower_platform,
         ]
         expected = [
-            [0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25],
-            [0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62],
-            [0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72],
-            [0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45],
+            [0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25, 0.03, 0.02],
+            [0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62, 0.30, 0.08],
+            [0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72, 0.80, 0.72],
+            [0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08, 0.82],
         ]
-        keys = ["w_walk", "w_pdr", "w_geo", "w_wifi", "w_cell", "w_ble", "w_time"]
+        keys = ["w_walk", "w_pdr", "w_geo", "w_wifi", "w_cell", "w_ble", "w_time", "w_baro", "w_baro"]
         reliability = [0.25 + 3.0 * float(theta.get(key, 0.0)) for key in keys]
         logs: List[float] = []
         for state in range(4):
             value = 0.0
             for feature, observation in enumerate(x):
+                if feature >= 7 and not obs.baro_available:
+                    continue
                 mu = max(0.02, min(0.98, expected[state][feature]))
                 sample = _clip01(observation)
                 value += reliability[feature] * (sample * math.log(mu) + (1.0 - sample) * math.log(1.0 - mu))
             if obs.relation_known:
-                relation = (
-                    [0.88, 0.62, 0.24, 0.02]
-                    if obs.inside
-                    else [0.18, 0.48, 0.72, 0.12]
-                    if obs.near
-                    else [0.01, 0.03, 0.10, 0.97]
-                )
+                if obs.inside:
+                    strong_outbound = obs.walking >= 0.5 and (
+                        obs.wifi_detach + obs.pdr_outbound + obs.geo_outbound
+                    ) >= 0.8
+                    # Match C++: predictive leave happens while still INSIDE.
+                    relation = (
+                        [0.28, 0.42, 0.68, 0.02] if strong_outbound else [0.88, 0.62, 0.24, 0.02]
+                    )
+                elif obs.near:
+                    relation = [0.18, 0.48, 0.72, 0.12]
+                elif obs.outside:
+                    relation = [0.01, 0.03, 0.10, 0.97]
+                else:
+                    relation = [0.25, 0.25, 0.25, 0.25]
                 value += 3.0 * math.log(max(1e-9, relation[state]))
             if obs.approaching or obs.attached:
                 value += 2.5 * math.log([0.92, 0.30, 0.02, 0.08][state])

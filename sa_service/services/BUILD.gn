@@ -89,6 +89,7 @@ ohos_shared_library("commuteagentservice") {
     "src/commute_sa/baseline_runtime.cpp",
     "src/commute_sa/radio_evidence.cpp",
     "src/commute_sa/pdr_evidence.cpp",
+    "src/commute_sa/baro_evidence.cpp",
     "src/commute_sa/anchor_reestimate.cpp",
     "src/commute_sa/personalization.cpp",
     "src/commute_sa/personalization_policy.cpp",

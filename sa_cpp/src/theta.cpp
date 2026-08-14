@@ -187,6 +187,15 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     if (ExtractNumber(json, "allow_network_dwell_acc_m", &v)) {
         t.allow_network_dwell_acc_m = v;
     }
+    if (ExtractNumber(json, "company_source_vicinity_m", &v)) {
+        t.company_source_vicinity_m = v;
+    }
+    if (ExtractNumber(json, "w_baro", &v)) {
+        t.w_baro = v;
+    }
+    if (ExtractNumber(json, "baro_min_descent_m", &v)) {
+        t.baro_min_descent_m = v;
+    }
     std::string focus;
     if (ExtractString(json, "focus_side", &focus)) {
         if (focus == "home" || focus == "company" || focus == "both") {
@@ -214,6 +223,12 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         theta->w_walk = clip(theta->w_walk + delta, 0.05, 0.4);
     } else if (param == "w_pdr") {
         theta->w_pdr = clip(theta->w_pdr + delta, 0.0, 0.4);
+    } else if (param == "w_geo") {
+        theta->w_geo = clip(theta->w_geo + delta, 0.05, 0.4);
+    } else if (param == "w_time") {
+        theta->w_time = clip(theta->w_time + delta, 0.05, 0.35);
+    } else if (param == "w_baro") {
+        theta->w_baro = clip(theta->w_baro + delta, 0.0, 0.4);
     } else if (param == "w_wifi") {
         theta->w_wifi = clip(theta->w_wifi + delta, 0.0, 0.4);
         theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;

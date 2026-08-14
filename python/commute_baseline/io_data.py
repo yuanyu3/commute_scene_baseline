@@ -48,7 +48,7 @@ def load_location_csv_dir(raw_dir: str, source_crs: str = "GCJ02") -> List[GpsPo
                             lat=lat,
                             lon=lon,
                             acc=float(row.get("accuracy") or 999),
-                            source_type=int(float(row.get("sourceType") or 1)),
+                            source_type=int(float(row.get("sourceType") or 0)),
                         )
                     )
                 except (KeyError, ValueError):
@@ -61,6 +61,8 @@ def load_sensor_gps(sensor_dir: str) -> List[GpsPoint]:
     """sensor_events GPS_REPORT is WGS84."""
     path = os.path.join(sensor_dir, "sensor_events.csv")
     out: List[GpsPoint] = []
+    if not os.path.isfile(path):
+        return out
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if row.get("event_type") != "GPS_REPORT":
@@ -75,7 +77,7 @@ def load_sensor_gps(sensor_dir: str) -> List[GpsPoint]:
                         lat=float(p["latitude"]),
                         lon=float(p["longitude"]),
                         acc=float(p.get("horizontal_accuracy_m") or 999),
-                        source_type=int(p.get("source_type") or 1),
+                        source_type=int(p.get("source_type") or 0),
                     )
                 )
             except (KeyError, ValueError, json.JSONDecodeError):
@@ -87,6 +89,8 @@ def load_sensor_gps(sensor_dir: str) -> List[GpsPoint]:
 def load_walking_events(sensor_dir: str) -> List[Tuple[datetime, str]]:
     path = os.path.join(sensor_dir, "sensor_events.csv")
     out = []
+    if not os.path.isfile(path):
+        return out
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             et = row.get("event_type")
@@ -140,6 +144,22 @@ def load_pdr_net_series(sensor_dir: str) -> List[Tuple[datetime, float]]:
             dx = x - origin[0]
             dy = y - origin[1]
             out.append((t, (dx * dx + dy * dy) ** 0.5))
+    return out
+
+
+def load_baro_series(raw_dir: str) -> List[Tuple[datetime, float]]:
+    """Load valid pressure samples (hPa) from baro_data_*.csv."""
+    out: List[Tuple[datetime, float]] = []
+    for path in sorted(glob.glob(os.path.join(raw_dir, "baro_data_*.csv"))):
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                try:
+                    pressure = float(row["pressure"])
+                    if 850.0 <= pressure <= 1100.0:
+                        out.append((_ms_to_dt(int(float(row["wallTsMs"]))), pressure))
+                except (KeyError, ValueError, TypeError):
+                    continue
+    out.sort(key=lambda x: x[0])
     return out
 
 

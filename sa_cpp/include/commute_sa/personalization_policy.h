@@ -6,8 +6,8 @@
 namespace commute_sa {
 
 /**
- * Bounded policy interpreted by the realtime engine. The agent may select a
- * template and tune the exposed fields, but cannot add executable code.
+ * Persisted policy document. Live SceneEngine ignores templates for push
+ * (HSMM P(LEAVING) + product bans). Catalog is confirmed_leaving only.
  */
 struct PersonalizationPolicy {
     int schema_version = 1;
@@ -23,6 +23,8 @@ struct PersonalizationPolicy {
     bool require_radio = false;
     bool allow_cell_pdr_pair = true;
     std::string gps_mode = "OPTIONAL";  // IGNORE | OPTIONAL | REQUIRED
+    /** Load-compat only. Live engine ignores baro_mode; baro auto-feeds HSMM when available. */
+    std::string baro_mode = "OFF";
 };
 
 struct PolicyEvidence {
@@ -37,6 +39,10 @@ struct PolicyEvidence {
     bool ble_detach = false;
     bool geo_outbound = false;
     bool has_usable_gps = false;
+    bool baro_available = false;
+    bool baro_baseline_ready = false;
+    double baro_descent_m = 0.0;
+    bool baro_lower_platform = false;
 };
 
 struct PolicyMatch {

@@ -42,8 +42,8 @@
 
 **语义：** 端上正在用的 θ（`theta.json`），例如：
 
-- 门控：`enter_leave` / `exit_leave` 是 `P(LEAVING)` 阈值；另有 `min_evidence` / `arm_delay_s`
-- 观测可靠度：`w_walk` / `w_pdr` / `w_geo` / `w_wifi` / `w_cell` / `w_ble` / `w_time`
+- 门控：`enter_leave` / `exit_leave` 是 `P(LEAVING)` 阈值；另有 `arm_delay_s`（`min_evidence` 仅诊断）
+- 观测可靠度：`w_walk` / `w_pdr` / `w_geo` / `w_wifi` / `w_cell` / `w_ble` / `w_time` / `w_baro`
 - 持续时间先验：`hsmm_preleave_*` / `hsmm_leaving_*`（完整序列 replay 上线前不允许 Agent 直接修改）
 - 时段先验：`weekday_leave_home_hour` / `weekday_leave_company_hour` / `leave_window_min`
 - 预测窗口：`lead_min_s` / `lead_max_s` / `away_confirm_s` / `min_away_s`
@@ -62,7 +62,7 @@ Agent 用它了解「当前策略」，再决定改哪几个参。
 | 字段 | 含义 |
 |------|------|
 | `home` / `company`.`lat`,`lon` | 行为学中心 |
-| `r_in_m` / `r_out_m` | 内径 / 外径（INSIDE / NEAR / OUTSIDE） |
+| `r_in_m` / `r_out_m` | 家侧 INSIDE/NEAR/OUTSIDE 围栏。公司侧只作「是否在附近」辅助；出大门以 `source_type` 2→1 为准 |
 | `method` | 推断来源说明 |
 | `coordinate_system` | 固定 `WGS84` |
 
@@ -104,8 +104,8 @@ Agent 用它了解「当前策略」，再决定改哪几个参。
 
 | `label` | 含义 |
 |---------|------|
-| `CONFIRMED_LEAVE` | 推送后首次 OUTSIDE；含 `t_star_ms`、`lead_s` |
-| `FALSE_PUSH` | 结算窗口内始终未 OUTSIDE |
+| `CONFIRMED_LEAVE` | 公司：推送后首次 `source_type=1`（出大门）；家：首次围栏 OUTSIDE。含 `t_star_ms`、`lead_s` |
+| `FALSE_PUSH` | 结算内未确认离开。公司侧整段无 `source_type=1` 即未离开公司（不再标 `UNKNOWN`） |
 | `MISSED_LEAVE` | 持续 OUTSIDE 且 lookback 内无对应侧 push（`t_push_ms` 可为 0） |
 
 ---

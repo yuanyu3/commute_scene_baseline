@@ -3,6 +3,8 @@
 #include "commute_sa/product_store.h"
 
 #include <chrono>
+#include <fstream>
+#include <sstream>
 
 namespace commute_sa {
 namespace {
@@ -22,6 +24,21 @@ void MaybePersistRadioSoft(RadioEvidence *radio, int64_t tMs)
     if (ProductStore::GetInstance().SaveRadioSoftJson(json)) {
         radio->MarkSoftPersisted(tMs);
     }
+}
+
+bool ReadTextFile(const std::string &path, std::string *out)
+{
+    if (out == nullptr) {
+        return false;
+    }
+    std::ifstream in(path);
+    if (!in) {
+        return false;
+    }
+    std::ostringstream body;
+    body << in.rdbuf();
+    *out = body.str();
+    return !out->empty();
 }
 
 }  // namespace
@@ -55,9 +72,14 @@ void BaselineRuntime::Init(const std::string &anchorsPath, const std::string &th
     engine_->SetPersonalizationPolicy(policy);
     radio_.Reset(false);
     pdr_.Reset();
+    baro_.Reset();
     std::string softJson;
     if (ProductStore::GetInstance().LoadRadioSoftJson(&softJson)) {
         radio_.ImportSoftJson(softJson, NowMs());
+    }
+    std::string siteJson;
+    if (!root.empty() && ReadTextFile(root + "/company_radio_fingerprint.json", &siteJson)) {
+        radio_.ImportCompanySiteJson(siteJson);
     }
     inited_ = true;
 }
@@ -130,6 +152,12 @@ void BaselineRuntime::OnPdrPoint(int64_t tMs, double xM, double yM)
     pdr_.OnPdrPoint(tMs, xM, yM);
 }
 
+void BaselineRuntime::OnBaro(int64_t tMs, double pressureHpa)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    baro_.Observe(tMs, pressureHpa);
+}
+
 TickDecision BaselineRuntime::OnTick(
     int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid, int32_t gpsSourceType)
 {
@@ -147,6 +175,7 @@ TickDecision BaselineRuntime::OnTick(
     feat.lat = lat;
     feat.lon = lon;
     feat.acc = accM;
+    feat.gps_source_type = gpsSourceType;
     feat.walking = walking_;
     feat.has_walk_started = hasWalkStarted_;
     feat.walk_started_at_ms = walkStartedAtMs_;
@@ -160,6 +189,16 @@ TickDecision BaselineRuntime::OnTick(
     feat.ble_company_detach = radioSnap.ble_company_detach;
     feat.wifi_jaccard_home = radioSnap.jaccard_home;
     feat.wifi_jaccard_company = radioSnap.jaccard_company;
+    const bool workplaceReady = radioSnap.company_dwell_ready || radioSnap.company_site_wifi_coverage >= 0.50 ||
+        radioSnap.company_site_cell_match;
+    const BaroSnapshot baroSnap = baro_.Evaluate(tMs, workplaceReady,
+        engine_->GetTheta().baro_min_descent_m);
+    feat.baro_available = baroSnap.available;
+    feat.baro_baseline_ready = baroSnap.baseline_ready;
+    feat.baro_descent_m = baroSnap.descent_m;
+    feat.baro_descending = baroSnap.descending;
+    feat.baro_stable_platform = baroSnap.stable_platform;
+    feat.baro_lower_platform = baroSnap.lower_platform;
     if (engine_ != nullptr) {
         if (!FocusAllowsHome(engine_->GetTheta().focus_side)) {
             feat.wifi_home_detach = false;
@@ -246,6 +285,10 @@ bool BaselineRuntime::ApplyThetaDeltaAndPersist(const std::string &param, double
             *out = th.w_pdr;
             return true;
         }
+        if (param == "w_geo") {
+            *out = th.w_geo;
+            return true;
+        }
         if (param == "w_wifi") {
             *out = th.w_wifi;
             return true;
@@ -262,8 +305,12 @@ bool BaselineRuntime::ApplyThetaDeltaAndPersist(const std::string &param, double
             *out = th.w_wifi + th.w_cell + th.w_ble;
             return true;
         }
-        if (param == "min_evidence") {
-            *out = static_cast<double>(th.min_evidence);
+        if (param == "w_time") {
+            *out = th.w_time;
+            return true;
+        }
+        if (param == "w_baro") {
+            *out = th.w_baro;
             return true;
         }
         if (param == "weekday_leave_home_hour") {
@@ -276,6 +323,14 @@ bool BaselineRuntime::ApplyThetaDeltaAndPersist(const std::string &param, double
         }
         if (param == "arm_delay_s") {
             *out = th.arm_delay_s;
+            return true;
+        }
+        if (param == "lead_min_s") {
+            *out = th.lead_min_s;
+            return true;
+        }
+        if (param == "lead_max_s") {
+            *out = th.lead_max_s;
             return true;
         }
         return false;

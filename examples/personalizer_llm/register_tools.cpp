@@ -123,12 +123,12 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"session_dir", "optional", "string", false}},
         &GetSensorSummary);
     Reg("get_param_limits", "Param min/max/step", {}, &GetLimits);
-    Reg("evaluate_theta_on_history", "Score current θ on leave history (higher better)",
+    Reg("evaluate_theta_on_history", "Replay LeaveHsmm on stored leave-window obs (can evaluate w_*)",
         {{"since_ms", "optional", "integer", false}, {"limit", "optional", "integer", false}}, &EvalHistory);
     Reg("begin_theta_trial", "Snapshot θ before try/eval loop", {}, &BeginTrial);
     Reg("revert_theta_trial", "Restore θ snapshot", {}, &RevertTrial);
     Reg("commit_theta_trial", "Keep current θ, end trial", {}, &CommitTrial);
-    Reg("apply_theta_delta", "Apply one clipped theta/fence delta",
+    Reg("apply_theta_delta", "Apply one clipped theta delta",
         {{"param", "name", "string", true}, {"delta", "signed", "number", true},
             {"reason", "evidence reason", "string", false}},
         &ApplyDelta);
@@ -141,10 +141,7 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("begin_policy_trial", "Snapshot active policy before a strategy experiment", {}, &BeginPolicyTrial);
     Reg("apply_policy_candidate", "Apply one validated policy template candidate",
         {{"template_name", "catalog template", "string", true},
-            {"probability_threshold", "optional bounded override", "number", false},
-            {"min_duration_s", "optional bounded override", "number", false},
-            {"min_independent_evidence", "optional bounded override", "integer", false},
-            {"gps_mode", "IGNORE|OPTIONAL|REQUIRED", "string", false}}, &ApplyPolicy);
+            {"probability_threshold", "optional bounded override", "number", false}}, &ApplyPolicy);
     Reg("evaluate_policy_on_history", "Counterfactual replay on semantic policy_history",
         {{"limit", "max semantic samples", "integer", false}}, &EvalPolicy);
     Reg("revert_policy_trial", "Restore policy snapshot", {}, &RevertPolicy);

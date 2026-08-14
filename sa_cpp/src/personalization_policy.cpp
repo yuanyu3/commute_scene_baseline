@@ -56,7 +56,7 @@ bool ExtractBool(const std::string &json, const char *key, bool *out)
 PersonalizationPolicy DefaultPersonalizationPolicy()
 {
     PersonalizationPolicy policy;
-    BuildPolicyTemplate("wifi_first_preleave", &policy, nullptr);
+    BuildPolicyTemplate("confirmed_leaving", &policy, nullptr);
     return policy;
 }
 
@@ -115,6 +115,7 @@ bool ValidatePersonalizationPolicy(const PersonalizationPolicy &p, std::string *
     if (p.min_duration_s < 0.0 || p.min_duration_s > 60.0) return fail("min_duration_s out of bounds");
     if (p.min_independent_evidence < 1 || p.min_independent_evidence > 5) return fail("min_independent_evidence out of bounds");
     if (p.gps_mode != "IGNORE" && p.gps_mode != "OPTIONAL" && p.gps_mode != "REQUIRED") return fail("invalid gps_mode");
+    if (p.baro_mode != "OFF" && p.baro_mode != "SOFT" && p.baro_mode != "GATE" && p.baro_mode != "CONFIRM") return fail("invalid baro_mode");
     return true;
 }
 
@@ -162,7 +163,7 @@ std::string PersonalizationPolicyToJson(const PersonalizationPolicy &p)
         << ",\"require_wifi_detach\":" << (p.require_wifi_detach ? "true" : "false")
         << ",\"require_radio\":" << (p.require_radio ? "true" : "false")
         << ",\"allow_cell_pdr_pair\":" << (p.allow_cell_pdr_pair ? "true" : "false")
-        << ",\"gps_mode\":\"" << p.gps_mode << "\"}";
+        << ",\"gps_mode\":\"" << p.gps_mode << "\",\"baro_mode\":\"" << p.baro_mode << "\"}";
     return out.str();
 }
 
@@ -177,6 +178,7 @@ bool LoadPersonalizationPolicyFromFile(const std::string &path, PersonalizationP
     ExtractString(body.str(), "template_name", &p.template_name);
     ExtractString(body.str(), "trigger_phase", &p.trigger_phase);
     ExtractString(body.str(), "gps_mode", &p.gps_mode);
+    ExtractString(body.str(), "baro_mode", &p.baro_mode);
     ExtractBool(body.str(), "enabled", &p.enabled);
     ExtractBool(body.str(), "require_walking", &p.require_walking);
     ExtractBool(body.str(), "require_wifi_detach", &p.require_wifi_detach);
@@ -203,7 +205,7 @@ bool SavePersonalizationPolicyToFile(const std::string &path, const Personalizat
 
 std::string PersonalizationPolicyCatalogJson()
 {
-    return R"({"schema_version":1,"templates":[{"name":"confirmed_leaving","purpose":"baseline compatible, high precision"},{"name":"wifi_first_preleave","purpose":"earliest indoor prediction with WiFi hard gate"},{"name":"radio_motion_preleave","purpose":"WiFi/Cell/BLE plus motion, tolerant of one missing radio modality"},{"name":"conservative_preleave","purpose":"early prediction with three independent evidence groups"}],"bounds":{"probability_threshold":[0.35,0.9],"min_duration_s":[0,60],"min_independent_evidence":[1,5],"gps_mode":["IGNORE","OPTIONAL","REQUIRED"]}})";
+    return R"({"schema_version":1,"templates":[{"name":"confirmed_leaving","purpose":"HSMM P(LEAVING) push; product bans stay in C++"}],"bounds":{"probability_threshold":[0.35,0.9]},"note":"Live engine ignores policy templates for push. Tune w_* and enter_leave; do not invent hard-gate catalogs."})";
 }
 
 }  // namespace commute_sa

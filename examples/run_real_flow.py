@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "python"))
 
 from commute_baseline.anchors import load_anchors, save_anchors  # noqa: E402
+from commute_baseline.baro_evidence import BaroEvidence  # noqa: E402
 from commute_baseline.crs import gcj02_to_wgs84  # noqa: E402
 from commute_baseline.engine import DEFAULT_THETA, SceneEngine, TickFeatures  # noqa: E402
 from commute_baseline.geo import haversine_m  # noqa: E402
@@ -40,6 +41,7 @@ from commute_baseline.io_data import (  # noqa: E402
     load_walking_events,
     load_pdr_net_series,
     pdr_net_at,
+    load_baro_series,
     merge_gps,
 )
 from commute_baseline.radio_evidence import (  # noqa: E402
@@ -68,6 +70,11 @@ def main() -> int:
     ap.add_argument("--raw-dir", required=True, help="dir with location_data_*.csv")
     ap.add_argument("--sensor-dir", required=True, help="dir with sensor_events.csv")
     ap.add_argument(
+        "--baro-dir",
+        default="",
+        help="optional dir with baro_data_*.csv (default: --raw-dir); use to borrow baro from a sibling dump",
+    )
+    ap.add_argument(
         "--out-dir",
         default=str(ROOT / "output" / "real_20260804_flow"),
         help="product-like output root",
@@ -80,7 +87,18 @@ def main() -> int:
     ap.add_argument("--location-crs", default="GCJ02", choices=["GCJ02", "WGS84"])
     ap.add_argument("--home-gcj", default="40.011181,116.32677")
     ap.add_argument("--settle-s", type=float, default=1200.0, help="AFTER_PUSH settle seconds")
-    ap.add_argument("--tick-min-s", type=float, default=8.0)
+    ap.add_argument(
+        "--tick-s",
+        type=float,
+        default=5.0,
+        help="time-axis SceneEngine step (seconds); GPS is held between fixes",
+    )
+    ap.add_argument(
+        "--tick-min-s",
+        type=float,
+        default=None,
+        help="deprecated alias for --tick-s (GPS-driven spacing removed)",
+    )
     ap.add_argument(
         "--outdoor-source-types",
         default="1",
@@ -97,7 +115,20 @@ def main() -> int:
         default=str(ROOT / "config" / "company_radio_fingerprint.json"),
         help="local cross-session company WiFi/Cell/BLE profile; ignored when absent",
     )
+    ap.add_argument(
+        "--baro-mode", choices=("OFF", "SOFT", "GATE", "CONFIRM"), default="OFF",
+        help="bounded barometer strategy; OFF preserves the original replay path",
+    )
+    ap.add_argument(
+        "--theta",
+        default="",
+        help="optional theta.json to seed SceneEngine (default: built-in DEFAULT_THETA)",
+    )
     args = ap.parse_args()
+    tick_s = float(args.tick_s if args.tick_min_s is None else args.tick_min_s)
+    if tick_s <= 0:
+        print("ERROR: --tick-s must be > 0", file=sys.stderr)
+        return 1
     outdoor_source_types = {
         int(part.strip()) for part in args.outdoor_source_types.split(",") if part.strip()
     }
@@ -112,6 +143,10 @@ def main() -> int:
     merged = merge_gps(raw, sensor)
     walks = load_walking_events(args.sensor_dir)
     pdr_series = load_pdr_net_series(args.sensor_dir)
+    baro_dir = args.baro_dir.strip() or args.raw_dir
+    baro_series = load_baro_series(baro_dir)
+    if Path(baro_dir).resolve() != Path(args.raw_dir).resolve():
+        print(f"baro borrowed from {baro_dir} (n={len(baro_series)})")
     motion_stop = None
     if args.stop_at_motion:
         motion_prefixes = ("acc_data_", "gyro_data_", "mag_data_", "rv_data_", "baro_data_")
@@ -133,7 +168,7 @@ def main() -> int:
             merged = [p for p in merged if p.t <= motion_stop]
             walks = [w for w in walks if w[0] <= motion_stop]
             print(f"replay stop_at_motion={motion_stop.isoformat()}")
-    print(f"GPS raw={len(raw)} sensor={len(sensor)} merged={len(merged)} walks={len(walks)}")
+    print(f"GPS raw={len(raw)} sensor={len(sensor)} merged={len(merged)} walks={len(walks)} baro={len(baro_series)}")
     if not merged:
         print("ERROR: no GPS points", file=sys.stderr)
         return 1
@@ -161,6 +196,20 @@ def main() -> int:
         print(f"HOME vs truth GCJ→WGS84: {d:.1f} m  truth=({tlat:.6f},{tlon:.6f})")
 
     theta = dict(DEFAULT_THETA)
+    if args.theta.strip():
+        th_path = Path(args.theta)
+        if not th_path.is_file():
+            print(f"ERROR: --theta not found: {th_path}", file=sys.stderr)
+            return 1
+        loaded = json.loads(th_path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            print("ERROR: --theta must be a JSON object", file=sys.stderr)
+            return 1
+        for k, v in loaded.items():
+            if k in ("coordinate_system",):
+                continue
+            theta[k] = v
+        print(f"seeded theta from {th_path}")
     write_theta(out / "theta.json", theta)
 
     engine = SceneEngine(anchors, theta)
@@ -169,7 +218,9 @@ def main() -> int:
     wi = 0
     decisions = []
     pushes = []
-    last_t = None
+    baro_i = 0
+    gps_i = 0
+    baro = BaroEvidence()
     radio_dirs = [args.raw_dir, args.sensor_dir]
     radio = RadioEvidence()
     fingerprint_path = Path(args.company_radio_fingerprint)
@@ -186,8 +237,27 @@ def main() -> int:
         radio=radio,
     )
 
-    for p in merged:
-        while wi < len(walks) and walks[wi][0] <= p.t:
+    # Time-axis ticks (align with on-device fixed period). GPS is held between fixes;
+    # baro / walking / radio advance every tick_s.
+    t_start = merged[0].t
+    t_end = merged[-1].t
+    if baro_series:
+        t_start = min(t_start, baro_series[0][0])
+        t_end = max(t_end, baro_series[-1][0])
+    if walks:
+        t_start = min(t_start, walks[0][0])
+        t_end = max(t_end, walks[-1][0])
+    # Align to whole seconds so dumps are easy to read.
+    tick_t = t_start.replace(microsecond=0)
+    if tick_t < t_start:
+        tick_t += timedelta(seconds=1)
+    step = timedelta(seconds=tick_s)
+    held_gps = None
+    n_ticks = 0
+    print(f"time-axis tick_s={tick_s} range={tick_t.isoformat()} .. {t_end.isoformat()}")
+
+    while tick_t <= t_end:
+        while wi < len(walks) and walks[wi][0] <= tick_t:
             et = walks[wi][1]
             if et == "WALKING_STARTED":
                 walk_on = True
@@ -195,18 +265,34 @@ def main() -> int:
             else:
                 walk_on = False
             wi += 1
-        if last_t and (p.t - last_t).total_seconds() < args.tick_min_s:
+        gps_fresh = False
+        while gps_i < len(merged) and merged[gps_i].t <= tick_t:
+            held_gps = merged[gps_i]
+            gps_fresh = True
+            gps_i += 1
+        if held_gps is None:
+            tick_t += step
             continue
-        last_t = p.t
-        t_ms = ms(p.t)
+
+        t_ms = ms(tick_t)
         radio_snap = radio_feed.advance(t_ms)
-        pdr_net_out = pdr_net_at(pdr_series, p.t)
+        while baro_i < len(baro_series) and baro_series[baro_i][0] <= tick_t:
+            bt, bp = baro_series[baro_i]
+            baro.observe(bt, bp)
+            baro_i += 1
+        workplace_ready = (
+            radio_snap.company_dwell_ready
+            or radio_snap.company_site_wifi_coverage >= 0.50
+            or radio_snap.company_site_cell_match
+        )
+        baro_snap = baro.evaluate(tick_t, workplace_ready, float(theta.get("baro_min_descent_m", 12.0)))
+        pdr_net_out = pdr_net_at(pdr_series, tick_t)
         feat = TickFeatures(
-            t=p.t,
-            lat=p.lat,
-            lon=p.lon,
-            acc=p.acc,
-            gps_source_type=p.source_type,
+            t=tick_t,
+            lat=held_gps.lat,
+            lon=held_gps.lon,
+            acc=held_gps.acc,
+            gps_source_type=held_gps.source_type,
             walking=walk_on,
             walk_started_at=walk_started if walk_on else None,
             pdr_net_out_home_m=pdr_net_out,
@@ -221,6 +307,13 @@ def main() -> int:
             ble_company_detach=radio_snap.ble_company_detach,
             wifi_jaccard_home=radio_snap.jaccard_home,
             wifi_jaccard_company=radio_snap.jaccard_company,
+            baro_available=baro_snap.available,
+            baro_descent_m=baro_snap.descent_m,
+            baro_baseline_ready=baro_snap.baseline_ready,
+            baro_stable_platform=baro_snap.stable_platform,
+            baro_descending=baro_snap.descending,
+            baro_lower_platform=baro_snap.lower_platform,
+            baro_mode=args.baro_mode,
         )
         d = engine.step(feat)
         radio_feed.radio.observe_dwell(
@@ -229,12 +322,20 @@ def main() -> int:
             d.company_relation == Relation.INSIDE,
         )
         row = {
-            "t": p.t.isoformat(),
-            "t_ms": ms(p.t),
-            "lat": p.lat,
-            "lon": p.lon,
-            "acc": p.acc,
-            "gps_source_type": p.source_type,
+            "t": tick_t.isoformat(),
+            "t_ms": t_ms,
+            "lat": held_gps.lat,
+            "lon": held_gps.lon,
+            "gps_fresh": gps_fresh,
+            "gps_held_from": held_gps.t.isoformat(),
+            "baro_pressure_hpa": baro_snap.pressure_hpa,
+            "baro_descent_m": round(baro_snap.descent_m, 2),
+            "baro_baseline_ready": baro_snap.baseline_ready,
+            "baro_stable_platform": baro_snap.stable_platform,
+            "baro_descending": round(baro_snap.descending, 3),
+            "baro_lower_platform": baro_snap.lower_platform,
+            "acc": held_gps.acc,
+            "gps_source_type": held_gps.source_type,
             "walking": walk_on,
             "scene": d.scene.value,
             "score_home": d.score_home,
@@ -258,14 +359,19 @@ def main() -> int:
             "push_block_reason": d.push_block_reason,
         }
         decisions.append(row)
+        n_ticks += 1
         if d.should_service:
             pushes.append(row)
             print(
-                f"PUSH {d.service_intent} @ {p.t.isoformat()} scene={d.scene.value} "
+                f"PUSH {d.service_intent} @ {tick_t.isoformat()} scene={d.scene.value} "
                 f"rel={d.home_relation.value}/{d.company_relation.value} "
                 f"distH={d.dist_home_m} eta={d.eta_leave_s:.1f} "
-                f"sh={d.score_home:.2f} sc={d.score_company:.2f}"
+                f"sh={d.score_home:.2f} sc={d.score_company:.2f} "
+                f"baro_d={baro_snap.descent_m:.1f}m desc={baro_snap.descending:.2f}"
             )
+        tick_t += step
+
+    print(f"time-axis ticks={n_ticks} gps_fixes={len(merged)}")
 
     # Product leave_episodes + sparse samples + settle labels
     episodes_path = out / "leave_episodes.jsonl"
@@ -303,8 +409,11 @@ def main() -> int:
 
             t_star = None
             truth_source = ""
-            reliable_return = False
-            last_rel = push["home_relation"] if "HOME" in push["service_intent"] or push["scene"] == "LEAVING_HOME" else push["company_relation"]
+            last_rel = (
+                push["home_relation"]
+                if "HOME" in push["service_intent"] or push["scene"] == "LEAVING_HOME"
+                else push["company_relation"]
+            )
             last_dist = push["dist_home_m"] if last_rel == push["home_relation"] else push["dist_company_m"]
             use_home = push["scene"] == "LEAVING_HOME" or push["service_intent"] == "DEPARTURE_NOTIFICATION"
             for r in sorted_dec:
@@ -335,33 +444,31 @@ def main() -> int:
                 if rel_now != "UNKNOWN":
                     last_rel = rel_now
                     last_dist = dist_now
-                outdoor_fix = (
-                    r.get("gps_source_type") in outdoor_source_types
-                )
-                if t_star is None and rel_now == "OUTSIDE":
-                    t_star = r["t_ms"]
-                    truth_source = "ANCHOR_OUTSIDE"
+                outdoor_fix = r.get("gps_source_type") in outdoor_source_types
+                if use_home:
+                    if t_star is None and rel_now == "OUTSIDE":
+                        t_star = r["t_ms"]
+                        truth_source = "ANCHOR_OUTSIDE"
+                    elif t_star is None and outdoor_fix:
+                        t_star = r["t_ms"]
+                        truth_source = "OUTDOOR_GPS"
                 elif t_star is None and outdoor_fix:
-                    # Product-specific delayed truth: an outdoor GPS source
-                    # confirms the earlier predictive leave even if the coarse
-                    # anchor fence remains INSIDE.
+                    # Company leave truth is source_type outdoor (typically 1 = out the gate).
+                    # Fence OUTSIDE alone is not enough; no type=1 in the dump ⇒ did not leave.
                     t_star = r["t_ms"]
                     truth_source = "OUTDOOR_GPS"
-                elif rel_now == "INSIDE" and outdoor_fix:
-                    reliable_return = True
 
-            # A later outdoor fix confirms departure even if the coarse fence
-            # remains inside, or the user returns before replay ends.
             settle_t = t_push + int(args.settle_s * 1000)
             if t_star is not None:
                 label = "CONFIRMED_LEAVE"
                 t_label = t_star
-            elif reliable_return:
+            else:
+                # Entire replay settled without outdoor confirmation → not a real leave.
+                # Prefer FALSE_PUSH over UNKNOWN so Agent can train on the miss.
                 label = "FALSE_PUSH"
                 t_label = min(settle_t, sorted_dec[-1]["t_ms"] if sorted_dec else settle_t)
-            else:
-                label = "UNKNOWN"
-                t_label = min(settle_t, sorted_dec[-1]["t_ms"] if sorted_dec else settle_t)
+                if not use_home and not truth_source:
+                    truth_source = "NO_SOURCE_TYPE_OUTDOOR"
 
             lead_s = None
             if t_star is not None and t_star >= t_push:
@@ -392,6 +499,8 @@ def main() -> int:
                 if r["t_ms"] < t_push - 600000 or r["t_ms"] > outcome_ms:
                     continue
                 ev = r.get("evidence", {}).get(side, {})
+                obs = ev.get("obs", {})
+                rel = r["home_relation"] if side == "home" else r["company_relation"]
                 policy_rows.append(
                     {
                         "t_ms": r["t_ms"],
@@ -407,7 +516,27 @@ def main() -> int:
                         "cell_leave": ev.get("cell_leave", False),
                         "ble_detach": ev.get("ble_detach", False),
                         "geo_outbound": float(ev.get("s_geo", 0.0)) >= float(theta.get("thr_geo", 0.5)),
-                        "has_usable_gps": r["home_relation"] != "UNKNOWN" if side == "home" else r["company_relation"] != "UNKNOWN",
+                        "has_usable_gps": rel != "UNKNOWN",
+                        "baro_available": r.get("baro_pressure_hpa") is not None,
+                        "baro_baseline_ready": r.get("baro_baseline_ready", False),
+                        "baro_descent_m": r.get("baro_descent_m", 0.0),
+                        "baro_lower_platform": r.get("baro_lower_platform", False),
+                        "obs_walking": float(obs.get("walking", ev.get("s_walk", 0.0))),
+                        "obs_pdr_outbound": float(obs.get("pdr_outbound", ev.get("s_pdr", 0.0))),
+                        "obs_geo_outbound": float(obs.get("geo_outbound", ev.get("s_geo", 0.0))),
+                        "obs_wifi_detach": float(obs.get("wifi_detach", ev.get("s_wifi", 0.0))),
+                        "obs_cell_detach": float(obs.get("cell_detach", ev.get("s_cell", 0.0))),
+                        "obs_ble_detach": float(obs.get("ble_detach", ev.get("s_ble", 0.0))),
+                        "obs_time_prior": float(obs.get("time_prior", ev.get("s_time", 0.0))),
+                        "obs_baro_descending": float(obs.get("baro_descending", r.get("baro_descending", 0.0))),
+                        "obs_baro_lower_platform": float(obs.get("baro_lower_platform", 1.0 if r.get("baro_lower_platform") else 0.0)),
+                        "obs_baro_available": bool(obs.get("baro_available", r.get("baro_baseline_ready", False))),
+                        "obs_relation_known": bool(obs.get("relation_known", rel != "UNKNOWN")),
+                        "obs_inside": bool(obs.get("inside", rel == "INSIDE")),
+                        "obs_near": bool(obs.get("near", rel == "NEAR")),
+                        "obs_outside": bool(obs.get("outside", rel == "OUTSIDE")),
+                        "obs_approaching": bool(obs.get("approaching", ev.get("approaching", False))),
+                        "obs_attached": bool(obs.get("attached", False)),
                         "lead_s": lead_s,
                     }
                 )
@@ -426,16 +555,17 @@ def main() -> int:
                 "schema_version": 1,
                 "revision": 0,
                 "enabled": True,
-                "template_name": "wifi_first_preleave",
-                "trigger_phase": "PRE_LEAVE",
-                "probability_threshold": 0.50,
-                "min_duration_s": 5,
+                "template_name": "confirmed_leaving",
+                "trigger_phase": "LEAVING",
+                "probability_threshold": 0.58,
+                "min_duration_s": 0,
                 "min_independent_evidence": 2,
-                "require_walking": True,
-                "require_wifi_detach": True,
-                "require_radio": True,
+                "require_walking": False,
+                "require_wifi_detach": False,
+                "require_radio": False,
                 "allow_cell_pdr_pair": True,
-                "gps_mode": "IGNORE",
+                "gps_mode": "OPTIONAL",
+                "baro_mode": "OFF",
             }, ensure_ascii=False, indent=2
         ) + "\n", encoding="utf-8"
     )
@@ -484,8 +614,10 @@ def main() -> int:
         "",
         f"- raw-dir: `{args.raw_dir}`",
         f"- sensor-dir: `{args.sensor_dir}`",
+        f"- baro-dir: `{baro_dir}`",
         f"- out-dir: `{out}`",
-        f"- GPS merged: {len(merged)}, ticks: {len(decisions)}, pushes: {len(pushes)}",
+        f"- GPS merged: {len(merged)}, ticks: {len(decisions)} (tick_s={tick_s}), pushes: {len(pushes)}",
+        f"- baro samples: {len(baro_series)}",
         f"- company radio fingerprint: {'loaded' if fingerprint_path.is_file() else 'not loaded'}",
         f"- scenes: {dict(scene_counts)}",
         "",

@@ -146,11 +146,11 @@
 
       "category": "action",
 
-      "description": "Apply one clipped theta/fence delta and persist. enter_leave/exit_leave are HSMM P(LEAVING) thresholds; modality weights are observation reliabilities.",
+      "description": "Apply one clipped theta delta and persist. enter_leave/exit_leave are HSMM P(LEAVING) thresholds; w_* are observation reliabilities.",
 
       "input_schema": {
 
-        "param": "enter_leave|exit_leave|w_walk|w_wifi|w_cell|w_ble|w_radio|min_evidence|weekday_leave_home_hour|weekday_leave_company_hour|arm_delay_s|lead_min_s|lead_max_s|home.r_in_m|company.r_in_m",
+        "param": "enter_leave|exit_leave|w_walk|w_pdr|w_geo|w_wifi|w_cell|w_ble|w_radio|w_time|w_baro|weekday_leave_home_hour|weekday_leave_company_hour|arm_delay_s|lead_min_s|lead_max_s",
 
         "delta": "number (clipped to step)",
 
@@ -168,7 +168,7 @@
 
       "category": "action",
 
-      "description": "Counterfactual score of current θ on leave_episodes (higher better). Use after apply to converge.",
+      "description": "Counterfactual score of current θ by replaying LeaveHsmm on stored leave-window observations (can evaluate w_*). Falls back to recorded P(LEAVING) if obs are absent.",
 
       "input_schema": {"since_ms": "int optional", "limit": "int optional default 30"},
 
@@ -274,7 +274,7 @@
       "name": "apply_policy_candidate",
       "category": "policy",
       "description": "Apply one validated strategy template with bounded overrides",
-      "input_schema": {"template_name": "string", "probability_threshold": "number optional", "min_duration_s": "number optional", "min_independent_evidence": "int optional", "gps_mode": "IGNORE|OPTIONAL|REQUIRED optional"},
+      "input_schema": {"template_name": "confirmed_leaving", "probability_threshold": "number optional"},
       "output_schema": {"ok": "bool", "candidate": "object"}
     },
 

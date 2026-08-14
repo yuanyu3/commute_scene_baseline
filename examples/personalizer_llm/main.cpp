@@ -140,7 +140,10 @@ std::string PrepareFixture(const std::string &root)
     MkDir(session);
     WriteFile(root + "/theta.json",
         "{\n  \"enter_leave\": 0.58,\n  \"exit_leave\": 0.45,\n  \"min_evidence\": 2,\n"
-        "  \"w_walk\": 0.25,\n  \"w_radio\": 0.15,\n  \"arm_delay_s\": 25,\n"
+        "  \"w_walk\": 0.25,\n  \"w_pdr\": 0.2,\n  \"w_geo\": 0.2,\n"
+        "  \"w_wifi\": 0.12,\n  \"w_cell\": 0.08,\n  \"w_ble\": 0.02,\n"
+        "  \"w_radio\": 0.22,\n  \"w_time\": 0.2,\n  \"w_baro\": 0.2,\n"
+        "  \"arm_delay_s\": 25,\n"
         "  \"weekday_leave_home_hour\": 8.25\n}\n");
     WriteFile(root + "/anchors.json",
         "{\n  \"coordinate_system\": \"WGS84\",\n"
@@ -291,9 +294,9 @@ std::string BuildQueryFromEpisodes(const std::string &dataRoot)
     q << "{\"task\":\"personalize_leave_strategy\",\"reason\":\"AFTER_PUSH\",\"focus_side\":\"company\",\"last_intent\":\""
       << intent << "\",\"last_scene\":\"" << scene << "\",\"last_push_at_ms\":" << tPush << ",\"label\":\""
       << label
-      << "\",\"instruction\":\"focus_side=company. Use evidence tools, then prefer begin_policy_trial / "
-         "apply_policy_candidate / evaluate_policy_on_history. Revert if score drops or misses rise; commit and "
-         "write_audit only after improvement. Use theta trial only if no structural strategy change is needed.\"}";
+      << "\",\"instruction\":\"focus_side=company. Use evidence tools, then begin_theta_trial / "
+         "apply_theta_delta / evaluate_theta_on_history. Revert if score drops or missed_leave rises; "
+         "commit and write_audit only after improvement. Do not invent push gates; baro importance is w_baro.\"}";
     return q.str();
 }
 
@@ -408,17 +411,23 @@ int main(int argc, char **argv)
         }
     }
 
-    jiuwen::log::SetMinLogLevel(
-        debug ? jiuwen::log::LogSeverity::LOG_SEVERITY_DEBUG : jiuwen::log::LogSeverity::LOG_SEVERITY_ERROR);
+    // The current Jiuwen SDK exposes LOG(DEBUG) but no global SetMinLogLevel API.
+    // Keep debug selection local to the host's trace/console output.
     (void)jiuwen::ResourceManager::GetInstance();
 
     std::string envPath = "sa_service/etc/agent.env";
     std::string dataRoot = "examples/personalizer_llm/run_data";
-    // positional: [env] [data]  (ignore --debug / --no-fixture)
+    // positional: [env] [data]  (ignore --debug / --no-fixture / --max-turn N)
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--debug" || a == "-d" || a == "--no-fixture") {
+            continue;
+        }
+        if (a == "--max-turn") {
+            if (i + 1 < argc) {
+                ++i;  // skip value
+            }
             continue;
         }
         pos.push_back(a);
@@ -482,7 +491,31 @@ int main(int argc, char **argv)
     cfg->description = "Host personalizer with evidence+action tools";
     cfg->version = "1.0.0";
     cfg->mode = AgentType::REACT;
-    cfg->maxTurn = 16;
+    // Evidence + trial/eval/apply easily exceeds 16 ReAct turns; 16 caused TaskStatus::FAILED
+    // with the misleading "maximum number of retries" tip even after write_audit succeeded.
+    // Default 80; override with PERSONALIZER_MAX_TURN (or --max-turn N).
+    cfg->maxTurn = 80;
+    if (const char *mt = std::getenv("PERSONALIZER_MAX_TURN")) {
+        try {
+            const int parsed = std::stoi(mt);
+            if (parsed > 0) {
+                cfg->maxTurn = parsed;
+            }
+        } catch (...) {
+        }
+    }
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--max-turn" && i + 1 < argc) {
+            try {
+                const int parsed = std::stoi(argv[i + 1]);
+                if (parsed > 0) {
+                    cfg->maxTurn = parsed;
+                }
+            } catch (...) {
+            }
+        }
+    }
+    std::cout << "maxTurn=" << cfg->maxTurn << "\n";
     {
         // Prefer project prompt (company-focus personalization); fall back to embedded.
         const std::string promptPath = "jiuwen_agent/system_prompt.md";
@@ -497,10 +530,15 @@ int main(int argc, char **argv)
     cfg->modelConfig.apiKey = WithBearer(apiKey);
     cfg->modelConfig.apiBase = NormalizeApiBase(baseUrl);
     cfg->modelConfig.formatType = FormatType::OPENAI;
-    cfg->modelConfig.conf["model_provider"] = jiuwen::AnyValue(std::string("deepseek"));
+    // This SDK build registers its OpenAI-compatible implementation as "qwen";
+    // the endpoint and model below still select the configured DeepSeek service.
+    cfg->modelConfig.conf["model_provider"] = jiuwen::AnyValue(std::string("qwen"));
     cfg->modelConfig.conf["model"] = jiuwen::AnyValue(model);
     cfg->modelConfig.conf["stream"] = jiuwen::AnyValue(false);
     cfg->modelConfig.conf["temperature"] = jiuwen::AnyValue(0.1f);
+    // Current Jiuwen initializes ContextEngine from this nested config. Keep it
+    // identical to the agent chat model so intent/memory initialization sees it.
+    cfg->contextEngineConfig.modelConfig = cfg->modelConfig;
     cfg->switchConfig.reflection = false;
     cfg->switchConfig.summary = false;
     cfg->switchConfig.addPrompt = false;
@@ -568,8 +606,17 @@ int main(int argc, char **argv)
     std::cout << "=== agent_trace.jsonl ===\n" << tracePath
               << " (stream_events=" << streamEvents << "; final_response always appended)\n";
 
-    if (resp.status == jiuwen::TaskStatus::FAILED || resp.errorCode != ErrorCode::SUCCESS) {
+    const bool toolsFinished = resp.message.find("\"name\":\"write_audit\"") != std::string::npos;
+    // Jiuwen maps maxTurn exhaustion to TaskStatus::FAILED with a "retries exceeded" tip,
+    // even when every tool succeeded. Match the device SA: errorCode is the real failure bit.
+    if (resp.errorCode != ErrorCode::SUCCESS) {
         return 2;
+    }
+    if (resp.status == jiuwen::TaskStatus::FAILED && !toolsFinished) {
+        return 2;
+    }
+    if (resp.status == jiuwen::TaskStatus::FAILED && toolsFinished) {
+        std::cout << "WARN: Jiuwen TaskStatus=FAILED after write_audit (usually maxTurn); treating as success\n";
     }
     return 0;
 }

@@ -5,6 +5,7 @@
 #include "commute_sa/leave_hsmm.h"
 #include "commute_sa/personalization_policy.h"
 #include "commute_sa/theta.h"
+#include "commute_sa/types.h"
 
 #include <cstdint>
 #include <optional>
@@ -53,6 +54,8 @@ struct TickFeatures {
     double lat = 0.0;
     double lon = 0.0;
     double acc = 0.0;
+    /** Location source: 1=GNSS/outdoor, 2=network/indoor. 0=unknown. */
+    int32_t gps_source_type = 0;
     bool walking = false;
     bool has_walk_started = false;
     TickTsMs walk_started_at_ms = 0;
@@ -69,6 +72,12 @@ struct TickFeatures {
     /** Continuous WiFi overlap vs soft/baseline (1=same, 0=fully different). */
     double wifi_jaccard_home = 1.0;
     double wifi_jaccard_company = 1.0;
+    bool baro_available = false;
+    bool baro_baseline_ready = false;
+    double baro_descent_m = 0.0;
+    double baro_descending = 0.0;
+    bool baro_stable_platform = false;
+    bool baro_lower_platform = false;
 };
 
 struct TickDecision {
@@ -102,6 +111,8 @@ struct TickDecision {
     /** Active bounded policy and its last gate result, for audit/debug APIs. */
     std::string policy_template = "confirmed_leaving";
     std::string policy_match_reason = "NONE";
+    LeaveObservation hsmm_obs_home;
+    LeaveObservation hsmm_obs_company;
 };
 
 /**
@@ -131,8 +142,8 @@ private:
     ObservationResult BuildLeaveObservation(const TickFeatures &feat, Relation rel, bool hasDist, double distM, double rIn,
         double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double wifiJaccard,
         bool wifiAttach, double centerHour, std::optional<double> prevDist, bool approaching,
-        bool radioSuppressed) const;
-    LeaveHsmmConfig HsmmConfig() const;
+        bool radioSuppressed, bool gpsDistUnreliable = false) const;
+    LeaveHsmmConfig HsmmConfig() const { return HsmmConfigFromTheta(theta_); }
 
     /** Seconds until dist reaches rOut; nullopt if not outbound / unknown. */
     std::optional<double> EstimateEtaOutS(bool hasDist, double distM, double rOut, bool walking, double pdrNetOut,
@@ -141,6 +152,9 @@ private:
     bool LeadWindowOk(const std::optional<double> &etaS, std::string *blockReason) const;
 
     Relation RelTo(const TickFeatures &feat, const Anchor &anchor, double *distOut) const;
+    /** Home: GPS fence. Company: source_type 2/1 when in vicinity; fence is auxiliary. */
+    Relation CompanyRelTo(const TickFeatures &feat, double *distOut, bool *nearCompany) const;
+    bool GpsFixUsable(const TickFeatures &feat) const;
     bool CooldownOk(TickTsMs tMs) const;
     bool ArmDelayOk(const TickFeatures &feat) const;
 
@@ -154,6 +168,7 @@ private:
     std::optional<double> prevDistCompany_;
     Relation prevRelHome_ = Relation::kUnknown;
     Relation prevRelCompany_ = Relation::kUnknown;
+    int32_t prevGpsSourceType_ = 0;
     std::optional<TickTsMs> prevTMs_;
     int approachHomeStreak_ = 0;
     int approachCompanyStreak_ = 0;
@@ -173,8 +188,6 @@ private:
     bool leaveCompanyPushed_ = false;
     std::optional<TickTsMs> lastWalkStopMs_;
     bool wasWalking_ = false;
-    std::optional<TickTsMs> policyHomeMatchSince_;
-    std::optional<TickTsMs> policyCompanyMatchSince_;
 };
 
 }  // namespace commute_sa

@@ -2147,7 +2147,7 @@ void ProactiveAgentBusinessModule::TryInitializeAgent()
     }
 
     agentConfig->mode = jiuwen::AgentType::REACT;
-    agentConfig->maxTurn = 16;
+    agentConfig->maxTurn = 32;
     agentConfig->promptTemplates["system"] = kThetaPersonalizerSystemPrompt;
 
     (void)jiuwen::ResourceManager::GetInstance();

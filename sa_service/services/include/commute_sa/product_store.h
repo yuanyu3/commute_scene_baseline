@@ -137,6 +137,11 @@ private:
         bool cell_leave = false;
         bool ble_detach = false;
         bool has_usable_gps = false;
+        bool baro_available = false;
+        bool baro_baseline_ready = false;
+        double baro_descent_m = 0.0;
+        bool baro_lower_platform = false;
+        LeaveObservation hsmm_obs;
     };
     std::deque<PolicyHistoryRow> policyBuffer_;
     int64_t lastPolicySampleMs_ = 0;

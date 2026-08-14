@@ -63,6 +63,7 @@ void SceneEngine::SetAnchors(const AnchorSet &anchors)
     anchors_ = anchors;
     home_hsmm_.Reset();
     company_hsmm_.Reset();
+    prevGpsSourceType_ = 0;
 }
 
 const AnchorSet &SceneEngine::GetAnchors() const
@@ -79,8 +80,6 @@ void SceneEngine::SetPersonalizationPolicy(const PersonalizationPolicy &policy)
 {
     if (ValidatePersonalizationPolicy(policy, nullptr)) {
         policy_ = policy;
-        policyHomeMatchSince_.reset();
-        policyCompanyMatchSince_.reset();
     }
 }
 
@@ -91,13 +90,53 @@ const PersonalizationPolicy &SceneEngine::GetPersonalizationPolicy() const
 
 Relation SceneEngine::RelTo(const TickFeatures &feat, const Anchor &anchor, double *distOut) const
 {
-    if (!feat.has_gps) {
-        return Relation::kUnknown;
-    }
-    if (feat.acc > theta_.max_gps_acc_m && feat.acc > theta_.allow_network_dwell_acc_m) {
+    if (!GpsFixUsable(feat)) {
         return Relation::kUnknown;
     }
     return RelationToAnchor(feat.lat, feat.lon, anchor.lat, anchor.lon, anchor.r_in_m, anchor.r_out_m, distOut);
+}
+
+bool SceneEngine::GpsFixUsable(const TickFeatures &feat) const
+{
+    if (!feat.has_gps) {
+        return false;
+    }
+    if (feat.acc > theta_.max_gps_acc_m && feat.acc > theta_.allow_network_dwell_acc_m) {
+        return false;
+    }
+    return true;
+}
+
+Relation SceneEngine::CompanyRelTo(const TickFeatures &feat, double *distOut, bool *nearCompany) const
+{
+    if (nearCompany != nullptr) {
+        *nearCompany = false;
+    }
+    if (!feat.has_gps) {
+        return Relation::kUnknown;
+    }
+    const Relation geoRel = RelationToAnchor(feat.lat, feat.lon, anchors_.company.lat, anchors_.company.lon,
+        anchors_.company.r_in_m, anchors_.company.r_out_m, distOut);
+    const double dist = distOut != nullptr ? *distOut : 0.0;
+    const double vicinity = std::max(theta_.company_source_vicinity_m, anchors_.company.r_out_m);
+    const bool sticky = scene_ == Scene::kAtCompany || scene_ == Scene::kLeavingCompany;
+    const bool near = sticky || feat.wifi_company_attach || dist <= vicinity || geoRel == Relation::kInside ||
+        geoRel == Relation::kNear;
+    if (nearCompany != nullptr) {
+        *nearCompany = near;
+    }
+    if (near) {
+        if (feat.gps_source_type == kLocationSourceIndoorNetwork) {
+            return Relation::kInside;
+        }
+        if (feat.gps_source_type == kLocationSourceOutdoorGnss) {
+            return Relation::kOutside;
+        }
+    }
+    if (!GpsFixUsable(feat)) {
+        return Relation::kUnknown;
+    }
+    return geoRel;
 }
 
 bool SceneEngine::CooldownOk(TickTsMs tMs) const
@@ -167,26 +206,10 @@ bool SceneEngine::LeadWindowOk(const std::optional<double> &etaS, std::string *b
     return true;
 }
 
-LeaveHsmmConfig SceneEngine::HsmmConfig() const
-{
-    LeaveHsmmConfig config;
-    config.preleave_min_s = std::max(0.0, theta_.hsmm_preleave_min_s);
-    config.preleave_mean_s = std::max(config.preleave_min_s, theta_.hsmm_preleave_mean_s);
-    config.preleave_max_s = std::max(config.preleave_mean_s, theta_.hsmm_preleave_max_s);
-    config.leaving_min_s = std::max(0.0, theta_.hsmm_leaving_min_s);
-    config.leaving_mean_s = std::max(config.leaving_min_s, theta_.hsmm_leaving_mean_s);
-    config.leaving_max_s = std::max(config.leaving_mean_s, theta_.hsmm_leaving_max_s);
-    config.max_gap_s = std::max(1.0, theta_.hsmm_max_gap_s);
-    config.reliability = {{0.25 + 3.0 * theta_.w_walk, 0.25 + 3.0 * theta_.w_pdr,
-        0.25 + 3.0 * theta_.w_geo, 0.25 + 3.0 * theta_.w_wifi, 0.25 + 3.0 * theta_.w_cell,
-        0.25 + 3.0 * theta_.w_ble, 0.25 + 3.0 * theta_.w_time}};
-    return config;
-}
-
 SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeatures &feat, Relation rel, bool hasDist, double distM,
     double rIn, double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double wifiJaccard,
     bool wifiAttach, double centerHour, std::optional<double> prevDist, bool approaching,
-    bool radioSuppressed) const
+    bool radioSuppressed, bool gpsDistUnreliable) const
 {
     ObservationResult out;
     int hits = 0;
@@ -203,15 +226,20 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
     }
 
     double sGeo = 0.0;
-    if (hasDist && (rel == Relation::kInside || rel == Relation::kNear)) {
-        if (prevDist.has_value() && distM > *prevDist + 3.0) {
-            sGeo = Clip01(distM / std::max(rOut, 1.0));
-            if (rel == Relation::kNear && distM >= rIn * 0.9) {
-                sGeo = std::max(sGeo, 0.85);
+    if (!gpsDistUnreliable) {
+        if (hasDist && (rel == Relation::kInside || rel == Relation::kNear)) {
+            if (prevDist.has_value() && distM > *prevDist + 3.0) {
+                sGeo = Clip01(distM / std::max(rOut, 1.0));
+                if (rel == Relation::kNear && distM >= rIn * 0.9) {
+                    sGeo = std::max(sGeo, 0.85);
+                }
             }
+        } else if (rel == Relation::kOutside && !approaching) {
+            sGeo = 0.8;
         }
     } else if (rel == Relation::kOutside && !approaching) {
-        sGeo = 0.8;
+        // source_type 2→1 (or GNSS while near company) is the precise gate-leave.
+        sGeo = 1.0;
     }
     if (sGeo >= theta_.thr_geo) {
         ++hits;
@@ -249,7 +277,7 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
         ++hits;
     }
 
-    if (approaching || (prevDist.has_value() && hasDist && distM + 8.0 < *prevDist)) {
+    if (approaching || (!gpsDistUnreliable && prevDist.has_value() && hasDist && distM + 8.0 < *prevDist)) {
         sGeo = 0.0;
         sWifi = 0.0;
     }
@@ -267,6 +295,10 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
     out.observation.outside = rel == Relation::kOutside;
     out.observation.approaching = approaching;
     out.observation.attached = wifiAttach;
+    const bool baroReady = feat.baro_available && feat.baro_baseline_ready;
+    out.observation.baro_descending = baroReady ? feat.baro_descending : 0.0;
+    out.observation.baro_lower_platform = baroReady && feat.baro_lower_platform ? 1.0 : 0.0;
+    out.observation.baro_available = baroReady;
     out.hits = hits;
     return out;
 }
@@ -279,17 +311,15 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     wasWalking_ = feat.walking;
     double dHome = 0.0;
     double dCo = 0.0;
-    Relation hRel = RelTo(feat, anchors_.home, &dHome);
-    Relation cRel = RelTo(feat, anchors_.company, &dCo);
-    // source_type is the platform's company-gate semantic. It takes priority
-    // over a noisy coordinate fence: 1=already outside, 2=inside company.
-    if (feat.gps_source_type == 1) {
-        cRel = Relation::kOutside;
-    } else if (feat.gps_source_type == 2) {
-        cRel = Relation::kInside;
-    }
+    bool nearCompany = false;
+    const Relation hRel = RelTo(feat, anchors_.home, &dHome);
+    const Relation cRel = CompanyRelTo(feat, &dCo, &nearCompany);
     const bool hasHome = feat.has_gps && hRel != Relation::kUnknown;
     const bool hasCo = feat.has_gps && cRel != Relation::kUnknown;
+    const bool companySourceIndoor = nearCompany && feat.gps_source_type == kLocationSourceIndoorNetwork;
+    const bool companySourceOutdoor = nearCompany && feat.gps_source_type == kLocationSourceOutdoorGnss;
+    const bool companySourceGate = companySourceIndoor || companySourceOutdoor;
+    const bool companyGateLeave = companySourceOutdoor && prevGpsSourceType_ == kLocationSourceIndoorNetwork;
 
     auto updateApproach = [&](Relation rel, bool hasDist, double distM, Relation prevRel,
                                const std::optional<double> &prevDist, int *streak, bool wifiAttach,
@@ -318,8 +348,23 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     };
     const bool approachHome = updateApproach(hRel, hasHome, dHome, prevRelHome_, prevDistHome_, &approachHomeStreak_,
         feat.wifi_home_attach, &returnFromOutsideHome_);
-    const bool approachCo = updateApproach(cRel, hasCo, dCo, prevRelCompany_, prevDistCompany_, &approachCompanyStreak_,
-        feat.wifi_company_attach, &returnFromOutsideCompany_);
+    bool approachCo = false;
+    if (companySourceGate) {
+        approachCompanyStreak_ = 0;
+        if (prevGpsSourceType_ == kLocationSourceOutdoorGnss && companySourceIndoor) {
+            approachCo = true;
+            returnFromOutsideCompany_ = true;
+        }
+        if (feat.wifi_company_attach) {
+            approachCo = true;
+        }
+        if (companyGateLeave) {
+            approachCo = false;
+        }
+    } else {
+        approachCo = updateApproach(cRel, hasCo, dCo, prevRelCompany_, prevDistCompany_, &approachCompanyStreak_,
+            feat.wifi_company_attach, &returnFromOutsideCompany_);
+    }
 
     auto noteApproachEdge = [&](bool approaching, bool *wasApproach, bool *returnFromOutside,
                                 std::optional<TickTsMs> *until) -> bool {
@@ -342,7 +387,7 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const auto sc = BuildLeaveObservation(feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
         feat.pdr_net_out_company_m, feat.wifi_company_detach, feat.cell_leave_company, feat.ble_company_detach,
         feat.wifi_jaccard_company, feat.wifi_company_attach, theta_.weekday_leave_company_hour, prevDistCompany_,
-        approachCo, radioSupCo);
+        approachCo, radioSupCo, companySourceGate);
     const LeaveHsmmConfig hsmmConfig = HsmmConfig();
     const auto hsmmHome = home_hsmm_.Step(sh.observation, feat.t_ms, hsmmConfig);
     const auto hsmmCompany = company_hsmm_.Step(sc.observation, feat.t_ms, hsmmConfig);
@@ -350,8 +395,13 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const bool gpsReliable = feat.acc <= 50.0;
     const auto etaHome = EstimateEtaOutS(hasHome, dHome, anchors_.home.r_out_m, feat.walking, feat.pdr_net_out_home_m,
         prevDistHome_, prevTMs_, feat.t_ms, gpsReliable);
-    const auto etaCo = EstimateEtaOutS(hasCo, dCo, anchors_.company.r_out_m, feat.walking, feat.pdr_net_out_company_m,
-        prevDistCompany_, prevTMs_, feat.t_ms, gpsReliable);
+    std::optional<double> etaCo;
+    if (companySourceOutdoor) {
+        etaCo = 0.0;
+    } else if (!companySourceIndoor) {
+        etaCo = EstimateEtaOutS(hasCo, dCo, anchors_.company.r_out_m, feat.walking, feat.pdr_net_out_company_m,
+            prevDistCompany_, prevTMs_, feat.t_ms, gpsReliable);
+    }
 
     const double enter = theta_.enter_leave;
     const int need = theta_.min_evidence;
@@ -391,72 +441,16 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     }
 
     const bool legacyHomeLeaveCand = allowHome && (hRel == Relation::kInside || hRel == Relation::kNear) &&
-        !approachHome && prevRelHome_ != Relation::kOutside && hsmmHome.LeavingProbability() >= enter && sh.hits >= need &&
+        !approachHome && prevRelHome_ != Relation::kOutside && hsmmHome.LeavingProbability() >= enter &&
         ArmDelayOk(feat);
     const bool legacyCoLeaveCand = allowCompany && (cRel == Relation::kInside || cRel == Relation::kNear) &&
-        !approachCo && prevRelCompany_ != Relation::kOutside && hsmmCompany.LeavingProbability() >= enter && sc.hits >= need &&
+        !approachCo && prevRelCompany_ != Relation::kOutside && hsmmCompany.LeavingProbability() >= enter &&
         ArmDelayOk(feat);
 
-    std::string policyHomeReason = "LEGACY_MATCH";
-    std::string policyCompanyReason = "LEGACY_MATCH";
-    auto policyCandidate = [&](bool allowed, bool anchoredByScene, Relation rel, Relation prevRel, bool approaching,
-                               const LeaveHsmmResult &hsmm, const ObservationResult &obs, double pdr,
-                               bool wifiDetach, bool cellLeave, bool bleDetach, bool hasDist, double dist,
-                               std::optional<double> prevDist, std::optional<TickTsMs> *matchSince,
-                               std::string *reason) -> bool {
-        if (policy_.template_name == "confirmed_leaving") {
-            return false;  // caller uses the backward-compatible gate
-        }
-        const bool anchorGate = (rel == Relation::kInside || rel == Relation::kNear) ||
-            (policy_.gps_mode == "IGNORE" && rel == Relation::kUnknown && anchoredByScene);
-        const bool radio = wifiDetach || cellLeave || bleDetach;
-        const bool elevatorResume = lastWalkStopMs_.has_value() && feat.walking && feat.has_walk_started &&
-            (feat.walk_started_at_ms - *lastWalkStopMs_) >= 20000 &&
-            (feat.walk_started_at_ms - *lastWalkStopMs_) <= 120000 &&
-            (feat.t_ms - feat.walk_started_at_ms) >= 5000 && radio && pdr >= 4.0;
-        if (!allowed || !anchorGate || approaching ||
-            prevRel == Relation::kOutside || (!ArmDelayOk(feat) && !elevatorResume)) {
-            matchSince->reset();
-            *reason = "BASE_SAFETY_GATE";
-            return false;
-        }
-        PolicyEvidence evidence;
-        evidence.t_ms = feat.t_ms;
-        evidence.preleave_probability = hsmm.PreLeaveProbability();
-        evidence.leaving_probability = hsmm.LeavingProbability();
-        evidence.baseline_hits = obs.hits;
-        evidence.walking = feat.walking;
-        evidence.pdr_net_out_m = pdr;
-        evidence.wifi_detach = wifiDetach;
-        evidence.cell_leave = cellLeave;
-        evidence.ble_detach = bleDetach;
-        evidence.geo_outbound = hasDist && prevDist.has_value() && dist > *prevDist + 3.0;
-        evidence.has_usable_gps = hasDist;
-        const PolicyMatch match = MatchPersonalizationPolicy(policy_, evidence);
-        *reason = match.reason;
-        if (!match.matched) {
-            matchSince->reset();
-            return false;
-        }
-        *matchSince = matchSince->value_or(feat.t_ms);
-        if ((feat.t_ms - **matchSince) < static_cast<TickTsMs>(policy_.min_duration_s * 1000.0)) {
-            *reason = "MIN_DURATION";
-            return false;
-        }
-        *reason = "MATCH";
-        return true;
-    };
-    const bool policyHomeCand = policyCandidate(allowHome,
-        scene_ == Scene::kAtHome || scene_ == Scene::kLeavingHome, hRel, prevRelHome_, approachHome, hsmmHome, sh,
-        feat.pdr_net_out_home_m, feat.wifi_home_detach, feat.cell_leave_home, feat.ble_home_detach,
-        hasHome, dHome, prevDistHome_, &policyHomeMatchSince_, &policyHomeReason);
-    const bool policyCompanyCand = policyCandidate(allowCompany,
-        scene_ == Scene::kAtCompany || scene_ == Scene::kLeavingCompany, cRel, prevRelCompany_, approachCo, hsmmCompany, sc,
-        feat.pdr_net_out_company_m, feat.wifi_company_detach, feat.cell_leave_company, feat.ble_company_detach,
-        hasCo, dCo, prevDistCompany_, &policyCompanyMatchSince_, &policyCompanyReason);
-    const bool useLegacyPolicy = !policy_.enabled || policy_.template_name == "confirmed_leaving";
-    const bool homeLeaveCand = useLegacyPolicy ? legacyHomeLeaveCand : policyHomeCand;
-    const bool coLeaveCand = useLegacyPolicy ? legacyCoLeaveCand : policyCompanyCand;
+    const bool homeLeaveCand = legacyHomeLeaveCand;
+    const bool coLeaveCand = legacyCoLeaveCand;
+    const std::string policyHomeReason = "HSMM";
+    const std::string policyCompanyReason = "HSMM";
 
     std::optional<double> activeEta;
     bool leadOk = false;
@@ -553,20 +547,8 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     } else if (maxHits < need) {
         uncertainty = "HIGH";
     }
-    if (shouldService && uncertainty == "HIGH") {
-        shouldService = false;
-        intent = "NONE";
-        pushBlock = "UNCERTAIN";
-        // Allow retry on later ticks of same episode.
-        if (newScene == Scene::kLeavingHome) {
-            leaveHomePushed_ = false;
-        }
-        if (newScene == Scene::kLeavingCompany) {
-            leaveCompanyPushed_ = false;
-        }
-    }
 
-    // Hard ban: never push departure when already outside the fence or approaching.
+    // Hard ban: never push when already outside the gate or approaching.
     if (shouldService && intent == "DEPARTURE_NOTIFICATION" &&
         (hRel == Relation::kOutside || approachHome || feat.wifi_home_attach)) {
         shouldService = false;
@@ -585,6 +567,7 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     scene_ = newScene;
     prevRelHome_ = hRel;
     prevRelCompany_ = cRel;
+    prevGpsSourceType_ = feat.gps_source_type;
     if (hasHome) {
         prevDistHome_ = dHome;
     }
@@ -628,8 +611,10 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         d.lead_gate_ok = LeadWindowOk(std::optional<double>(d.eta_leave_s), nullptr);
     }
     d.push_block_reason = shouldService ? "NONE" : pushBlock;
-    d.policy_template = policy_.template_name;
+    d.policy_template = "confirmed_leaving";
     d.policy_match_reason = homeLeaveCand ? policyHomeReason : policyCompanyReason;
+    d.hsmm_obs_home = sh.observation;
+    d.hsmm_obs_company = sc.observation;
     return d;
 }
 

@@ -881,6 +881,7 @@ void BaroSensorCallback(SensorEvent *event)
     }
     const int64_t unixTsMs = GetTimestampMs();
     const float pressure = data[0];
+    commute_sa::BaselineRuntime::GetInstance().OnBaro(unixTsMs, pressure);
     bool doLog = false;
     {
         std::lock_guard<std::mutex> lock(gSensorMutex);

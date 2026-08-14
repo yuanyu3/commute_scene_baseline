@@ -87,6 +87,9 @@ struct RadioDetachSnapshot {
     double jaccard_churn = 1.0;
     bool home_dwell_ready = false;
     bool company_dwell_ready = false;
+    double company_site_wifi_coverage = 0.0;
+    int company_site_wifi_matches = 0;
+    bool company_site_cell_match = false;
     int n_strong = 0;
     std::string reason;
 };
@@ -124,6 +127,9 @@ public:
     /** Load semi-persistent soft sets from JSON; drops expired sides. */
     bool ImportSoftJson(const std::string &json, int64_t nowMs);
 
+    /** Load the long-lived company Top-K WiFi/Cell profile built from offline/on-device history. */
+    bool ImportCompanySiteJson(const std::string &json);
+
     /** Export ready soft sets (home/company) for disk. */
     std::string ExportSoftJson() const;
 
@@ -157,6 +163,9 @@ private:
 
     DwellState home_;
     DwellState company_;
+    std::unordered_set<std::string> company_site_wifi_;
+    std::unordered_set<int64_t> company_site_cells_;
+    bool company_site_wifi_detached_seen_ = false;
     bool soft_dirty_ = false;
     int64_t last_soft_persist_ms_ = 0;
 

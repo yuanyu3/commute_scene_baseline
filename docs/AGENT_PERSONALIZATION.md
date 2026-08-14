@@ -18,7 +18,7 @@
 | `evaluate_policy_on_history` | 用 `policy_history.jsonl` 语义样本做反事实评分 |
 | `revert_policy_trial` / `commit_policy_trial` | 回滚或原子接受候选 |
 
-内置模板：`confirmed_leaving`、`wifi_first_preleave`、`radio_motion_preleave`、`conservative_preleave`。实时引擎只解释这些白名单算子；Agent 不能注入代码或任意表达式。
+内置模板：仅 `confirmed_leaving`。实时引擎用 HSMM `P(LEAVING)` 推送，忽略 policy 菜谱；Agent 不要发明硬门控目录。气压自动进入 HSMM，重要性由 `w_baro` 调节。
 
 `policy_history.jsonl` 每行是已标注的候选时刻，包含 PRE_LEAVE/LEAVING 概率、walking、WiFi/Cell/BLE、PDR、有效 GPS 和 lead。端侧只缓冲最近 30 分钟语义 tick，episode settle 时落盘最近 10 分钟；评估器按连续 tick 重建证据持续时间。
 

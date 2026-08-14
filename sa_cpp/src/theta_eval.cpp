@@ -1,12 +1,14 @@
 #include "commute_sa/theta_eval.h"
 
 #include "commute_sa/baseline_runtime.h"
+#include "commute_sa/leave_hsmm.h"
 #include "commute_sa/product_store.h"
 #include "commute_sa/theta.h"
 
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -111,6 +113,274 @@ bool ExtractString(const std::string &json, const char *key, std::string *out)
     }
 }
 
+bool ExtractBool(const std::string &json, const char *key, bool *out)
+{
+    if (out == nullptr || key == nullptr) {
+        return false;
+    }
+    const std::string needle = std::string("\"") + key + "\"";
+    const size_t pos = json.find(needle);
+    if (pos == std::string::npos) {
+        return false;
+    }
+    size_t i = json.find(':', pos + needle.size());
+    if (i == std::string::npos) {
+        return false;
+    }
+    ++i;
+    while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) {
+        ++i;
+    }
+    if (json.compare(i, 4, "true") == 0) {
+        *out = true;
+        return true;
+    }
+    if (json.compare(i, 5, "false") == 0) {
+        *out = false;
+        return true;
+    }
+    return false;
+}
+
+struct HsmmTick {
+    int64_t t_ms = 0;
+    LeaveObservation obs;
+    double lead_s = -1.0;
+};
+
+struct HsmmEpisode {
+    std::string side;
+    std::string label;
+    int64_t outcome_ms = 0;
+    std::vector<HsmmTick> ticks;
+};
+
+bool ArmDelayOk(int64_t walkStartedMs, int64_t tMs, double armDelayS)
+{
+    if (walkStartedMs <= 0) {
+        return true;
+    }
+    return (tMs - walkStartedMs) >= static_cast<int64_t>(armDelayS * 1000.0);
+}
+
+bool WouldHsmmPush(const LeaveHsmmResult &result, const LeaveObservation &obs, double enterLeave, int64_t walkStartedMs,
+    int64_t tMs, double armDelayS)
+{
+    return result.LeavingProbability() >= enterLeave && !obs.outside && !obs.approaching && !obs.attached &&
+        (obs.inside || obs.near) && ArmDelayOk(walkStartedMs, tMs, armDelayS);
+}
+
+bool EpisodeHasBaroLowerPlatform(const HsmmEpisode &ep)
+{
+    for (const auto &tick : ep.ticks) {
+        if (tick.obs.baro_lower_platform >= 0.5) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Theta &theta)
+{
+    int n = 0;
+    int nFalse = 0;
+    int nConfirmed = 0;
+    int nMissedLabel = 0;
+    int falseAvoided = 0;
+    int falseKept = 0;
+    int softFalseAvoided = 0;
+    int softFalseKept = 0;
+    int confirmedKept = 0;
+    int missed = 0;
+    int recovered = 0;
+    int leadOk = 0;
+    int leadLate = 0;
+    int leadEarly = 0;
+    double leadAbsErrSum = 0.0;
+    int leadErrN = 0;
+
+    const LeaveHsmmConfig cfg = HsmmConfigFromTheta(theta);
+    for (const auto &ep : episodes) {
+        if (!FocusAllowsHome(theta.focus_side) && ep.side == "home") {
+            continue;
+        }
+        if (!FocusAllowsCompany(theta.focus_side) && ep.side == "company") {
+            continue;
+        }
+        ++n;
+        LeaveHsmm hsmm;
+        bool wouldPush = false;
+        double leadAtPush = -1.0;
+        int64_t walkStartedMs = 0;
+        for (const auto &tick : ep.ticks) {
+            if (tick.obs.walking >= 0.5) {
+                if (walkStartedMs <= 0) {
+                    walkStartedMs = tick.t_ms;
+                }
+            } else {
+                walkStartedMs = 0;
+            }
+            const LeaveHsmmResult result = hsmm.Step(tick.obs, tick.t_ms, cfg);
+            if (!wouldPush &&
+                WouldHsmmPush(result, tick.obs, theta.enter_leave, walkStartedMs, tick.t_ms, theta.arm_delay_s)) {
+                wouldPush = true;
+                leadAtPush = (ep.outcome_ms > tick.t_ms)
+                    ? static_cast<double>(ep.outcome_ms - tick.t_ms) / 1000.0
+                    : 0.0;
+            }
+        }
+        if (ep.label == "FALSE_PUSH") {
+            ++nFalse;
+            const bool softOk = EpisodeHasBaroLowerPlatform(ep);
+            if (wouldPush) {
+                if (softOk) {
+                    ++softFalseKept;
+                } else {
+                    ++falseKept;
+                }
+            } else if (softOk) {
+                ++softFalseAvoided;
+            } else {
+                ++falseAvoided;
+            }
+        } else if (ep.label == "CONFIRMED_LEAVE") {
+            ++nConfirmed;
+            if (wouldPush) {
+                ++confirmedKept;
+                if (leadAtPush >= 0.0) {
+                    const double mid = 0.5 * (theta.lead_min_s + theta.lead_max_s);
+                    leadAbsErrSum += std::fabs(leadAtPush - mid);
+                    ++leadErrN;
+                    if (leadAtPush < theta.lead_min_s) {
+                        ++leadLate;
+                    } else if (leadAtPush > theta.lead_max_s) {
+                        ++leadEarly;
+                    } else {
+                        ++leadOk;
+                    }
+                }
+            } else {
+                ++missed;
+            }
+        } else if (ep.label == "MISSED_LEAVE") {
+            ++nMissedLabel;
+            if (wouldPush) {
+                ++recovered;
+            } else {
+                ++missed;
+            }
+        }
+    }
+
+    // soft_false_* (FALSE_PUSH with baro_lower_platform) are acceptable lobby/1F pushes:
+    // do not reward avoiding them or heavily punish keeping them.
+    const double scoreValue = 2.0 * static_cast<double>(falseAvoided) - 2.0 * static_cast<double>(falseKept) +
+        1.5 * static_cast<double>(confirmedKept) - 3.0 * static_cast<double>(missed) +
+        1.5 * static_cast<double>(recovered) + 1.0 * static_cast<double>(leadOk) -
+        0.5 * static_cast<double>(leadLate) - 0.5 * static_cast<double>(leadEarly) -
+        0.25 * static_cast<double>(softFalseKept);
+    const double leadMae = (leadErrN > 0) ? (leadAbsErrSum / static_cast<double>(leadErrN)) : -1.0;
+
+    std::ostringstream oss;
+    oss << "{\"ok\":true,\"method\":\"hsmm_window_replay\""
+        << ",\"focus_side\":\"" << Esc(theta.focus_side) << "\""
+        << ",\"notes\":\"Replay LeaveHsmm on stored leave-window observations. Evaluates w_*, enter_leave, and "
+           "arm_delay_s. Counterfactual lead_s = t_star - first eligible push tick. "
+           "Product bans (OUTSIDE/approaching/attach) stay in C++. Filtered by focus_side. "
+           "FALSE_PUSH with obs_baro_lower_platform counted as soft_false_* (acceptable 1F/lobby timing; "
+           "light penalty only).\""
+        << ",\"n_episodes\":" << n << ",\"n_false_push\":" << nFalse << ",\"n_confirmed_leave\":" << nConfirmed
+        << ",\"n_missed_leave_label\":" << nMissedLabel
+        << ",\"false_avoided\":" << falseAvoided << ",\"false_kept\":" << falseKept
+        << ",\"soft_false_avoided\":" << softFalseAvoided << ",\"soft_false_kept\":" << softFalseKept
+        << ",\"confirmed_kept\":" << confirmedKept << ",\"missed_leave\":" << missed
+        << ",\"recovered_miss\":" << recovered << ",\"unscored\":0"
+        << ",\"lead_ok\":" << leadOk << ",\"lead_late\":" << leadLate << ",\"lead_early\":" << leadEarly
+        << ",\"lead_mae_to_mid_s\":" << leadMae << ",\"score\":" << scoreValue
+        << ",\"theta\":{\"enter_leave\":" << theta.enter_leave << ",\"lead_min_s\":" << theta.lead_min_s
+        << ",\"lead_max_s\":" << theta.lead_max_s << ",\"w_walk\":" << theta.w_walk << ",\"w_pdr\":" << theta.w_pdr
+        << ",\"w_geo\":" << theta.w_geo << ",\"w_wifi\":" << theta.w_wifi << ",\"w_cell\":" << theta.w_cell
+        << ",\"w_ble\":" << theta.w_ble << ",\"w_time\":" << theta.w_time << ",\"w_baro\":" << theta.w_baro
+        << ",\"arm_delay_s\":" << theta.arm_delay_s << "}"
+        << ",\"better_guidance\":\"Prefer higher score. If missed_leave rises, revert the last change. "
+           "Hard false_kept (no baro_lower_platform) is the main suppress target. "
+           "soft_false_kept means lobby/1F descent without gate exit—acceptable push timing; do not crush θ to wipe it. "
+           "Diagnose obs_* before choosing enter_leave vs a channel w_*.\"}";
+    return oss.str();
+}
+
+bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisodes, std::vector<HsmmEpisode> *out)
+{
+    const std::string path = rootDir + "/policy_history.jsonl";
+    std::ifstream in(path);
+    if (!in.is_open() || out == nullptr) {
+        return false;
+    }
+    std::map<std::string, HsmmEpisode> grouped;
+    std::string line;
+    int nObs = 0;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.find("\"obs_pdr_outbound\"") == std::string::npos) {
+            continue;
+        }
+        HsmmTick tick;
+        if (!ExtractInt64(line, "t_ms", &tick.t_ms)) {
+            continue;
+        }
+        ExtractNumber(line, "obs_walking", &tick.obs.walking);
+        ExtractNumber(line, "obs_pdr_outbound", &tick.obs.pdr_outbound);
+        ExtractNumber(line, "obs_geo_outbound", &tick.obs.geo_outbound);
+        ExtractNumber(line, "obs_wifi_detach", &tick.obs.wifi_detach);
+        ExtractNumber(line, "obs_cell_detach", &tick.obs.cell_detach);
+        ExtractNumber(line, "obs_ble_detach", &tick.obs.ble_detach);
+        ExtractNumber(line, "obs_time_prior", &tick.obs.time_prior);
+        ExtractNumber(line, "obs_baro_descending", &tick.obs.baro_descending);
+        ExtractNumber(line, "obs_baro_lower_platform", &tick.obs.baro_lower_platform);
+        ExtractBool(line, "obs_baro_available", &tick.obs.baro_available);
+        ExtractBool(line, "obs_relation_known", &tick.obs.relation_known);
+        ExtractBool(line, "obs_inside", &tick.obs.inside);
+        ExtractBool(line, "obs_near", &tick.obs.near);
+        ExtractBool(line, "obs_outside", &tick.obs.outside);
+        ExtractBool(line, "obs_approaching", &tick.obs.approaching);
+        ExtractBool(line, "obs_attached", &tick.obs.attached);
+        ExtractNumber(line, "lead_s", &tick.lead_s);
+
+        std::string side = "company";
+        ExtractString(line, "side", &side);
+        std::string label;
+        ExtractString(line, "label", &label);
+        int64_t outcomeMs = tick.t_ms;
+        ExtractInt64(line, "outcome_t_ms", &outcomeMs);
+        if (sinceMs > 0 && outcomeMs > 0 && outcomeMs < sinceMs) {
+            continue;
+        }
+        const std::string key = side + ":" + std::to_string(outcomeMs) + ":" + label;
+        auto &ep = grouped[key];
+        ep.side = side;
+        ep.label = label;
+        ep.outcome_ms = outcomeMs;
+        ep.ticks.push_back(tick);
+        ++nObs;
+    }
+    if (nObs == 0) {
+        return false;
+    }
+    for (auto &entry : grouped) {
+        std::sort(entry.second.ticks.begin(), entry.second.ticks.end(),
+            [](const HsmmTick &a, const HsmmTick &b) { return a.t_ms < b.t_ms; });
+        out->push_back(std::move(entry.second));
+    }
+    std::sort(out->begin(), out->end(),
+        [](const HsmmEpisode &a, const HsmmEpisode &b) { return a.outcome_ms < b.outcome_ms; });
+    if (maxEpisodes > 0 && static_cast<int>(out->size()) > maxEpisodes) {
+        out->erase(out->begin(), out->begin() + static_cast<std::ptrdiff_t>(out->size() - maxEpisodes));
+    }
+    return !out->empty();
+}
+
 struct Episode {
     int64_t t_push_ms = 0;
     std::string intent;
@@ -158,6 +428,11 @@ bool PersistTheta(const Theta &t, std::string *err)
 std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &theta, int64_t sinceMs,
     int maxEpisodes)
 {
+    std::vector<HsmmEpisode> hsmmEpisodes;
+    if (LoadHsmmEpisodes(rootDir, sinceMs, maxEpisodes, &hsmmEpisodes)) {
+        return ScoreHsmmReplay(hsmmEpisodes, theta);
+    }
+
     const std::string path = rootDir + "/leave_episodes.jsonl";
     std::ifstream in(path);
     if (!in.is_open()) {
@@ -310,8 +585,9 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
         << ",\"theta\":{\"enter_leave\":" << theta.enter_leave << ",\"lead_min_s\":" << theta.lead_min_s
         << ",\"lead_max_s\":" << theta.lead_max_s << ",\"min_evidence\":" << theta.min_evidence
         << ",\"arm_delay_s\":" << theta.arm_delay_s << "}"
-        << ",\"better_guidance\":\"Prefer higher score; if missed_leave rises, undo enter_leave increase; "
-           "if false_kept high, raise enter_leave / min_evidence.\"}";
+        << ",\"better_guidance\":\"Prefer higher score. If missed_leave rises, revert. "
+           "This fallback cannot evaluate w_*; store obs_* in policy_history for full HSMM replay. "
+           "No fixed recipe for false_kept—use evidence then trial+eval.\"}";
     return oss.str();
 }
 

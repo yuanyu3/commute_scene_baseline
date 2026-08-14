@@ -124,9 +124,9 @@ std::vector<std::string> RegisterActionTools()
     (void)ResourceManager::GetInstance();
 
     RegisterOne("apply_theta_delta",
-        "Apply one clipped theta/fence delta and persist (param_changes + theta.json/anchors.json)",
-        {{"param", "enter_leave|exit_leave|w_walk|w_wifi|w_cell|w_ble|w_radio|min_evidence|weekday_leave_home_hour|"
-                   "weekday_leave_company_hour|arm_delay_s|lead_min_s|lead_max_s|home.r_in_m|company.r_in_m",
+        "Apply one clipped theta delta and persist (param_changes + theta.json)",
+        {{"param", "enter_leave|exit_leave|w_walk|w_pdr|w_geo|w_wifi|w_cell|w_ble|w_radio|w_time|w_baro|"
+                   "weekday_leave_home_hour|weekday_leave_company_hour|arm_delay_s|lead_min_s|lead_max_s",
              "string", true},
             {"delta", "Signed delta; clipped to param step", "number", true},
             {"reason", "Short evidence-based reason", "string", false}},
@@ -144,7 +144,7 @@ std::vector<std::string> RegisterActionTools()
     RegisterOne("get_param_limits", "Return min/max/step for writable params", {}, &CallGetParamLimits);
 
     RegisterOne("evaluate_theta_on_history",
-        "Score current θ on historical leave_episodes (counterfactual push/lead). Higher score is better.",
+        "Score current θ by replaying LeaveHsmm on stored leave-window observations (can evaluate w_*). Higher score is better.",
         {{"since_ms", "optional epoch ms lower bound", "integer", false},
             {"limit", "max episodes, default 30", "integer", false}},
         &CallEvaluateThetaOnHistory);
@@ -160,11 +160,8 @@ std::vector<std::string> RegisterActionTools()
     RegisterOne("get_policy_catalog", "Return allowed strategy templates and bounds", {}, &CallGetPolicyCatalog);
     RegisterOne("begin_policy_trial", "Snapshot active strategy before counterfactual experiment", {}, &CallBeginPolicyTrial);
     RegisterOne("apply_policy_candidate", "Apply a validated strategy template candidate",
-        {{"template_name", "confirmed_leaving|wifi_first_preleave|radio_motion_preleave|conservative_preleave", "string", true},
-            {"probability_threshold", "optional bounded override", "number", false},
-            {"min_duration_s", "optional bounded override", "number", false},
-            {"min_independent_evidence", "optional bounded override", "integer", false},
-            {"gps_mode", "IGNORE|OPTIONAL|REQUIRED", "string", false}}, &CallApplyPolicy);
+        {{"template_name", "confirmed_leaving", "string", true},
+            {"probability_threshold", "optional bounded override", "number", false}}, &CallApplyPolicy);
     RegisterOne("evaluate_policy_on_history", "Counterfactual replay against semantic policy_history.jsonl",
         {{"limit", "max semantic samples", "integer", false}}, &CallEvaluatePolicy);
     RegisterOne("revert_policy_trial", "Restore policy snapshot", {}, &CallRevertPolicy);

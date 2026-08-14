@@ -25,6 +25,14 @@ struct RawGpsLocation {
     int32_t source_type = 0;
 };
 
+/**
+ * Location::GetLocationSourceType() near the company campus:
+ * GNSS (1) means already outside the gate; network/indoor (2) means still inside.
+ * GPS r_in/r_out is only a vicinity hint for this gate, not the leave decision.
+ */
+constexpr int32_t kLocationSourceOutdoorGnss = 1;
+constexpr int32_t kLocationSourceIndoorNetwork = 2;
+
 enum class MotionState {
     kUnknown = 0,
     kWalking = 1,

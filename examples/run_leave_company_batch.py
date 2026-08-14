@@ -241,10 +241,13 @@ def replay_session(
     company_radio_fingerprint: Optional[Path] = None,
     tick_min_s: float = 8.0,
     settle_s: float = 1200.0,
+    outdoor_source_types: Optional[set] = None,
 ) -> Dict[str, Any]:
     out_dir.mkdir(parents=True, exist_ok=True)
     session = out_dir / "session"
     session.mkdir(exist_ok=True)
+    if outdoor_source_types is None:
+        outdoor_source_types = {1}
 
     raw = load_location_csv_dir(str(raw_dir), source_crs="GCJ02")
     has_sensor = (sensor_dir / "sensor_events.csv").exists()
@@ -434,6 +437,7 @@ def replay_session(
                 + "\n"
             )
             t_star = None
+            truth_source = ""
             last_rel = push["company_relation"] if not use_home else push["home_relation"]
             last_dist = push["dist_company_m"] if not use_home else push["dist_home_m"]
             for r in sorted_dec:
@@ -463,18 +467,24 @@ def replay_session(
                 if rel_now != "UNKNOWN":
                     last_rel = rel_now
                     last_dist = dist_now
-                if t_star is None and rel_now == "OUTSIDE":
+                outdoor_fix = r.get("gps_source_type") in outdoor_source_types
+                if use_home:
+                    if t_star is None and rel_now == "OUTSIDE":
+                        t_star = r["t_ms"]
+                        truth_source = "ANCHOR_OUTSIDE"
+                elif t_star is None and outdoor_fix:
                     t_star = r["t_ms"]
+                    truth_source = "OUTDOOR_GPS"
             settle_t = t_push + int(settle_s * 1000)
             if t_star is not None:
                 label = "CONFIRMED_LEAVE"
                 t_label = t_star
-            elif last_rel == "INSIDE":
+            else:
+                # No outdoor source_type=1 (company) / no fence OUTSIDE (home) → not a leave.
                 label = "FALSE_PUSH"
                 t_label = min(settle_t, sorted_dec[-1]["t_ms"])
-            else:
-                label = "UNKNOWN"
-                t_label = min(settle_t, sorted_dec[-1]["t_ms"])
+                if not use_home:
+                    truth_source = "NO_SOURCE_TYPE_OUTDOOR"
             lead_s = (t_star - t_push) / 1000.0 if t_star is not None and t_star >= t_push else None
             lab = {
                 "type": "label",
@@ -484,10 +494,10 @@ def replay_session(
                 "anchor_relation": last_rel,
                 "dist_m": last_dist if last_dist is not None else -1,
                 "t_star_ms": t_star,
+                "truth_source": truth_source,
                 "lead_s": lead_s,
                 "side": "home" if use_home else "company",
-            }
-            labels.append(lab)
+            }            labels.append(lab)
             ep.write(json.dumps(lab, ensure_ascii=False) + "\n")
 
         # Missed leave: GT leave with no company push in lookback
@@ -659,7 +669,7 @@ def evaluate_batch(summaries: List[Dict[str, Any]], theta: Dict[str, Any]) -> Di
         "lead_too_early": too_early,
         "lead_in_window": in_win,
         "mean_lead_s": round(sum(leads) / len(leads), 1) if leads else None,
-        "theta": {k: theta[k] for k in ("enter_leave", "min_evidence", "arm_delay_s", "weekday_leave_company_hour", "leave_window_min", "w_time", "w_walk", "w_geo")},
+        "theta": {k: theta[k] for k in ("enter_leave", "min_evidence", "arm_delay_s", "weekday_leave_company_hour", "leave_window_min", "w_time", "w_walk", "w_geo", "w_wifi", "w_cell", "w_baro")},
     }
 
 

@@ -6,6 +6,7 @@
 #include "commute_sa/product_store.h"
 
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <cmath>
 #include <cstdio>
@@ -46,6 +47,13 @@ std::string Esc(const std::string &s)
         out.push_back(c);
     }
     return out;
+}
+
+std::string Lower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
 }
 
 bool ExtractInt64(const std::string &json, const char *key, int64_t *out)
@@ -1249,6 +1257,18 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         softCompany.size() >= softHome.size() ? softCompany : softHome;
     const char *softSide = softCompany.size() >= softHome.size() ? "company" : "home";
 
+    // Cross-session company profile (same source SceneEngine uses when present).
+    // Prefer it over session dwell soft so detach_hint aligns with obs_wifi_detach.
+    const std::string fpJson = ReadTextFile(root + "/company_radio_fingerprint.json");
+    std::unordered_set<std::string> fingerprint;
+    for (const auto &b : ExtractSoftBssids(fpJson, "company")) {
+        fingerprint.insert(Lower(b));
+    }
+    const bool useSiteFp = fingerprint.size() >= 2;
+    const auto &wifiRef = useSiteFp ? fingerprint : soft;
+    const char *wifiRefSide = useSiteFp ? "company" : softSide;
+    const char *wifiRefSource = useSiteFp ? "company_fingerprint" : "radio_soft";
+
     std::map<int64_t, WifiScanBucket> wifi;
     std::vector<CellPoint> cells;
     std::vector<GpsPointLite> gps;
@@ -1261,6 +1281,26 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
     AnchorSet anchors = DefaultAnchors();
     LoadAnchorsFromFile(root + "/anchors.json", &anchors, nullptr);
 
+    auto siteDetach = [&](const std::unordered_set<std::string> &strong, int *matchesOut,
+                          double *coverageOut) -> bool {
+        int matches = 0;
+        for (const auto &bssid : strong) {
+            if (fingerprint.count(Lower(bssid)) != 0) {
+                ++matches;
+            }
+        }
+        const double coverage =
+            strong.empty() ? 0.0 : static_cast<double>(matches) / static_cast<double>(strong.size());
+        if (matchesOut != nullptr) {
+            *matchesOut = matches;
+        }
+        if (coverageOut != nullptr) {
+            *coverageOut = coverage;
+        }
+        // Mirrors python RadioEvidence._detach_site_wifi / C++ site path.
+        return matches < 2 || coverage < 0.35;
+    };
+
     auto wifiSnap = [&](int64_t t, const char *label) -> std::string {
         const WifiScanBucket *b = NearestBucket(wifi, t, 90000);
         std::ostringstream o;
@@ -1270,10 +1310,21 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
             return o.str();
         }
         const auto strong = StrongFromBucket(*b, -85);
-        const double jac = soft.empty() ? -1.0 : JaccardSets(strong, soft);
+        o << ",\"available\":true,\"t_ms\":" << b->t_ms << ",\"n_strong\":" << strong.size()
+          << ",\"ref_source\":\"" << wifiRefSource << "\"";
+        if (useSiteFp) {
+            int matches = 0;
+            double coverage = 0.0;
+            const bool detach = siteDetach(strong, &matches, &coverage);
+            o << ",\"site_matches\":" << matches << ",\"site_coverage\":" << coverage
+              << ",\"jaccard_to_soft\":-1,\"soft_missing_or_weak\":0,\"soft_checked\":0"
+              << ",\"detach_hint\":" << (detach ? "true" : "false") << "}";
+            return o.str();
+        }
+        const double jac = wifiRef.empty() ? -1.0 : JaccardSets(strong, wifiRef);
         int overlapDrop = 0;
         int overlapN = 0;
-        for (const auto &bssid : soft) {
+        for (const auto &bssid : wifiRef) {
             auto it = b->rssi.find(bssid);
             if (it == b->rssi.end()) {
                 ++overlapDrop;
@@ -1285,26 +1336,43 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
                 }
             }
         }
-        o << ",\"available\":true,\"t_ms\":" << b->t_ms << ",\"n_strong\":" << strong.size()
-          << ",\"jaccard_to_soft\":" << (jac < 0 ? -1.0 : jac) << ",\"soft_missing_or_weak\":" << overlapDrop
+        o << ",\"jaccard_to_soft\":" << (jac < 0 ? -1.0 : jac) << ",\"soft_missing_or_weak\":" << overlapDrop
           << ",\"soft_checked\":" << overlapN << ",\"detach_hint\":"
           << ((jac >= 0 && jac < 0.30) || (overlapN >= 2 && overlapDrop * 2 >= overlapN) ? "true" : "false") << "}";
         return o.str();
     };
 
-    // WiFi events: jaccard cross below 0.3
+    // WiFi events: site detach rising-edge, or soft jaccard cross below 0.3
     std::ostringstream wifiEvents;
     wifiEvents << "[";
     bool firstEv = true;
     double prevJac = 1.0;
+    bool prevSiteDetach = false;
     bool havePrev = false;
     int scanN = 0;
     for (const auto &kv : wifi) {
         ++scanN;
-        if (soft.empty()) {
+        if (wifiRef.empty()) {
             continue;
         }
-        const double jac = JaccardSets(StrongFromBucket(kv.second, -85), soft);
+        const auto strong = StrongFromBucket(kv.second, -85);
+        if (useSiteFp) {
+            int matches = 0;
+            double coverage = 0.0;
+            const bool detach = siteDetach(strong, &matches, &coverage);
+            if (havePrev && !prevSiteDetach && detach) {
+                if (!firstEv) {
+                    wifiEvents << ",";
+                }
+                firstEv = false;
+                wifiEvents << "{\"t_ms\":" << kv.first << ",\"type\":\"site_detach_on\",\"site_matches\":" << matches
+                           << ",\"site_coverage\":" << coverage << "}";
+            }
+            prevSiteDetach = detach;
+            havePrev = true;
+            continue;
+        }
+        const double jac = JaccardSets(strong, wifiRef);
         if (havePrev && prevJac >= 0.30 && jac < 0.30) {
             if (!firstEv) {
                 wifiEvents << ",";
@@ -1317,7 +1385,6 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         havePrev = true;
     }
     wifiEvents << "]";
-
     // Cell: dominant id pre/at/post + changes
     auto cellDom = [&](int64_t lo, int64_t hi) -> std::pair<int64_t, int> {
         std::unordered_map<int64_t, int> cnt;
@@ -1443,8 +1510,10 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
     oss << "{\"ok\":true,\"t_push_ms\":" << tCenter << ",\"session_dir\":\"" << Esc(sessionDir) << "\""
         << ",\"window_s\":{\"before\":" << beforeS << ",\"after\":" << afterS << "}"
         << ",\"wifi\":{"
-        << "\"soft_side\":\"" << softSide << "\",\"soft_n\":" << soft.size() << ",\"soft_ready\":"
-        << (soft.size() >= 2 ? "true" : "false") << ",\"n_scans\":" << scanN << ",\"snapshots\":["
+        << "\"soft_side\":\"" << wifiRefSide << "\",\"soft_n\":" << soft.size() << ",\"soft_ready\":"
+        << (soft.size() >= 2 ? "true" : "false") << ",\"fingerprint_n\":" << fingerprint.size()
+        << ",\"fingerprint_ready\":" << (useSiteFp ? "true" : "false") << ",\"wifi_ref_source\":\""
+        << wifiRefSource << "\",\"n_scans\":" << scanN << ",\"snapshots\":["
         << wifiSnap(tCenter - 180000, "pre_3min") << "," << wifiSnap(tCenter, "at_push") << ","
         << wifiSnap(tCenter + 300000, "post_5min") << "],\"events\":" << wifiEvents.str() << "}"
         << ",\"cell\":{"
@@ -1466,7 +1535,8 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         << ",\"mag\":{\"n_samples\":" << magN << ",\"mag_ema_pre\":" << magEarly << ",\"mag_ema_post\":" << magLate
         << ",\"delta\":" << ((magEarly >= 0 && magLate >= 0) ? (magLate - magEarly) : 0.0) << "}"
         << ",\"live_radio_debug\":" << liveRadio << ",\"live_pdr_debug\":" << livePdr
-        << ",\"notes\":\"Semantic summary for θ personalizer; raw CSV windows are not agent tools.\"}";
+        << ",\"notes\":\"Semantic summary for θ personalizer; wifi_ref_source=company_fingerprint "
+           "uses site coverage (same as HSMM) when fingerprint is present; else radio_soft Jaccard.\"}";
     return oss.str();
 }
 

@@ -1,9 +1,11 @@
 #pragma once
 
 #include "commute_sa/pdr_evidence.h"
+#include "commute_sa/baro_evidence.h"
 #include "commute_sa/radio_evidence.h"
 #include "commute_sa/scene_engine.h"
 
+#include <cstdint>
 #include <mutex>
 #include <string>
 
@@ -26,6 +28,7 @@ public:
 
     /** Feed PDR local planar meters (thread-safe vs OnTick). */
     void OnPdrPoint(int64_t tMs, double xM, double yM);
+    void OnBaro(int64_t tMs, double pressureHpa);
 
     TickDecision OnTick(int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid,
         int32_t gpsSourceType = 0);
@@ -56,6 +59,7 @@ private:
     SceneEngine *engine_ = nullptr;
     RadioEvidence radio_;
     PdrEvidence pdr_;
+    BaroEvidence baro_;
     std::string anchorsPath_;
     std::string thetaPath_;
 };

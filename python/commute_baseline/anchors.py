@@ -18,7 +18,7 @@ class GpsPoint:
     lat: float  # WGS84
     lon: float
     acc: float
-    source_type: int = 1
+    source_type: int = 0
 
 
 @dataclass

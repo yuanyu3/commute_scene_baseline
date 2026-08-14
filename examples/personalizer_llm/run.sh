@@ -18,12 +18,25 @@ ENV_FILE="$ROOT/sa_service/etc/agent.env"
 DATA="$EXAMPLE/run_data"
 EXTRA_ARGS=()
 POS=()
-for a in "$@"; do
+i=1
+args=("$@")
+while [[ $i -le $# ]]; do
+  a="${args[$((i-1))]}"
   case "$a" in
     --debug|-d) EXTRA_ARGS+=(--debug) ;;
     --no-fixture) EXTRA_ARGS+=(--no-fixture) ;;
+    --max-turn)
+      EXTRA_ARGS+=(--max-turn)
+      i=$((i+1))
+      if [[ $i -gt $# ]]; then
+        echo "ERROR: --max-turn needs a value" >&2
+        exit 1
+      fi
+      EXTRA_ARGS+=("${args[$((i-1))]}")
+      ;;
     *) POS+=("$a") ;;
   esac
+  i=$((i+1))
 done
 if [[ ${#POS[@]} -ge 1 ]]; then ENV_FILE="${POS[0]}"; fi
 if [[ ${#POS[@]} -ge 2 ]]; then DATA="${POS[1]}"; fi

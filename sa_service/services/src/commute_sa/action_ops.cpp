@@ -1,7 +1,6 @@
 #include "commute_sa/action_ops.h"
 
 #include "commute_sa/anchor_reestimate.h"
-#include "commute_sa/anchors.h"
 #include "commute_sa/baseline_runtime.h"
 #include "commute_sa/evidence_query.h"
 #include "commute_sa/product_store.h"
@@ -191,6 +190,14 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
         *lim = {0.05, 0.4, 0.05};
         return true;
     }
+    if (param == "w_pdr") {
+        *lim = {0.0, 0.4, 0.05};
+        return true;
+    }
+    if (param == "w_geo") {
+        *lim = {0.05, 0.4, 0.05};
+        return true;
+    }
     if (param == "w_wifi") {
         *lim = {0.0, 0.4, 0.02};
         return true;
@@ -207,8 +214,12 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
         *lim = {0.05, 0.4, 0.05};
         return true;
     }
-    if (param == "min_evidence") {
-        *lim = {1.0, 5.0, 1.0};
+    if (param == "w_time") {
+        *lim = {0.05, 0.35, 0.05};
+        return true;
+    }
+    if (param == "w_baro") {
+        *lim = {0.0, 0.4, 0.05};
         return true;
     }
     if (param == "weekday_leave_home_hour") {
@@ -229,14 +240,6 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
     }
     if (param == "lead_max_s") {
         *lim = {60.0, 600.0, 30.0};
-        return true;
-    }
-    if (param == "home.r_in_m") {
-        *lim = {40.0, 150.0, 5.0};
-        return true;
-    }
-    if (param == "company.r_in_m") {
-        *lim = {40.0, 200.0, 5.0};
         return true;
     }
     return false;
@@ -270,6 +273,14 @@ bool ReadParamValue(const Theta &t, const std::string &param, double *out)
         *out = t.w_walk;
         return true;
     }
+    if (param == "w_pdr") {
+        *out = t.w_pdr;
+        return true;
+    }
+    if (param == "w_geo") {
+        *out = t.w_geo;
+        return true;
+    }
     if (param == "w_wifi") {
         *out = t.w_wifi;
         return true;
@@ -286,8 +297,12 @@ bool ReadParamValue(const Theta &t, const std::string &param, double *out)
         *out = t.w_wifi + t.w_cell + t.w_ble;
         return true;
     }
-    if (param == "min_evidence") {
-        *out = static_cast<double>(t.min_evidence);
+    if (param == "w_time") {
+        *out = t.w_time;
+        return true;
+    }
+    if (param == "w_baro") {
+        *out = t.w_baro;
         return true;
     }
     if (param == "weekday_leave_home_hour") {
@@ -359,59 +374,19 @@ std::string RootDir()
     return "/data/service/el1/public/commuteagentservice";
 }
 
-bool ApplyFenceDelta(const std::string &param, double delta, const std::string &reason, double *oldV, double *newV,
-    std::string *err)
-{
-    ParamLimit lim {};
-    if (!LookupLimit(param, &lim)) {
-        if (err) {
-            *err = "unknown fence param";
-        }
-        return false;
-    }
-    delta = ClipDeltaToStep(delta, lim.step);
-    const std::string root = RootDir();
-    AnchorSet anchors = DefaultAnchors();
-    LoadAnchorsFromFile(root + "/anchors.json", &anchors, nullptr);
-    if (BaselineRuntime::GetInstance().Enabled() && BaselineRuntime::GetInstance().Engine() != nullptr) {
-        anchors = BaselineRuntime::GetInstance().Engine()->GetAnchors();
-    }
-    double *target = nullptr;
-    if (param == "home.r_in_m") {
-        target = &anchors.home.r_in_m;
-    } else if (param == "company.r_in_m") {
-        target = &anchors.company.r_in_m;
-    } else {
-        return false;
-    }
-    *oldV = *target;
-    *target = std::max(lim.minV, std::min(lim.maxV, *target + delta));
-    *newV = *target;
-    if (BaselineRuntime::GetInstance().Enabled() && BaselineRuntime::GetInstance().Engine() != nullptr) {
-        BaselineRuntime::GetInstance().Engine()->SetAnchors(anchors);
-    }
-    ProductStore::GetInstance().AppendParamChange(NowMs(), param, *oldV, *newV, reason);
-    if (!ProductStore::GetInstance().SaveAnchors(anchors)) {
-        if (err) {
-            *err = "SaveAnchors failed";
-        }
-        return false;
-    }
-    return true;
-}
-
 }  // namespace
 
 std::string GetParamLimitsJson()
 {
     return R"({"enter_leave":{"min":0.4,"max":0.85,"step":0.03},"exit_leave":{"min":0.2,"max":0.7,"step":0.03},)"
-           R"("w_walk":{"min":0.05,"max":0.4,"step":0.05},"w_wifi":{"min":0,"max":0.4,"step":0.02},)"
+           R"("w_walk":{"min":0.05,"max":0.4,"step":0.05},"w_pdr":{"min":0,"max":0.4,"step":0.05},)"
+           R"("w_geo":{"min":0.05,"max":0.4,"step":0.05},"w_wifi":{"min":0,"max":0.4,"step":0.02},)"
            R"("w_cell":{"min":0,"max":0.3,"step":0.02},"w_ble":{"min":0,"max":0.2,"step":0.02},)"
            R"("w_radio":{"min":0.05,"max":0.4,"step":0.05,"note":"legacy; prefer w_wifi/w_cell/w_ble"},)"
-           R"("min_evidence":{"min":1,"max":5,"step":1},"weekday_leave_home_hour":{"min":5,"max":11,"step":0.083},)"
+           R"("w_time":{"min":0.05,"max":0.35,"step":0.05},"w_baro":{"min":0,"max":0.4,"step":0.05},)"
+           R"("weekday_leave_home_hour":{"min":5,"max":11,"step":0.083},)"
            R"("weekday_leave_company_hour":{"min":16,"max":21,"step":0.083},"arm_delay_s":{"min":0,"max":90,"step":5},)"
-           R"("lead_min_s":{"min":30,"max":180,"step":15},"lead_max_s":{"min":60,"max":600,"step":30},)"
-           R"("home.r_in_m":{"min":40,"max":150,"step":5},"company.r_in_m":{"min":40,"max":200,"step":5}})";
+           R"("lead_min_s":{"min":30,"max":180,"step":15},"lead_max_s":{"min":60,"max":600,"step":30}})";
 }
 
 std::string ApplyThetaDeltaAction(const std::string &paramsJson)
@@ -444,18 +419,6 @@ std::string ApplyThetaDeltaAction(const std::string &paramsJson)
 
     double oldV = 0.0;
     double newV = 0.0;
-    if (param == "home.r_in_m" || param == "company.r_in_m") {
-        std::string err;
-        if (!ApplyFenceDelta(param, delta, reason, &oldV, &newV, &err)) {
-            return "{\"ok\":false,\"error\":\"" + Esc(err.empty() ? "fence apply failed" : err) + "\"}";
-        }
-        std::ostringstream oss;
-        oss << "{\"ok\":true,\"param\":\"" << Esc(param) << "\",\"delta_requested\":" << rawDelta
-            << ",\"delta_applied\":" << delta << ",\"old\":" << oldV << ",\"new\":" << newV
-            << ",\"reason\":\"" << Esc(reason) << "\"}";
-        return oss.str();
-    }
-
     std::string err;
     if (BaselineRuntime::GetInstance().Enabled() && BaselineRuntime::GetInstance().Engine() != nullptr) {
         ReadParamValue(BaselineRuntime::GetInstance().Engine()->GetTheta(), param, &oldV);
@@ -614,6 +577,10 @@ std::string ApplyPolicyCandidateAction(const std::string &paramsJson)
     if (!ExtractString(paramsJson, "template_name", &name)) {
         return "{\"ok\":false,\"error\":\"missing template_name\"}";
     }
+    if (name != "confirmed_leaving") {
+        return "{\"ok\":false,\"error\":\"only confirmed_leaving is in the catalog; live engine ignores policy templates for push\",\"catalog\":" +
+            PersonalizationPolicyCatalogJson() + "}";
+    }
     PersonalizationPolicy candidate;
     std::string err;
     if (!BuildPolicyTemplate(name, &candidate, &err)) {
@@ -653,7 +620,7 @@ std::string EvaluatePolicyOnHistoryAction(const std::string &paramsJson)
     const std::string path = RootDir() + "/policy_history.jsonl";
     std::ifstream in(path);
     if (!in) {
-        return "{\"ok\":false,\"error\":\"policy_history.jsonl missing\",\"required_fields\":[\"label\",\"preleave_probability\",\"leaving_probability\",\"hits\",\"walking\",\"wifi_detach\",\"cell_leave\",\"ble_detach\",\"pdr_net_out_m\",\"evidence_duration_s\"]}";
+        return "{\"ok\":false,\"error\":\"policy_history.jsonl missing\",\"required_fields\":[\"label\",\"preleave_probability\",\"leaving_probability\",\"hits\",\"walking\",\"wifi_detach\",\"cell_leave\",\"ble_detach\",\"pdr_net_out_m\",\"baro_available\",\"baro_baseline_ready\",\"baro_descent_m\",\"baro_lower_platform\",\"evidence_duration_s\"]}";
     }
     struct EvalRow { PolicyEvidence evidence; double explicit_duration_s = -1.0; double lead_s = -1.0; };
     struct EvalEpisode { std::string label; std::vector<EvalRow> rows; };
@@ -676,6 +643,10 @@ std::string EvaluatePolicyOnHistoryAction(const std::string &paramsJson)
         ExtractBool(line, "ble_detach", &row.evidence.ble_detach);
         ExtractBool(line, "geo_outbound", &row.evidence.geo_outbound);
         ExtractBool(line, "has_usable_gps", &row.evidence.has_usable_gps);
+        ExtractBool(line, "baro_available", &row.evidence.baro_available);
+        ExtractBool(line, "baro_baseline_ready", &row.evidence.baro_baseline_ready);
+        ExtractNumber(line, "baro_descent_m", &row.evidence.baro_descent_m);
+        ExtractBool(line, "baro_lower_platform", &row.evidence.baro_lower_platform);
         ExtractNumber(line, "evidence_duration_s", &row.explicit_duration_s);
         ExtractNumber(line, "lead_s", &row.lead_s);
         std::string side = "unknown";

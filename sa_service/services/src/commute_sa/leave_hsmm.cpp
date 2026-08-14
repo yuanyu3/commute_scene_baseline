@@ -121,19 +121,21 @@ double LeaveHsmm::ExitProbability(LeavePhase phase, int ageS, int dtS, const Lea
 std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
     const LeaveObservation &observation, const LeaveHsmmConfig &config) const
 {
-    const std::array<double, 7> x {{observation.walking, observation.pdr_outbound, observation.geo_outbound,
-        observation.wifi_detach, observation.cell_detach, observation.ble_detach, observation.time_prior}};
-    const std::array<std::array<double, 7>, kPhaseCount> expected {{
-        {{0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25}},
-        {{0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62}},
-        {{0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72}},
-        {{0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45}},
+    const std::array<double, 9> x {{observation.walking, observation.pdr_outbound, observation.geo_outbound,
+        observation.wifi_detach, observation.cell_detach, observation.ble_detach, observation.time_prior,
+        observation.baro_descending, observation.baro_lower_platform}};
+    const std::array<std::array<double, 9>, kPhaseCount> expected {{
+        {{0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25, 0.03, 0.02}},
+        {{0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62, 0.30, 0.08}},
+        {{0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72, 0.80, 0.72}},
+        {{0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08, 0.82}},
     }};
 
     std::array<double, kPhaseCount> logLikelihood {};
     for (int state = 0; state < kPhaseCount; ++state) {
         double value = 0.0;
         for (size_t feature = 0; feature < x.size(); ++feature) {
+            if (feature >= 7 && !observation.baro_available) continue;
             const double reliability = std::max(0.0, config.reliability[feature]);
             value += reliability * FractionalBernoulliLogLikelihood(x[feature], expected[state][feature]);
         }
@@ -141,7 +143,13 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
         if (observation.relation_known) {
             double relationExpected = 0.25;
             if (observation.inside) {
-                const std::array<double, kPhaseCount> p {{0.88, 0.62, 0.24, 0.02}};
+                const bool strongOutbound = observation.walking >= 0.5 &&
+                    (observation.wifi_detach + observation.pdr_outbound + observation.geo_outbound) >= 0.8;
+                // Predictive leave happens while still INSIDE (company source_type=2).
+                // Strong motion/radio may override the default "desk dwell" prior.
+                const std::array<double, kPhaseCount> p = strongOutbound
+                    ? std::array<double, kPhaseCount>{{0.28, 0.42, 0.68, 0.02}}
+                    : std::array<double, kPhaseCount>{{0.88, 0.62, 0.24, 0.02}};
                 relationExpected = p[state];
             } else if (observation.near) {
                 const std::array<double, kPhaseCount> p {{0.18, 0.48, 0.72, 0.12}};

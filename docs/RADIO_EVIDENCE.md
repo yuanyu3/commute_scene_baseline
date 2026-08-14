@@ -10,13 +10,12 @@
 s_walk, s_pdr, s_geo, s_wifi, s_cell, s_ble, s_time
 observation_likelihood = P(s_* | hidden_state)
 p_leaving = HSMM(observation_likelihood, duration, previous_posterior)
-hits = count(s_i ≥ thr_i)  # 仅作推送安全门控
+hits = count(s_i ≥ thr_i)  # 仅诊断 uncertainty，不再作为推送硬门控
 
 leave_cand =
   INSIDE|NEAR
   AND NOT approaching / wifi_attach
   AND p_leaving ≥ enter_leave
-  AND hits  ≥ min_evidence
   AND arm_ok
 ```
 
@@ -29,8 +28,9 @@ leave_cand =
 | cell | 切站=1 | `w_cell` 0.08 | `thr_cell` 0.5 |
 | ble | churn=1 | `w_ble` 0.02 | `thr_ble` 0.5 |
 | time | 离开时刻 prior | `w_time` 0.20 | `thr_time` 0.5 |
+| baro | 气压下行 / 更低平台（HSMM 两项共用） | `w_baro` 0.20 | （由 HSMM 发射项使用） |
 
-`w_*` 现在控制观测似然的可靠度，不再直接求和。可调 `enter_leave`、`min_evidence`、各 `w_*` / `thr_*`（见 `config/theta_default.json`）。
+`w_*` 现在控制观测似然的可靠度，不再直接求和。可调 `enter_leave` 与各 `w_*`（见 `config/theta_default.json`）。`min_evidence` 不再作为推送硬门控。
 
 **不是** `rising OR wifi_detach` 这类布尔 OR 门控，也不是单 tick 加权总分。
 

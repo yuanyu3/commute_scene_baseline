@@ -1,5 +1,8 @@
 #pragma once
 
+#include "commute_sa/leave_hsmm.h"
+
+#include <algorithm>
 #include <string>
 
 namespace commute_sa {
@@ -55,6 +58,13 @@ struct Theta {
     double max_gps_acc_m = 80.0;
     double allow_network_dwell_acc_m = 120.0;
     /**
+     * Company vicinity (metres) in which source_type 2/1 overrides the GPS fence.
+     * r_in/r_out remain auxiliary; indoor network fixes are often hundreds of metres off.
+     */
+    double company_source_vicinity_m = 400.0;
+    double w_baro = 0.20;
+    double baro_min_descent_m = 12.0;
+    /**
      * Which leave flow is active: "company" | "home" | "both".
      * Training near office → "company" (disables DEPARTURE_NOTIFICATION / LEAVING_HOME).
      */
@@ -74,6 +84,23 @@ inline bool FocusAllowsCompany(const std::string &focus)
 inline Theta DefaultTheta()
 {
     return Theta {};
+}
+
+/** Map θ observation weights onto HSMM emission reliability. */
+inline LeaveHsmmConfig HsmmConfigFromTheta(const Theta &theta)
+{
+    LeaveHsmmConfig config;
+    config.preleave_min_s = std::max(0.0, theta.hsmm_preleave_min_s);
+    config.preleave_mean_s = std::max(config.preleave_min_s, theta.hsmm_preleave_mean_s);
+    config.preleave_max_s = std::max(config.preleave_mean_s, theta.hsmm_preleave_max_s);
+    config.leaving_min_s = std::max(0.0, theta.hsmm_leaving_min_s);
+    config.leaving_mean_s = std::max(config.leaving_min_s, theta.hsmm_leaving_mean_s);
+    config.leaving_max_s = std::max(config.leaving_mean_s, theta.hsmm_leaving_max_s);
+    config.max_gap_s = std::max(1.0, theta.hsmm_max_gap_s);
+    config.reliability = {{0.25 + 3.0 * theta.w_walk, 0.25 + 3.0 * theta.w_pdr, 0.25 + 3.0 * theta.w_geo,
+        0.25 + 3.0 * theta.w_wifi, 0.25 + 3.0 * theta.w_cell, 0.25 + 3.0 * theta.w_ble, 0.25 + 3.0 * theta.w_time,
+        0.25 + 3.0 * theta.w_baro, 0.25 + 3.0 * theta.w_baro}};
+    return config;
 }
 
 bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err = nullptr);

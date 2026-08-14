@@ -166,6 +166,25 @@ int main()
         return 1;
     }
 
+    // Long-lived Top-K site profile is independent from the expiring dwell set.
+    RadioEvidence radio7;
+    radio7.SetConfig(cfg);
+    const std::string siteJson =
+        "{\"company\":{\"wifi\":{\"bssids\":[\"ee:01\",\"ee:02\",\"ee:03\"]},"
+        "\"cell\":{\"cell_ids\":[3003]}}}";
+    if (!radio7.ImportCompanySiteJson(siteJson)) {
+        std::cerr << "FAIL: ImportCompanySiteJson\n";
+        return 1;
+    }
+    radio7.OnWifiScan(MakeScan(t0, {{"EE:01", -50}, {"ee:02", -55}, {"other", -60}}));
+    radio7.OnCellSample({t0, 3003, -80});
+    auto site = radio7.Evaluate(t0);
+    if (site.company_site_wifi_matches != 2 || site.company_site_wifi_coverage < 0.50 ||
+        !site.company_site_cell_match || site.wifi_company_detach || site.cell_leave_company) {
+        std::cerr << "FAIL: persisted company site fingerprint match\n";
+        return 1;
+    }
+
     std::cout << "ok\n";
     return 0;
 }

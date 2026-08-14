@@ -31,6 +31,7 @@ add_library(commute_sa_host STATIC
   "${COMMUTE_SA_ROOT}/src/baseline_runtime.cpp"
   "${COMMUTE_SA_ROOT}/src/radio_evidence.cpp"
   "${COMMUTE_SA_ROOT}/src/pdr_evidence.cpp"
+  "${COMMUTE_SA_ROOT}/src/baro_evidence.cpp"
   "${COMMUTE_SA_ROOT}/src/personalization.cpp"
   "${COMMUTE_SA_ROOT}/src/personalization_policy.cpp"
   "${COMMUTE_SA_ROOT}/src/product_store.cpp"

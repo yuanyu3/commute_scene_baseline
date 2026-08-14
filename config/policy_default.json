@@ -2,14 +2,15 @@
   "schema_version": 1,
   "revision": 0,
   "enabled": true,
-  "template_name": "wifi_first_preleave",
-  "trigger_phase": "PRE_LEAVE",
-  "probability_threshold": 0.50,
-  "min_duration_s": 5,
+  "template_name": "confirmed_leaving",
+  "trigger_phase": "LEAVING",
+  "probability_threshold": 0.58,
+  "min_duration_s": 0,
   "min_independent_evidence": 2,
-  "require_walking": true,
-  "require_wifi_detach": true,
-  "require_radio": true,
+  "require_walking": false,
+  "require_wifi_detach": false,
+  "require_radio": false,
   "allow_cell_pdr_pair": true,
-  "gps_mode": "IGNORE"
+  "gps_mode": "OPTIONAL",
+  "baro_mode": "OFF"
 }

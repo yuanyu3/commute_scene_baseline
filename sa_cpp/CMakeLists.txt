@@ -15,6 +15,7 @@ add_library(commute_sa
     src/baseline_runtime.cpp
     src/radio_evidence.cpp
     src/pdr_evidence.cpp
+    src/baro_evidence.cpp
     src/anchor_reestimate.cpp
     src/personalization.cpp
     src/personalization_policy.cpp
@@ -46,6 +47,9 @@ if(COMMUTE_SA_BUILD_SMOKE)
 
     add_executable(commute_pdr_smoke tests/smoke_pdr_evidence.cpp)
     target_link_libraries(commute_pdr_smoke PRIVATE commute_sa)
+
+    add_executable(commute_baro_smoke tests/smoke_baro_evidence.cpp)
+    target_link_libraries(commute_baro_smoke PRIVATE commute_sa)
 
     add_executable(commute_gapfill_smoke tests/smoke_gapfill.cpp)
     target_link_libraries(commute_gapfill_smoke PRIVATE commute_sa)

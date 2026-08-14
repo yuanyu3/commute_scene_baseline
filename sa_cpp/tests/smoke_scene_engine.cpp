@@ -1,6 +1,7 @@
 #include "commute_sa/anchors.h"
 #include "commute_sa/baseline_runtime.h"
 #include "commute_sa/scene_engine.h"
+#include "commute_sa/types.h"
 
 #include <cmath>
 #include <iostream>
@@ -76,6 +77,35 @@ int main()
         return 1;
     }
 
+    // Company gate: GPS fence is auxiliary; source_type 2=inside, 2→1=outside the door.
+    SceneEngine srcEngine(anchors, theta);
+    TickFeatures fs;
+    fs.t_ms = 1754388000000LL;
+    fs.has_gps = true;
+    fs.lat = anchors.company.lat + 0.002;  // GPS fence would be OUTSIDE
+    fs.lon = anchors.company.lon;
+    fs.acc = 80.0;
+    fs.gps_source_type = kLocationSourceIndoorNetwork;
+    auto dIn = srcEngine.Step(fs);
+    if (dIn.company_relation != Relation::kInside) {
+        std::cerr << "FAIL: source_type=2 near company must be INSIDE, got "
+                  << RelationToString(dIn.company_relation) << "\n";
+        return 1;
+    }
+    fs.t_ms += 5000;
+    fs.lat = anchors.company.lat;  // GPS fence would still be INSIDE
+    fs.gps_source_type = kLocationSourceOutdoorGnss;
+    auto dGate = srcEngine.Step(fs);
+    if (dGate.company_relation != Relation::kOutside) {
+        std::cerr << "FAIL: source_type 2→1 must be OUTSIDE company gate, got "
+                  << RelationToString(dGate.company_relation) << "\n";
+        return 1;
+    }
+    if (dGate.should_service) {
+        std::cerr << "FAIL: must not push after GNSS confirms outside the gate\n";
+        return 1;
+    }
+
     // Near home with walking must NOT produce DEPARTURE when focus=company.
     SceneEngine eng2(anchors, theta);
     TickFeatures fh = f;
@@ -97,41 +127,51 @@ int main()
         }
     }
 
-    // A validated high-level policy can trigger on PRE_LEAVE using radio+motion
-    // while GPS still places the user inside the company fence.
-    SceneEngine policyEngine(anchors, theta);
-    PersonalizationPolicy policy;
-    BuildPolicyTemplate("wifi_first_preleave", &policy, nullptr);
-    policy.probability_threshold = 0.35;
-    policy.min_duration_s = 0.0;
-    policyEngine.SetPersonalizationPolicy(policy);
+    // Indoor HSMM leave: walking + radio detach at company, source_type=2.
+    // Engine ignores policy templates; push is P(LEAVING) >= enter_leave.
+    SceneEngine hsmmEngine(anchors, theta);
     TickFeatures fp;
     fp.t_ms = f.t_ms + 20000;
     fp.has_gps = true;
     fp.lat = anchors.company.lat;
     fp.lon = anchors.company.lon;
     fp.acc = 20.0;
-    policyEngine.Step(fp);  // establish AT_COMPANY
+    fp.gps_source_type = kLocationSourceIndoorNetwork;
+    hsmmEngine.Step(fp);
     fp.walking = true;
     fp.has_walk_started = true;
     fp.walk_started_at_ms = fp.t_ms - 30000;
     fp.wifi_company_detach = true;
     fp.cell_leave_company = true;
-    fp.pdr_net_out_company_m = 5.0;
+    fp.pdr_net_out_company_m = 20.0;
     fp.wifi_jaccard_company = 0.0;
-    bool policyPushed = false;
-    for (int i = 0; i < 12 && !policyPushed; ++i) {
+    bool hsmmPushed = false;
+    TickDecision lastIndoor;
+    for (int i = 0; i < 36 && !hsmmPushed; ++i) {
         fp.t_ms += 5000;
-        const auto dp = policyEngine.Step(fp);
-        policyPushed = dp.should_service;
-        if (policyPushed && (dp.policy_template != "wifi_first_preleave" ||
-            dp.hsmm_preleave_company < policy.probability_threshold)) {
-            std::cerr << "FAIL: policy push did not come from PRE_LEAVE gate\n";
+        lastIndoor = hsmmEngine.Step(fp);
+        hsmmPushed = lastIndoor.should_service;
+        if (hsmmPushed && (lastIndoor.policy_template != "confirmed_leaving" ||
+            lastIndoor.service_intent != "LEAVE_COMPANY_NOTIFICATION")) {
+            std::cerr << "FAIL: indoor HSMM push must be confirmed_leaving company leave\n";
+            return 1;
+        }
+        if (hsmmPushed && lastIndoor.company_relation == Relation::kOutside) {
+            std::cerr << "FAIL: pushed while OUTSIDE company\n";
             return 1;
         }
     }
-    if (!policyPushed) {
-        std::cerr << "FAIL: wifi_first_preleave policy never pushed\n";
+    if (!hsmmPushed) {
+        std::cerr << "FAIL: indoor HSMM leave never pushed score=" << lastIndoor.score_company
+                  << " rel=" << RelationToString(lastIndoor.company_relation)
+                  << " phase=" << lastIndoor.hsmm_phase_company
+                  << " pre=" << lastIndoor.hsmm_preleave_company
+                  << " hits=" << lastIndoor.hits_company
+                  << " block=" << lastIndoor.push_block_reason
+                  << " obs_in=" << lastIndoor.hsmm_obs_company.inside
+                  << " wifi=" << lastIndoor.hsmm_obs_company.wifi_detach
+                  << " walk=" << lastIndoor.hsmm_obs_company.walking
+                  << " pdr=" << lastIndoor.hsmm_obs_company.pdr_outbound << "\n";
         return 1;
     }
 
@@ -149,6 +189,6 @@ int main()
         return 1;
     }
     std::cout << "home-company sep_m=" << sep << " pushed_in_walk=" << (pushed ? 1 : 0)
-              << " policy_preleave_push=" << (policyPushed ? 1 : 0) << "\nok\n";
+              << " hsmm_indoor_push=" << (hsmmPushed ? 1 : 0) << "\nok\n";
     return 0;
 }

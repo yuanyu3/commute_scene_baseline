@@ -49,6 +49,7 @@ def main() -> int:
         help="build a compact Top-K fingerprint from one known company-dwell session",
     )
     ap.add_argument("--top-k", type=int, default=12, help="number of WiFi APs in a dwell fingerprint")
+    ap.add_argument("--cell-top-k", type=int, default=8, help="maximum recurring company cell IDs")
     ap.add_argument("--include-ble", action="store_true", help="include BLE; disabled by default for site fingerprints")
     args = ap.parse_args()
     if not args.data_root and not args.dwell_session:
@@ -56,7 +57,9 @@ def main() -> int:
 
     company = load_anchors(args.anchors).company
     wifi_sessions: Counter[str] = Counter()
+    wifi_scans: Counter[str] = Counter()
     cell_sessions: Counter[int] = Counter()
+    cell_samples: Counter[int] = Counter()
     ble_sessions: Counter[str] = Counter()
     rssi: dict[str, list[int]] = {}
     accepted = []
@@ -154,7 +157,7 @@ def main() -> int:
             bs = {
                 x.mac.lower() for x in ble
                 if x.mac and x.rssi >= -85 and nearby_inside(x.t_ms, gps, gps_ms, company, gap_ms)
-            }
+            } if args.include_ble else set()
             if not (ws or cs or bs):
                 continue
             accepted.append(session.name)
@@ -164,26 +167,61 @@ def main() -> int:
             for scan in wifi:
                 if not nearby_inside(scan.t_ms, gps, gps_ms, company, gap_ms):
                     continue
+                per_scan = set()
                 for apx in scan.aps:
                     if apx.bssid and apx.rssi >= -85:
-                        rssi.setdefault(apx.bssid.lower(), []).append(apx.rssi)
+                        bssid = apx.bssid.lower()
+                        per_scan.add(bssid)
+                        rssi.setdefault(bssid, []).append(apx.rssi)
+                wifi_scans.update(per_scan)
+            cell_samples.update(
+                x.cell_id for x in cells
+                if x.cell_id and nearby_inside(x.t_ms, gps, gps_ms, company, gap_ms)
+            )
 
     n = len(accepted)
     required = max(args.min_sessions, int(n * args.min_session_ratio + 0.999))
-    keep = lambda counter: sorted(k for k, v in counter.items() if v >= required)
-    wifi = keep(wifi_sessions)
-    cells = keep(cell_sessions)
-    ble = keep(ble_sessions)
+    wifi_candidates = [x for x, count in wifi_sessions.items() if count >= required]
+    wifi = sorted(
+        wifi_candidates,
+        key=lambda x: (wifi_sessions[x], wifi_scans[x], statistics.median(rssi.get(x, [-127])), x),
+        reverse=True,
+    )[: max(1, args.top_k)]
+    cell_candidates = [x for x, count in cell_sessions.items() if count >= required]
+    cells = sorted(
+        cell_candidates,
+        key=lambda x: (cell_sessions[x], cell_samples[x], x),
+        reverse=True,
+    )[: max(1, args.cell_top_k)]
+    ble = sorted(k for k, v in ble_sessions.items() if v >= required)
     med = {b: sorted(v)[len(v) // 2] for b, v in rssi.items() if b in set(wifi)}
     body = {
-        "version": 1,
+        "version": 2,
         "site": "company_001",
+        "mode": "testset_recurring_topk",
         "built_at": datetime.now(timezone.utc).isoformat(),
         "source_sessions": accepted,
-        "selection": {"min_sessions": required, "rssi_min": -85, "nearby_gps_s": args.nearby_gps_s},
+        "selection": {
+            "min_sessions": required,
+            "min_session_ratio": args.min_session_ratio,
+            "top_k": args.top_k,
+            "cell_top_k": args.cell_top_k,
+            "rssi_min": -85,
+            "nearby_gps_s": args.nearby_gps_s,
+            "ble_used": bool(args.include_ble),
+        },
         "company": {
-            "wifi": {"bssids": wifi, "session_counts": {x: wifi_sessions[x] for x in wifi}, "rssi_med": med},
-            "cell": {"cell_ids": cells, "session_counts": {str(x): cell_sessions[x] for x in cells}},
+            "wifi": {
+                "bssids": wifi,
+                "session_counts": {x: wifi_sessions[x] for x in wifi},
+                "scan_counts": {x: wifi_scans[x] for x in wifi},
+                "rssi_med": med,
+            },
+            "cell": {
+                "cell_ids": cells,
+                "session_counts": {str(x): cell_sessions[x] for x in cells},
+                "sample_counts": {str(x): cell_samples[x] for x in cells},
+            },
             "ble": {"macs": ble, "session_counts": {x: ble_sessions[x] for x in ble}},
         },
     }
