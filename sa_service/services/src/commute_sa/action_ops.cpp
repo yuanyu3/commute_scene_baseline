@@ -178,68 +178,71 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
     if (lim == nullptr) {
         return false;
     }
+    // min/max unused for clipping (range unbounded). Only step is enforced per apply.
+    constexpr double kLo = -1.0e100;
+    constexpr double kHi = 1.0e100;
     if (param == "enter_leave") {
-        *lim = {0.4, 0.85, 0.03};
+        *lim = {kLo, kHi, 0.03};
         return true;
     }
     if (param == "exit_leave") {
-        *lim = {0.2, 0.7, 0.03};
+        *lim = {kLo, kHi, 0.03};
         return true;
     }
     if (param == "w_walk") {
-        *lim = {0.05, 0.4, 0.05};
+        *lim = {kLo, kHi, 0.05};
         return true;
     }
     if (param == "w_pdr") {
-        *lim = {0.0, 0.4, 0.05};
+        *lim = {kLo, kHi, 0.05};
         return true;
     }
     if (param == "w_geo") {
-        *lim = {0.05, 0.4, 0.05};
+        *lim = {kLo, kHi, 0.05};
         return true;
     }
     if (param == "w_wifi") {
-        *lim = {0.0, 0.4, 0.02};
+        *lim = {kLo, kHi, 0.02};
         return true;
     }
     if (param == "w_cell") {
-        *lim = {0.0, 0.3, 0.02};
+        *lim = {kLo, kHi, 0.02};
         return true;
     }
     if (param == "w_ble") {
-        *lim = {0.0, 0.2, 0.02};
+        *lim = {kLo, kHi, 0.02};
         return true;
     }
     if (param == "w_radio") {
-        *lim = {0.05, 0.4, 0.05};
+        *lim = {kLo, kHi, 0.05};
         return true;
     }
     if (param == "w_time") {
-        *lim = {0.05, 0.35, 0.05};
+        *lim = {kLo, kHi, 0.05};
         return true;
     }
     if (param == "w_baro") {
-        *lim = {0.0, 0.4, 0.05};
+        *lim = {kLo, kHi, 0.05};
         return true;
     }
     if (param == "weekday_leave_home_hour") {
-        *lim = {5.0, 11.0, 0.083};
+        *lim = {kLo, kHi, 0.083};
         return true;
     }
     if (param == "weekday_leave_company_hour") {
-        *lim = {16.0, 21.0, 0.083};
+        *lim = {kLo, kHi, 0.083};
         return true;
     }
     if (param == "arm_delay_s") {
-        *lim = {0.0, 90.0, 5.0};
+        *lim = {kLo, kHi, 5.0};
         return true;
     }
     if (param == "lead_min_s") {
-        *lim = {30.0, 180.0, 15.0};
+        *lim = {kLo, kHi, 15.0};
         return true;
     }
     if (param == "lead_max_s") {
-        *lim = {60.0, 600.0, 30.0};
+        *lim = {kLo, kHi, 30.0};
         return true;
     }
     return false;
@@ -378,15 +381,17 @@ std::string RootDir()
 
 std::string GetParamLimitsJson()
 {
-    return R"({"enter_leave":{"min":0.4,"max":0.85,"step":0.03},"exit_leave":{"min":0.2,"max":0.7,"step":0.03},)"
-           R"("w_walk":{"min":0.05,"max":0.4,"step":0.05},"w_pdr":{"min":0,"max":0.4,"step":0.05},)"
-           R"("w_geo":{"min":0.05,"max":0.4,"step":0.05},"w_wifi":{"min":0,"max":0.4,"step":0.02},)"
-           R"("w_cell":{"min":0,"max":0.3,"step":0.02},"w_ble":{"min":0,"max":0.2,"step":0.02},)"
-           R"("w_radio":{"min":0.05,"max":0.4,"step":0.05,"note":"legacy; prefer w_wifi/w_cell/w_ble"},)"
-           R"("w_time":{"min":0.05,"max":0.35,"step":0.05},"w_baro":{"min":0,"max":0.4,"step":0.05},)"
-           R"("weekday_leave_home_hour":{"min":5,"max":11,"step":0.083},)"
-           R"("weekday_leave_company_hour":{"min":16,"max":21,"step":0.083},"arm_delay_s":{"min":0,"max":90,"step":5},)"
-           R"("lead_min_s":{"min":30,"max":180,"step":15},"lead_max_s":{"min":60,"max":600,"step":30}})";
+    // Range unbounded: only per-apply step is enforced (ClipDeltaToStep).
+    return R"({"range":"unbounded","note":"min/max not enforced; each apply_theta_delta clipped to ±step",)"
+           R"("enter_leave":{"step":0.03},"exit_leave":{"step":0.03},)"
+           R"("w_walk":{"step":0.05},"w_pdr":{"step":0.05},)"
+           R"("w_geo":{"step":0.05},"w_wifi":{"step":0.02},)"
+           R"("w_cell":{"step":0.02},"w_ble":{"step":0.02},)"
+           R"("w_radio":{"step":0.05,"note":"legacy; prefer w_wifi/w_cell/w_ble"},)"
+           R"("w_time":{"step":0.05},"w_baro":{"step":0.05},)"
+           R"("weekday_leave_home_hour":{"step":0.083},)"
+           R"("weekday_leave_company_hour":{"step":0.083},"arm_delay_s":{"step":5},)"
+           R"("lead_min_s":{"step":15},"lead_max_s":{"step":30}})";
 }
 
 std::string ApplyThetaDeltaAction(const std::string &paramsJson)

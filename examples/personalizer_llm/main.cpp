@@ -417,14 +417,14 @@ int main(int argc, char **argv)
 
     std::string envPath = "sa_service/etc/agent.env";
     std::string dataRoot = "examples/personalizer_llm/run_data";
-    // positional: [env] [data]  (ignore --debug / --no-fixture / --max-turn N)
+    // positional: [env] [data]  (ignore flags with optional values)
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--debug" || a == "-d" || a == "--no-fixture") {
             continue;
         }
-        if (a == "--max-turn") {
+        if (a == "--max-turn" || a == "--system-prompt") {
             if (i + 1 < argc) {
                 ++i;  // skip value
             }
@@ -517,13 +517,24 @@ int main(int argc, char **argv)
     }
     std::cout << "maxTurn=" << cfg->maxTurn << "\n";
     {
-        // Prefer project prompt (company-focus personalization); fall back to embedded.
-        const std::string promptPath = "jiuwen_agent/system_prompt.md";
+        // Prefer PERSONALIZER_SYSTEM_PROMPT / --system-prompt; else project default.
+        std::string promptPath = "jiuwen_agent/system_prompt.md";
+        if (const char *envPrompt = std::getenv("PERSONALIZER_SYSTEM_PROMPT")) {
+            if (envPrompt[0] != '\0') {
+                promptPath = envPrompt;
+            }
+        }
+        for (int i = 1; i < argc; ++i) {
+            if (std::string(argv[i]) == "--system-prompt" && i + 1 < argc) {
+                promptPath = argv[i + 1];
+            }
+        }
         std::string loaded = ReadFile(promptPath);
         if (!loaded.empty()) {
             cfg->promptTemplates["system"] = loaded;
             std::cout << "system prompt ← " << promptPath << " (" << loaded.size() << " bytes)\n";
         } else {
+            std::cerr << "WARN: prompt not found: " << promptPath << "; using embedded fallback\n";
             cfg->promptTemplates["system"] = noFixture ? kSystemPrompt : kSystemPromptFixture;
         }
     }
@@ -536,6 +547,8 @@ int main(int argc, char **argv)
     cfg->modelConfig.conf["model"] = jiuwen::AnyValue(model);
     cfg->modelConfig.conf["stream"] = jiuwen::AnyValue(false);
     cfg->modelConfig.conf["temperature"] = jiuwen::AnyValue(0.1f);
+    // Gateway Qwen/DeepSeek-V4 emit reasoning_content by default; disable to cut latency.
+    cfg->modelConfig.conf["enable_thinking"] = jiuwen::AnyValue(false);
     // Current Jiuwen initializes ContextEngine from this nested config. Keep it
     // identical to the agent chat model so intent/memory initialization sees it.
     cfg->contextEngineConfig.modelConfig = cfg->modelConfig;

@@ -32,7 +32,7 @@ summary 的 `wifi_ref_source=company_fingerprint`，`detach_hint` / `site_covera
 
 | Tool | 用途 |
 |------|------|
-| `get_param_limits` | 查 min/max/step |
+| `get_param_limits` | 查 step（当前 range=unbounded，仅单次 ±step） |
 | `begin_theta_trial` | 快照当前 θ（开始试验） |
 | `apply_theta_delta` | 改一个参数并落盘（自动按 step 裁剪） |
 | `evaluate_theta_on_history` | 用历史离开窗口 **HSMM 回放**验证当前 θ（score 越高越好；按 focus_side 过滤） |
@@ -48,23 +48,26 @@ Policy catalog 仅保留 `confirmed_leaving`，与实时引擎一致。不要把
 1. 禁止编造统计；无历史样本时不要硬改，直接 no_op。
 2. 不修改业务代码；不做每 tick 场景分类。
 3. 推送目标：仍在公司 INSIDE/NEAR（`source_type=2`）时提醒下班离开；`lead_s` 目标约 `lead_min_s`～`lead_max_s`。
-   **可接受时机**：推送后结算未出大门（`FALSE_PUSH` / `NO_SOURCE_TYPE_OUTDOOR`），但窗口内已有明显气压下行并到达更低平台（`obs_baro_lower_platform` / `baro_lower_platform`，如下到一楼/大堂）——这仍是合理的主动推送时机，**不要当成必须消灭的假推**。优先 `write_audit` no_op；不要为此猛抬 `enter_leave` / `arm_delay_s`。
-4. `evaluate_theta_on_history` 在有 `obs_*` 时会重放 `LeaveHsmm`，因此可以验证 `w_*` 与 `enter_leave` / `arm_delay_s`。没有观测时才会退回旧的 recorded-score 评测（那时改 `w_*` 几乎无效）。评测里带 `baro_lower_platform` 的 FALSE_PUSH 若仍会推，惩罚很轻（`soft_false_kept`），不必为抬分去消灭它们。
+   **正样本（都需要推）**：
+   - 出大门确认（`CONFIRMED_LEAVE` / `source_type=1`）
+   - 或结算虽为 `FALSE_PUSH` / `NO_SOURCE_TYPE_OUTDOOR`，但窗口内已有明显气压下行并到达更低平台（`obs_baro_lower_platform` / `baro_lower_platform`，如下到一楼/大堂后闲逛不出楼）——与出楼同级，**必须保留推送**；评测里计入 `soft_false_kept`（加分），未推计入 `missed_leave`。
+   **硬假推**：无气压下层平台的楼内闲逛 —— 才是要压掉的对象。
+4. `evaluate_theta_on_history` 在有 `obs_*` 时会重放 `LeaveHsmm`，因此可以验证 `w_*` 与 `enter_leave` / `arm_delay_s`。没有观测时才会退回旧的 recorded-score 评测（那时改 `w_*` 几乎无效）。`soft_false_*` 按正样本计分；不要为消灭一楼正样本去降 `w_baro` 或猛抬阈值。
 5. 不要改 `weekday_leave_home_hour`。围栏半径不在白名单内。不要依赖统一的 `w_radio`（遗留别名）；改分通道 `w_wifi` / `w_cell` / `w_ble`。
 6. **优先通道分离，再调早晚**（不要一上来抬 `enter_leave` / `arm_delay_s` 去「堵」假推）：
-   - **硬假推**（无气压下行 / 无 `lower_platform`，楼内 walk+WiFi soft detach 等）：**降低** `w_wifi` / `w_walk`（必要时再降 `w_pdr`），并**提高** `w_baro`，让「真下楼」与「楼内闲逛」在发射项上分开。`arm_delay` 只是「本段步行已持续多久」的门，加几秒通常消不掉持续漫游假推。
-   - **偏晚**（`lead_late` / lead 低于 `lead_min_s`）：在硬假推已被通道压住、`false_kept` 不升的前提下，再**降低** `arm_delay_s` 或 `enter_leave` 把推送提前。顺序必须是「先通道、后阈值/延时」。
+   - **硬假推**（无气压下行 / 无 `lower_platform`，楼内 walk+WiFi soft detach 等）：**降低** `w_wifi` / `w_walk`（必要时再降 `w_pdr`），并**提高** `w_baro`，让「真下楼/到一楼」与「楼内无气压闲逛」在发射项上分开。`arm_delay` 只是「本段步行已持续多久」的门，加几秒通常消不掉持续漫游假推。
+   - **偏晚**（`lead_late` / lead 低于 `lead_min_s`，或一楼正样本被压掉导致 `soft_false_avoided` / `missed_leave`）：在硬假推已被通道压住、`false_kept` 不升的前提下，再**降低** `arm_delay_s` 或 `enter_leave` 把推送提前。顺序必须是「先通道、后阈值/延时」。
    - 每个假设仍要用 eval 裁决；`missed_leave` 升则回滚。
 
 ## 推送机制（背景）
 
 HSMM 输出 `P(LEAVING)`。服务侧在 **仍 INSIDE/NEAR** 时，若 `P(LEAVING) ≥ enter_leave`，并满足 `arm_delay_s`、cooldown、一次一推等，才发 `LEAVE_COMPANY_NOTIFICATION`。OUTSIDE / approaching / Wi‑Fi 再附着由 C++ 硬禁，θ 改不掉。
 
-气压有样本就进入发射项；重要性只靠 `w_baro`，没有 `baro_mode` 开关。硬假推通常 **没有** 气压下行，真离开 / 可接受大堂推送常 **有**——提高 `w_baro`、压低无气压时的 walk/wifi，是比抬阈值更对症的分离方式。
+气压有样本就进入发射项；重要性只靠 `w_baro`，没有 `baro_mode` 开关。硬假推通常 **没有** 气压下行，真离开 / 一楼大堂正样本常 **有**——提高 `w_baro`、压低无气压时的 walk/wifi，是比抬阈值更对症的分离方式。
 
 ## 可改参量含义
 
-以下均可经 `apply_theta_delta` 调整（以 `get_param_limits` 的 step/范围为准）。`w_*` 是 HSMM **发射项可靠度**：越大，该观测越能把概率推向与之匹配的相位；不是简单加权求和成分。
+以下均可经 `apply_theta_delta` 调整（以 `get_param_limits` 的 **step** 为准；min/max 已放开，可多次小步越过原天花板）。`w_*` 是 HSMM **发射项可靠度**：越大，该观测越能把概率推向与之匹配的相位；不是简单加权求和成分。
 
 ### 阈值与时机
 
@@ -87,13 +90,14 @@ HSMM 输出 `P(LEAVING)`。服务侧在 **仍 INSIDE/NEAR** 时，若 `P(LEAVING
 | `w_cell` | 小区切换/离开 | 驻留小区变化。电梯/室内小区抖动时可能噪声大。 |
 | `w_ble` | BLE 脱离 | 本数据集常空；无证据时改它收益低。 |
 | `w_time` | 相对惯常下班时刻的时间先验 | 非下班时段的误推可检查是否被时间项抬高。 |
-| `w_baro` | 气压下降 / 下层平台 | 楼梯/电梯下行证据。硬假推分离时应**提高**（真下楼有气压、楼内闲逛没有）；不要为压 soft_false 去降它。 |
+| `w_baro` | 气压下降 / 下层平台 | 楼梯/电梯下行证据。硬假推分离时应**提高**（真下楼/到一楼有气压、楼内闲逛没有）；一楼正样本依赖它，**不要**为压 soft_false 去降它。 |
 
 ### 评测读数（由 `evaluate_theta_on_history` 给出）
 
-- `score`：越高越好（综合假推抑制、确认离开保留、lead 等）。
-- `false_kept` / `false_avoided`：历史 FALSE_PUSH 在候选 θ 下是否仍会推。
-- `confirmed_kept` / `missed_leave`：真离开是否仍能推到；`missed_leave` 升则通常应回滚。
+- `score`：越高越好（综合硬假推抑制、确认离开/一楼正样本保留、lead 等）。
+- `false_kept` / `false_avoided`：历史**硬** FALSE_PUSH（无 `baro_lower_platform`）在候选 θ 下是否仍会推。
+- `soft_false_kept` / `soft_false_avoided`：一楼/大堂正样本（FALSE_PUSH 但有 `baro_lower_platform`）；kept 加分，avoided 并入 `missed_leave`。
+- `confirmed_kept` / `missed_leave`：出楼确认与一楼漏推；`missed_leave` 升则通常应回滚。
 - `lead_late` / `lead_early`：相对目标 lead 窗口偏晚/偏早。
 
-先通道分离（降 wifi/walk、抬 baro），再用 eval 确认 `false_kept` 下降；若仍 `lead_late`，再小步降 `arm_delay_s` / `enter_leave`。用回放分数决定去留。
+先通道分离（降 wifi/walk、抬 baro），再用 eval 确认硬 `false_kept` 下降且一楼/出楼正样本仍保留；若仍 `lead_late` 或 `missed_leave`，再小步降 `arm_delay_s` / `enter_leave`。用回放分数决定去留。

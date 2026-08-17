@@ -232,14 +232,17 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         if (ep.label == "FALSE_PUSH") {
             ++nFalse;
             const bool softOk = EpisodeHasBaroLowerPlatform(ep);
-            if (wouldPush) {
-                if (softOk) {
+            if (softOk) {
+                // Lobby/1F (baro_lower_platform): same positive target as outdoor confirm —
+                // must keep push; failing to push counts as missed_leave.
+                if (wouldPush) {
                     ++softFalseKept;
                 } else {
-                    ++falseKept;
+                    ++softFalseAvoided;
+                    ++missed;
                 }
-            } else if (softOk) {
-                ++softFalseAvoided;
+            } else if (wouldPush) {
+                ++falseKept;
             } else {
                 ++falseAvoided;
             }
@@ -272,13 +275,12 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         }
     }
 
-    // soft_false_* (FALSE_PUSH with baro_lower_platform) are acceptable lobby/1F pushes:
-    // do not reward avoiding them or heavily punish keeping them.
+    // soft_false_* = FALSE_PUSH with baro_lower_platform: scored as positives (same as confirmed).
+    // soft_false_avoided already folded into missed. Hard FALSE_PUSH only in false_*.
     const double scoreValue = 2.0 * static_cast<double>(falseAvoided) - 2.0 * static_cast<double>(falseKept) +
-        1.5 * static_cast<double>(confirmedKept) - 3.0 * static_cast<double>(missed) +
+        1.5 * static_cast<double>(confirmedKept + softFalseKept) - 3.0 * static_cast<double>(missed) +
         1.5 * static_cast<double>(recovered) + 1.0 * static_cast<double>(leadOk) -
-        0.5 * static_cast<double>(leadLate) - 0.5 * static_cast<double>(leadEarly) -
-        0.25 * static_cast<double>(softFalseKept);
+        0.5 * static_cast<double>(leadLate) - 0.5 * static_cast<double>(leadEarly);
     const double leadMae = (leadErrN > 0) ? (leadAbsErrSum / static_cast<double>(leadErrN)) : -1.0;
 
     std::ostringstream oss;
@@ -287,8 +289,9 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         << ",\"notes\":\"Replay LeaveHsmm on stored leave-window observations. Evaluates w_*, enter_leave, and "
            "arm_delay_s. Counterfactual lead_s = t_star - first eligible push tick. "
            "Product bans (OUTSIDE/approaching/attach) stay in C++. Filtered by focus_side. "
-           "FALSE_PUSH with obs_baro_lower_platform counted as soft_false_* (acceptable 1F/lobby timing; "
-           "light penalty only).\""
+           "FALSE_PUSH with obs_baro_lower_platform counted as soft_false_* and scored as positives "
+           "(kept=+1.5 like confirmed; avoided folds into missed_leave=-3). "
+           "Hard FALSE_PUSH (no baro_lower_platform) stays in false_kept/false_avoided.\""
         << ",\"n_episodes\":" << n << ",\"n_false_push\":" << nFalse << ",\"n_confirmed_leave\":" << nConfirmed
         << ",\"n_missed_leave_label\":" << nMissedLabel
         << ",\"false_avoided\":" << falseAvoided << ",\"false_kept\":" << falseKept
@@ -303,8 +306,9 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         << ",\"w_ble\":" << theta.w_ble << ",\"w_time\":" << theta.w_time << ",\"w_baro\":" << theta.w_baro
         << ",\"arm_delay_s\":" << theta.arm_delay_s << "}"
         << ",\"better_guidance\":\"Prefer higher score. If missed_leave rises, revert the last change. "
-           "Hard false_kept (no baro_lower_platform) is the main suppress target. "
-           "soft_false_kept means lobby/1F descent without gate exit—acceptable push timing; do not crush θ to wipe it. "
+           "Positives: CONFIRMED_LEAVE and soft_false (FALSE_PUSH with baro_lower_platform / lobby-1F). "
+           "soft_false_kept is rewarded; soft_false_avoided counts as missed. "
+           "Hard false_kept (no baro_lower_platform) is the suppress target. "
            "Diagnose obs_* before choosing enter_leave vs a channel w_*.\"}";
     return oss.str();
 }

@@ -12,7 +12,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 EXAMPLE="$(cd "$(dirname "$0")" && pwd)"
 BUILD="$EXAMPLE/build"
-export JIUWEN_ROOT="${JIUWEN_ROOT:-$ROOT/../bbpjiuwen-linux}"
+if [[ -z "${JIUWEN_ROOT:-}" ]]; then
+  if [[ -d /mnt/d/bbpjiuwen ]]; then
+    export JIUWEN_ROOT=/mnt/d/bbpjiuwen
+  else
+    export JIUWEN_ROOT="$ROOT/../bbpjiuwen-linux"
+  fi
+fi
 
 ENV_FILE="$ROOT/sa_service/etc/agent.env"
 DATA="$EXAMPLE/run_data"
@@ -30,6 +36,15 @@ while [[ $i -le $# ]]; do
       i=$((i+1))
       if [[ $i -gt $# ]]; then
         echo "ERROR: --max-turn needs a value" >&2
+        exit 1
+      fi
+      EXTRA_ARGS+=("${args[$((i-1))]}")
+      ;;
+    --system-prompt)
+      EXTRA_ARGS+=(--system-prompt)
+      i=$((i+1))
+      if [[ $i -gt $# ]]; then
+        echo "ERROR: --system-prompt needs a value" >&2
         exit 1
       fi
       EXTRA_ARGS+=("${args[$((i-1))]}")

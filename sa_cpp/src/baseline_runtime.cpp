@@ -171,7 +171,6 @@ TickDecision BaselineRuntime::OnTick(
     TickFeatures feat;
     feat.t_ms = tMs;
     feat.has_gps = hasGps && gpsValid;
-    feat.gps_source_type = gpsSourceType;
     feat.lat = lat;
     feat.lon = lon;
     feat.acc = accM;

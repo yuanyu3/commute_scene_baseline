@@ -214,58 +214,59 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         }
         return false;
     }
-    auto clip = [](double x, double lo, double hi) { return std::max(lo, std::min(hi, x)); };
+    // Range limits intentionally removed: agent may explore freely. Per-call step
+    // clipping still happens in ApplyThetaDeltaAction via get_param_limits.step.
     if (param == "enter_leave") {
-        theta->enter_leave = clip(theta->enter_leave + delta, 0.4, 0.85);
+        theta->enter_leave = theta->enter_leave + delta;
     } else if (param == "exit_leave") {
-        theta->exit_leave = clip(theta->exit_leave + delta, 0.2, 0.7);
+        theta->exit_leave = theta->exit_leave + delta;
     } else if (param == "w_walk") {
-        theta->w_walk = clip(theta->w_walk + delta, 0.05, 0.4);
+        theta->w_walk = theta->w_walk + delta;
     } else if (param == "w_pdr") {
-        theta->w_pdr = clip(theta->w_pdr + delta, 0.0, 0.4);
+        theta->w_pdr = theta->w_pdr + delta;
     } else if (param == "w_geo") {
-        theta->w_geo = clip(theta->w_geo + delta, 0.05, 0.4);
+        theta->w_geo = theta->w_geo + delta;
     } else if (param == "w_time") {
-        theta->w_time = clip(theta->w_time + delta, 0.05, 0.35);
+        theta->w_time = theta->w_time + delta;
     } else if (param == "w_baro") {
-        theta->w_baro = clip(theta->w_baro + delta, 0.0, 0.4);
+        theta->w_baro = theta->w_baro + delta;
     } else if (param == "w_wifi") {
-        theta->w_wifi = clip(theta->w_wifi + delta, 0.0, 0.4);
+        theta->w_wifi = theta->w_wifi + delta;
         theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;
     } else if (param == "w_cell") {
-        theta->w_cell = clip(theta->w_cell + delta, 0.0, 0.3);
+        theta->w_cell = theta->w_cell + delta;
         theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;
     } else if (param == "w_ble") {
-        theta->w_ble = clip(theta->w_ble + delta, 0.0, 0.2);
+        theta->w_ble = theta->w_ble + delta;
         theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;
     } else if (param == "w_radio") {
         // Legacy: nudge wifi primarily, keep cell/ble ratio.
-        theta->w_wifi = clip(theta->w_wifi + delta, 0.0, 0.4);
+        theta->w_wifi = theta->w_wifi + delta;
         theta->w_radio = theta->w_wifi + theta->w_cell + theta->w_ble;
     } else if (param == "min_evidence") {
-        const double v = clip(static_cast<double>(theta->min_evidence) + delta, 1.0, 5.0);
+        const double v = static_cast<double>(theta->min_evidence) + delta;
         theta->min_evidence = static_cast<int>(std::lround(v));
     } else if (param == "weekday_leave_home_hour") {
-        theta->weekday_leave_home_hour = clip(theta->weekday_leave_home_hour + delta, 5.0, 11.0);
+        theta->weekday_leave_home_hour = theta->weekday_leave_home_hour + delta;
     } else if (param == "weekday_leave_company_hour") {
-        theta->weekday_leave_company_hour = clip(theta->weekday_leave_company_hour + delta, 16.0, 21.0);
+        theta->weekday_leave_company_hour = theta->weekday_leave_company_hour + delta;
     } else if (param == "arm_delay_s") {
-        theta->arm_delay_s = clip(theta->arm_delay_s + delta, 0.0, 90.0);
+        theta->arm_delay_s = theta->arm_delay_s + delta;
     } else if (param == "hsmm_preleave_mean_s") {
-        theta->hsmm_preleave_mean_s = clip(theta->hsmm_preleave_mean_s + delta, 20.0, 240.0);
+        theta->hsmm_preleave_mean_s = theta->hsmm_preleave_mean_s + delta;
         theta->hsmm_preleave_mean_s = std::max(theta->hsmm_preleave_min_s, theta->hsmm_preleave_mean_s);
         theta->hsmm_preleave_max_s = std::max(theta->hsmm_preleave_mean_s, theta->hsmm_preleave_max_s);
     } else if (param == "hsmm_leaving_mean_s") {
-        theta->hsmm_leaving_mean_s = clip(theta->hsmm_leaving_mean_s + delta, 20.0, 360.0);
+        theta->hsmm_leaving_mean_s = theta->hsmm_leaving_mean_s + delta;
         theta->hsmm_leaving_mean_s = std::max(theta->hsmm_leaving_min_s, theta->hsmm_leaving_mean_s);
         theta->hsmm_leaving_max_s = std::max(theta->hsmm_leaving_mean_s, theta->hsmm_leaving_max_s);
     } else if (param == "lead_min_s") {
-        theta->lead_min_s = clip(theta->lead_min_s + delta, 30.0, 180.0);
+        theta->lead_min_s = theta->lead_min_s + delta;
         if (theta->lead_min_s > theta->lead_max_s) {
             theta->lead_max_s = theta->lead_min_s;
         }
     } else if (param == "lead_max_s") {
-        theta->lead_max_s = clip(theta->lead_max_s + delta, 60.0, 600.0);
+        theta->lead_max_s = theta->lead_max_s + delta;
         if (theta->lead_max_s < theta->lead_min_s) {
             theta->lead_min_s = theta->lead_max_s;
         }

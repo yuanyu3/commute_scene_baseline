@@ -274,16 +274,23 @@ def append_text(path: Path, text: str, header: str = "") -> None:
         fh.write(text)
 
 
-def run_agent(out_root: Path, env_file: Path, max_turn: int) -> int:
+def run_agent(out_root: Path, env_file: Path, max_turn: int, system_prompt: str = "") -> int:
     out_posix = to_posix(out_root)
     env_posix = to_posix(env_file)
     root_posix = to_posix(ROOT)
+    prompt_export = ""
+    prompt_arg = ""
+    if system_prompt.strip():
+        prompt_posix = to_posix(Path(system_prompt))
+        prompt_export = f"PERSONALIZER_SYSTEM_PROMPT={prompt_posix} "
+        prompt_arg = f" --system-prompt {prompt_posix}"
     bash_cmd = (
         f"cd {root_posix} && "
         f"JIUWEN_ROOT=/mnt/d/bbpjiuwen "
+        f"{prompt_export}"
         f"PERSONALIZER_MAX_TURN={max_turn} "
         f"bash examples/personalizer_llm/run.sh {env_posix} {out_posix} "
-        f"--no-fixture --debug --max-turn {max_turn}"
+        f"--no-fixture --debug --max-turn {max_turn}{prompt_arg}"
     )
     if Path("/mnt/d/commute_scene_baseline").is_dir() and os.name != "nt":
         print("running agent in-place:", bash_cmd, flush=True)
@@ -303,6 +310,11 @@ def main() -> int:
     ap.add_argument("--env-file", default=str(ROOT / "sa_service" / "etc" / "agent.env"))
     ap.add_argument("--max-turn", type=int, default=80, help="Jiuwen ReAct maxTurn (raise if exhausted)")
     ap.add_argument("--skip-agent", action="store_true")
+    ap.add_argument(
+        "--system-prompt",
+        default="",
+        help="optional system prompt md path (e.g. jiuwen_agent/system_prompt_explore.md)",
+    )
     ap.add_argument(
         "--seed-theta",
         default="",
@@ -487,7 +499,7 @@ def main() -> int:
             flush=True,
         )
         agent_runs += 1
-        arc = run_agent(out_root, env_file, args.max_turn)
+        arc = run_agent(out_root, env_file, args.max_turn, args.system_prompt)
         print("agent rc", arc, flush=True)
 
         # Persist trails

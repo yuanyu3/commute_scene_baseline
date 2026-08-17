@@ -49,12 +49,13 @@ using TickTsMs = int64_t;
 struct TickFeatures {
     TickTsMs t_ms = 0;
     bool has_gps = false;
-    /** Platform semantic location: 2=inside company, 1=outside company gate. */
-    int32_t gps_source_type = 0;
     double lat = 0.0;
     double lon = 0.0;
     double acc = 0.0;
-    /** Location source: 1=GNSS/outdoor, 2=network/indoor. 0=unknown. */
+    /**
+     * Location source_type: 1=GNSS/outdoor (outside company gate when near),
+     * 2=network/indoor (inside company when near). 0=unknown.
+     */
     int32_t gps_source_type = 0;
     bool walking = false;
     bool has_walk_started = false;
