@@ -1,5 +1,7 @@
 # Commute Debug HAP
 
+> 真机请用 **`D:\helloworld_agent\hap`**（已合并采集 + 时间线，绑 SA **9902**）。本目录仅作参考。
+
 可视化通勤 SA 的 **SceneEngine 场景变化 / 推送 / OUTSIDE 确认 / 改参 LLM** 时间线。
 
 ## 依赖

@@ -2,7 +2,7 @@
 
 面向通勤的**端侧 HSMM 实时场景基线**与**低频 θ 个性化**：在用户尚未完全离家时预测出门并推送「带钥匙」等服务；平时不调 LLM，仅在复盘/日终用 Jiuwen 改参。
 
-**本仓库独立，不依赖 `helloworld_agent`。坐标：WGS84。**
+**算法权威源在本仓库 `sa_cpp/`。真机 SA 宿主是 `D:\helloworld_agent`（SA 9902）**，不要再刷本仓库 `sa_service/` 的 9903。
 
 > 完整介绍（背景、双环、预测推送、落盘、验证）：**[`docs/PROJECT_INTRO.md`](docs/PROJECT_INTRO.md)**
 
@@ -11,10 +11,10 @@
 | 路径 | 说明 |
 |------|------|
 | **`sa_cpp/`** | **算法权威源**：LeaveHsmm / SceneEngine / ProductStore / Evidence·Action / 主机测试 |
-| `sa_service/` | OHOS SA（Ability + provider + proactive）；`commute_sa` 为 `sa_cpp` 的 vendored 副本 |
+| `sa_service/` | OHOS SA 参考实现（9903 命名）；真机请用 `helloworld_agent` 9902 |
 | `jiuwen_agent/` | 改参 Agent（prompt + tools 契约） |
 | `examples/personalizer_llm/` | 主机 DeepSeek/Jiuwen 个性化试跑 |
-| `hap_debug/` | 真机可视化 HAP（推送 / OUTSIDE / 改参 LLM 时间线） |
+| `hap_debug/` | 可视化 HAP 参考；真机合并版在 `helloworld_agent/hap` |
 | `config/` `schemas/` | θ / 锚点 / Schema |
 | `docs/` | 架构与流程文档 |
 | `scripts/` | 源码同步与依赖准备脚本 |
