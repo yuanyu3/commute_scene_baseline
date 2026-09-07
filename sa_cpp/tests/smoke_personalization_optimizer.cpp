@@ -1,6 +1,7 @@
 #include "commute_sa/evidence_query.h"
 #include "commute_sa/personalization_optimizer.h"
 #include "commute_sa/product_store.h"
+#include "commute_sa/theta_eval.h"
 
 #include <fstream>
 #include <iostream>
@@ -137,6 +138,30 @@ int main()
     if (submitted.find("\"validated\":true") == std::string::npos) {
         std::cerr << "FAIL structured analysis\n";
         return 1;
+    }
+    using commute_sa::ReplayEpisodeSummary;
+    std::vector<ReplayEpisodeSummary> reference = {
+        {"positive1", true, false, true, 1000, 90},
+        {"positive2", true, false, true, 2000, 90},
+        {"negative1", false, true, false, 0, -1},
+        {"negative2", false, true, true, 3000, -1}};
+    auto changed = reference;
+    changed[0].push_ms -= 500;
+    changed[1].push_ms += 100;
+    std::string reason;
+    if (commute_sa::CheckReplayEpisodeSafety(reference, changed, &reason)) {
+        std::cerr << "FAIL average gain concealed delayed positive\n"; return 1;
+    }
+    changed = reference;
+    changed[2].pushed = true;
+    changed[3].pushed = false;
+    if (commute_sa::CheckReplayEpisodeSafety(reference, changed, &reason)) {
+        std::cerr << "FAIL unchanged false count concealed false-push swap\n"; return 1;
+    }
+    changed = reference;
+    changed[0].push_ms -= 500;
+    if (!commute_sa::CheckReplayEpisodeSafety(reference, changed, &reason)) {
+        std::cerr << "FAIL safe earlier candidate rejected\n"; return 1;
     }
     std::cout << "ok\n";
     return 0;

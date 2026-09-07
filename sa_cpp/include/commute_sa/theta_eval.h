@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace commute_sa {
 
@@ -26,9 +27,21 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
  * inference only; partial replay scores are diagnostic, not fit objectives.
  */
 using ObservationAdapter = std::function<void(LeaveObservation &observation, bool episodeStart)>;
+struct ReplayEpisodeSummary {
+    std::string key;
+    bool positive = false;
+    bool hard_negative = false;
+    bool pushed = false;
+    int64_t push_ms = 0;
+    double lead_s = -1.0;
+};
+// Reject per-episode regressions; aggregate counts can hide swaps between episodes.
+bool CheckReplayEpisodeSafety(const std::vector<ReplayEpisodeSummary> &baseline,
+    const std::vector<ReplayEpisodeSummary> &candidate, std::string *reason);
 std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, const Theta &theta,
     const ObservationAdapter &adapter, int64_t sinceMs = 0, int maxEpisodes = 30,
-    bool includePrefixTrace = false, int64_t cutoffMs = 0);
+    bool includePrefixTrace = false, int64_t cutoffMs = 0,
+    std::vector<ReplayEpisodeSummary> *summaries = nullptr);
 
 /** Snapshot / restore live θ for agent trial loops (in-memory + file persist on revert). */
 bool BeginThetaTrial(std::string *err = nullptr);

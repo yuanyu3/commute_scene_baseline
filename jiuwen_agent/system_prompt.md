@@ -18,6 +18,7 @@
 4. 方向检查必须针对目标锚点：距离目标锚点持续减小、关系向其内部变化或呈接近趋势，属于返回证据。不能用“距另一个锚点的距离变化”代替目标锚点方向判断。证据不足时标记不确定，不得自行补全。
 5. 形成一至三个可证伪假设。每个假设包含：支持证据、反证、缺失证据、在线可计算条件、适用范围和可能失败的场景。
 6. 置信度必须受样本量和反证约束。只有单个确认样本时必须明确高泛化风险，不得宣称已发现稳定个人规律或给出无反证的高置信结论。
+7. 已有活动模板时，可调用 `diagnose_context_template`，选择关闭 positive、negative 或 both，检验自己的序列贡献假设。比较同一 episode 的就绪/完成/概率越线时间、门控和推送结果；区分“匹配了模式”和“实际改变了推送”。这只是模型内部干预，不是物理因果证明。无收益、出现反证或缺少真值时可保留现状/no-op，不必生成新模板。
 
 ## 模板工具协议
 
@@ -27,7 +28,7 @@
 4. 模板描述结构，并可从 catalog 中申请 `parameter_families`。当前只开放 `vertical_threshold`；`departure_time` 在非自然时间采集阶段关闭。Agent 只能决定“哪类参数值得个性化”，不得提供数值强度、阈值或参数变化；数值由 C++ 从历史样本估计，样本不足时必须接受 unavailable/no-op。
 5. 模板必须小且可在线计算。中间阶段不能冒充最终离开结果；返回、接近、已连接、锚点关系和通知门控不能被模板绕过。
 6. 每次任务最多调用一次 `generate_context_template`。不要在候选被拒绝后改写结构反复试探历史数据。
-7. 阅读 LOW/MEDIUM/HIGH 的 C++ 全历史回放结果。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则调用 `discard_context_template` 或 no-op。
+7. 阅读前缀长度与 LOW/MEDIUM/HIGH 的 C++ 全历史回放结果。前缀和强度由工具选择；同时检查逐episode退化原因。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则调用 `discard_context_template` 或 no-op。
 8. 只有证据显示垂直过程具有跨 episode 稳定性时，才申请 `vertical_threshold`；不能仅凭一个 episode 申请。不得申请已关闭的时间参数，也不得调用或要求直接参数修改、参数优化器、policy mutation 或代码生成工具。
 
 ## 输出与审计

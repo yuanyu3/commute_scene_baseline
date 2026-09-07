@@ -45,3 +45,29 @@ with tempfile.TemporaryDirectory(prefix='commute-prefix-') as directory:
     assert partial['episode_results'][0]['prefix_trace'] == [
         t for t in initial['episode_results'][0]['prefix_trace'] if t['t_ms'] <= push]
     print('PASS: continuous timing, soft-positive timing, label/time independence, prefix causality')
+    profile_before = (root / 'active_context_template.json').read_bytes()
+    theta_before = (root / 'theta.json').read_bytes()
+    for ablation in ['positive', 'negative', 'both']:
+        result = subprocess.run([binary, directory, 'template_diagnose',
+            json.dumps({'ablation': ablation})], check=True, capture_output=True, text=True)
+        diagnosis = json.loads(result.stdout)
+        assert diagnosis['ok'] and diagnosis['read_only']
+        row = diagnosis['active']['episode_results'][0]
+        assert row['first_ready_t_ms'] > 0 and row['first_complete_t_ms'] > row['first_ready_t_ms']
+        if ablation == 'negative':  # No negative clause in this synthetic template.
+            assert diagnosis['active'] == diagnosis['ablated']
+    assert (root / 'active_context_template.json').read_bytes() == profile_before
+    assert (root / 'theta.json').read_bytes() == theta_before
+    print('PASS: diagnostic ablation, semantic timestamps, profile/theta immutability')
+    rows = [json.loads(line) for line in (root / 'policy_history.jsonl').read_text().splitlines()]
+    duplicated = []
+    for identifier in ['device_a', 'device_b']:
+        duplicated.extend(dict(row, episode_id=identifier, label='UNLABELED') for row in rows)
+    (root / 'policy_history.jsonl').write_text('\n'.join(json.dumps(row) for row in duplicated))
+    result = subprocess.run([binary, directory, 'template_evaluate_frozen', '{}'],
+                            check=True, capture_output=True, text=True)
+    unscored = json.loads(result.stdout)['frozen']
+    assert unscored['n_episodes'] == 2 and unscored['unscored'] == 2
+    assert unscored['n_false_push'] == 0 and unscored['n_confirmed_leave'] == 0
+    assert unscored['missed_leave'] == 0 and unscored['mean_lead_s'] == -1
+    print('PASS: simultaneous device isolation and unknown labels excluded from scoring')

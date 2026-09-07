@@ -85,6 +85,8 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetActiveContextTemplateAction(params) << "\n";
         } else if (command == "template_evaluate_frozen") {
             std::cout << commute_sa::EvaluateActiveContextTemplateOnHistoryAction(params) << "\n";
+        } else if (command == "template_diagnose") {
+            std::cout << commute_sa::DiagnoseContextTemplateOnHistoryAction(params) << "\n";
         } else {
             std::cout << "{\"ok\":false,\"error\":\"unknown dataset command\"}\n";
             return 2;

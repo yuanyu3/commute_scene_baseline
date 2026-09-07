@@ -308,6 +308,14 @@
     },
 
     {
+      "name": "diagnose_context_template",
+      "category": "evidence",
+      "description": "Read-only sequence-term intervention on an active template. Compare matched episode rows; no fit or commit and no physical causal guarantee.",
+      "input_schema": {"ablation": "positive|negative|both", "limit": "optional integer 1..100, default 20"},
+      "output_schema": {"read_only": "bool", "template": "object", "active": "replay object", "ablated": "replay object"}
+    },
+
+    {
       "name": "generate_context_template",
       "category": "template",
       "description": "Validate Agent structure, emit independent sequence observations without rewriting atomic sensors, estimate requested parameter families in C++, and replay LOW/MEDIUM/HIGH sequence reliabilities on all historical HSMM episodes.",

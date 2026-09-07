@@ -194,6 +194,11 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("get_context_template_catalog",
         "Return bounded event/effect primitives that the Agent may compose into a new context template", {},
         &GetTemplateCatalog);
+    Reg("diagnose_context_template",
+        "Read-only active-template ablation on the same history: compare per-episode push timing, prefix readiness, completion and gates. Not physical causal proof; never tunes or commits.",
+        {{"ablation", "disable positive|negative|both sequence terms", "string", true},
+            {"limit", "1..100 episodes, default 20", "integer", false}},
+        &commute_sa::DiagnoseContextTemplateOnHistoryAction);
     Reg("generate_context_template",
         "Validate an Agent-composed event sequence, deterministically estimate requested parameter families, replay strengths, and stage the best safe template",
         {{"template_name", "new stable identifier", "string", true},
@@ -234,7 +239,7 @@ std::vector<std::string> RegisterPersonalizerTools()
         "analyze_personalization_rules", "run_constrained_theta_optimizer", "run_rule_personalization",
         "get_optimization_trial", "commit_optimized_theta", "discard_optimization_trial",
         "get_personalization_profile", "propose_context_profile_update", "submit_agent_analysis",
-        "get_context_template_catalog", "generate_context_template", "get_context_template_trial",
+        "get_context_template_catalog", "diagnose_context_template", "generate_context_template", "get_context_template_trial",
         "commit_context_template", "discard_context_template", "get_active_context_template",
         "get_personalization_policy", "get_policy_catalog", "begin_policy_trial", "apply_policy_candidate",
         "evaluate_policy_on_history", "revert_policy_trial", "commit_policy_trial"};

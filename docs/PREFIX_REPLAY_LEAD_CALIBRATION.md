@@ -1,5 +1,7 @@
 # 前缀回放与连续提前量校准
 
+本文记录首轮实现；后续已增加逐episode保护、Agent只读消融工具及0814共享气压验证，见[后续开发记录](TEMPLATE_DIAGNOSTICS_AND_SHARED_BARO.md)。
+
 ## 本次落地的范围
 
 保留 Agent 选择事件序列、C++ 受约束校准、HSMM 在线融合的架构。不增加 expert，不改全局传感器权重、enter_leave、arm_delay 或状态时长，不硬编码任何建筑/楼层的提前触发规则。

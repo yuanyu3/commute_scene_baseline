@@ -12,6 +12,8 @@ std::string GetContextTemplateCatalogAction(const std::string &paramsJson);
 std::string GetActiveContextTemplateAction(const std::string &paramsJson);
 /** Evaluate the persisted template at its frozen strength; never tunes on the evaluation history. */
 std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &paramsJson);
+/** Read-only model intervention: disable positive/negative/both sequence terms and replay. */
+std::string DiagnoseContextTemplateOnHistoryAction(const std::string &paramsJson);
 
 /**
  * Validate an Agent-composed event sequence, replay LOW/MEDIUM/HIGH effect

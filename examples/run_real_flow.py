@@ -125,6 +125,8 @@ def main() -> int:
         help="truncate replay at the last acc/gyro/mag/rv/baro sample",
     )
     ap.add_argument("--run-personalizer", action="store_true", help="call WSL personalizer_llm")
+    ap.add_argument("--local-time-axis", action="store_true",
+                    help="Borrowed baro must not shift tick alignment or extend the local capture window")
     ap.add_argument(
         "--company-radio-fingerprint",
         default=str(ROOT / "config" / "company_radio_fingerprint.json"),
@@ -260,12 +262,15 @@ def main() -> int:
     # baro / walking / radio advance every tick_s.
     t_start = merged[0].t
     t_end = merged[-1].t
-    if baro_series:
-        t_start = min(t_start, baro_series[0][0])
-        t_end = max(t_end, baro_series[-1][0])
+    axis_baro = load_baro_series(args.raw_dir) if args.local_time_axis else baro_series
+    if axis_baro:
+        t_start = min(t_start, axis_baro[0][0])
+        t_end = max(t_end, axis_baro[-1][0])
     if walks:
         t_start = min(t_start, walks[0][0])
         t_end = max(t_end, walks[-1][0])
+    if args.local_time_axis and motion_stop is not None:
+        t_end = min(t_end, motion_stop)
     # Align to whole seconds so dumps are easy to read.
     tick_t = t_start.replace(microsecond=0)
     if tick_t < t_start:

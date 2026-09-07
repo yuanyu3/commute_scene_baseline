@@ -628,7 +628,8 @@ std::string TrialJson(const Trial &trial)
             << ",\"metrics\":" << MetricsJson(candidate.metrics) << '}';
     }
     out << "],\"commit_guard\":{\"score_must_improve\":true,\"hard_false_must_not_increase\":true,"
-           "\"confirmed_and_lower_platform_positives_must_not_decrease\":true,\"missed_must_not_increase\":true}}";
+           "\"confirmed_and_lower_platform_positives_must_not_decrease\":true,\"missed_must_not_increase\":true,"
+           "\"per_episode_no_new_false_or_lost_positive\":true,\"per_episode_positive_must_not_be_later\":true}}";
     return out.str();
 }
 
@@ -700,7 +701,9 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
 
     const Theta theta = CurrentTheta();
     EstimateRequestedParameters(theta, &spec);
-    const Metrics baseline = ParseMetrics(EvaluateThetaOnHistoryJson(RootDir(), theta, 0, 100));
+    std::vector<ReplayEpisodeSummary> baselineEpisodes, incumbentEpisodes;
+    const Metrics baseline = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
+        RootDir(), theta, {}, 0, 100, false, 0, &baselineEpisodes));
     if (!baseline.ok) return "{\"ok\":false,\"error\":\"baseline history replay unavailable\"}";
 
     Trial trial;
@@ -721,7 +724,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     }
     if (incumbentStrength > 0.0) {
         trial.incumbent = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(incumbentSpec, incumbentStrength), 0, 100));
+            RootDir(), theta, BuildAdapter(incumbentSpec, incumbentStrength), 0, 100, false, 0, &incumbentEpisodes));
     }
     const std::vector<std::pair<std::string, double>> levels = {{"LOW", 0.20}, {"MEDIUM", 0.40}, {"HIGH", 0.60}};
     double bestScore = -1.0e100;
@@ -734,15 +737,23 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         candidate.id = nextId++;
         candidate.strength_name = level.first;
         candidate.strength = level.second;
+        std::vector<ReplayEpisodeSummary> candidateEpisodes;
         candidate.metrics = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(candidate.spec, candidate.strength), 0, 100));
+            RootDir(), theta, BuildAdapter(candidate.spec, candidate.strength), 0, 100, false, 0, &candidateEpisodes));
         candidate.eligible = Eligible(baseline, candidate.metrics, &candidate.rejection);
+        if (candidate.eligible && !CheckReplayEpisodeSafety(baselineEpisodes, candidateEpisodes, &candidate.rejection))
+            candidate.eligible = false;
         if (candidate.eligible && prefix > 0 && baseline.false_avoided + baseline.false_kept == 0) {
             candidate.eligible = false;
             candidate.rejection = "prefix_requires_hard_negative_history";
         }
         if (candidate.eligible && trial.incumbent.ok &&
             !Eligible(trial.incumbent, candidate.metrics, &candidate.rejection)) {
+            candidate.eligible = false;
+            candidate.rejection = "incumbent_" + candidate.rejection;
+        }
+        if (candidate.eligible && trial.incumbent.ok &&
+            !CheckReplayEpisodeSafety(incumbentEpisodes, candidateEpisodes, &candidate.rejection)) {
             candidate.eligible = false;
             candidate.rejection = "incumbent_" + candidate.rejection;
         }
@@ -837,6 +848,49 @@ std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &args
         RootDir(), theta, BuildAdapter(spec, strength), 0, 1000, trace, static_cast<int64_t>(cutoff));
     return "{\"ok\":true,\"mode\":\"frozen_template_no_tuning\",\"template\":" +
         SpecJson(spec, "FROZEN", strength) + ",\"baseline\":" + baseline + ",\"frozen\":" + frozen + '}';
+}
+
+std::string DiagnoseContextTemplateOnHistoryAction(const std::string &args)
+{
+    std::string ablation;
+    if (!ExtractString(args, "ablation", &ablation) ||
+        (ablation != "positive" && ablation != "negative" && ablation != "both"))
+        return "{\"ok\":false,\"error\":\"ablation must be positive|negative|both\"}";
+    double limit = 20;
+    ExtractNumber(args, "limit", &limit);
+    if (!std::isfinite(limit) || limit < 1 || limit > 100 || limit != std::floor(limit))
+        return "{\"ok\":false,\"error\":\"limit must be an integer in 1..100\"}";
+    TemplateSpec spec;
+    double strength = 0;
+    {
+        std::lock_guard<std::mutex> lock(gTemplateMutex);
+        if (!gActiveLoaded) LoadActiveTemplateLocked();
+        if (!gActivePresent) return "{\"ok\":false,\"error\":\"no active template; query raw episode evidence first\"}";
+        spec = gActiveSpec;
+        strength = gActiveStrength;
+    }
+    // Fresh adapter state for each arm. No profile/theta writes, no candidate fit.
+    const Theta theta = CurrentTheta();
+    auto disabled = [adapter = BuildAdapter(spec, strength), ablation](LeaveObservation &obs, bool start) mutable {
+        adapter(obs, start);
+        if (ablation == "positive" || ablation == "both") {
+            obs.sequence_progress = 0;
+            obs.sequence_complete = 0;
+            obs.sequence_ready = -1;
+        }
+        if (ablation == "negative" || ablation == "both") obs.negative_pattern_match = 0;
+    };
+    const auto active = EvaluateThetaOnHistoryWithAdapterJson(
+        RootDir(), theta, BuildAdapter(spec, strength), 0, static_cast<int>(limit));
+    const auto counterfactual = EvaluateThetaOnHistoryWithAdapterJson(
+        RootDir(), theta, disabled, 0, static_cast<int>(limit));
+    if (!ParseMetrics(active).ok || !ParseMetrics(counterfactual).ok)
+        return "{\"ok\":false,\"read_only\":true,\"error\":\"HSMM replay history unavailable\"}";
+    return "{\"ok\":true,\"read_only\":true,\"ablation\":\"" + ablation +
+        "\",\"interpretation\":\"Model intervention, not physical causality. Compare matching side/outcome/label rows. "
+        "Zero timestamp means not observed. Soft platform labels are proxy labels. No fitting or commit performed.\","
+        "\"template\":" + SpecJson(spec, "FROZEN", strength) +
+        ",\"active\":" + active + ",\"ablated\":" + counterfactual + '}';
 }
 
 bool ApplyActiveContextTemplateObservation(const std::string &side, const std::string &anchorId,
