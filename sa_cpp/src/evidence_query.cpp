@@ -2,6 +2,7 @@
 
 #include "commute_sa/anchors.h"
 #include "commute_sa/baseline_runtime.h"
+#include "commute_sa/crs.h"
 #include "commute_sa/geo.h"
 #include "commute_sa/product_store.h"
 
@@ -111,6 +112,35 @@ bool ExtractNumber(const std::string &json, const char *key, double *out)
     }
     *out = v;
     return true;
+}
+
+bool ExtractBool(const std::string &json, const char *key, bool *out)
+{
+    if (out == nullptr || key == nullptr) {
+        return false;
+    }
+    const std::string needle = std::string("\"") + key + "\"";
+    const size_t pos = json.find(needle);
+    if (pos == std::string::npos) {
+        return false;
+    }
+    size_t i = json.find(':', pos + needle.size());
+    if (i == std::string::npos) {
+        return false;
+    }
+    ++i;
+    while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) {
+        ++i;
+    }
+    if (json.compare(i, 4, "true") == 0) {
+        *out = true;
+        return true;
+    }
+    if (json.compare(i, 5, "false") == 0) {
+        *out = false;
+        return true;
+    }
+    return false;
 }
 
 bool ExtractString(const std::string &json, const char *key, std::string *out)
@@ -1276,6 +1306,15 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         LoadWifiBuckets(sessionDir, t0, t1, &wifi);
         LoadCells(sessionDir, t0, t1, &cells);
         LoadGps(sessionDir, t0, t1, &gps);
+        std::string locationCrs;
+        ExtractString(ReadTextFile(sessionDir + "/metadata.json"), "location_crs", &locationCrs);
+        if (Lower(locationCrs).find("gcj") == 0) {
+            for (auto &point : gps) {
+                const LatLon wgs = Gcj02ToWgs84(point.lat, point.lon);
+                point.lat = wgs.latitude;
+                point.lon = wgs.longitude;
+            }
+        }
     }
 
     AnchorSet anchors = DefaultAnchors();
@@ -1499,6 +1538,52 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         LoadPdrFromSegments(sessionDir, t0, t1, tCenter, &pdrSum);
     }
 
+    // Use the condensed history for the exact barometer semantics consumed by
+    // the HSMM. Raw pressure alone cannot reconstruct baseline readiness or the
+    // lower-platform detector state.
+    int baroPoints = 0;
+    double baroMaxDescent = 0.0;
+    double baroMaxDescending = 0.0;
+    bool baroAnyLowerPlatform = false;
+    bool baroAtAvailable = false;
+    bool baroAtLowerPlatform = false;
+    double baroAtDescent = 0.0;
+    double baroAtDescending = 0.0;
+    int64_t baroAtDelta = LLONG_MAX;
+    std::ifstream policyHistory(root + "/policy_history.jsonl");
+    std::string historyLine;
+    while (std::getline(policyHistory, historyLine)) {
+        int64_t tMs = 0;
+        std::string side;
+        if (!ExtractInt64(historyLine, "t_ms", &tMs) || tMs < t0 || tMs > t1 ||
+            !ExtractString(historyLine, "side", &side) || side != "company") {
+            continue;
+        }
+        bool available = false;
+        bool lowerPlatform = false;
+        double descent = 0.0;
+        double descending = 0.0;
+        ExtractBool(historyLine, "baro_available", &available);
+        ExtractBool(historyLine, "baro_lower_platform", &lowerPlatform);
+        ExtractNumber(historyLine, "baro_descent_m", &descent);
+        ExtractNumber(historyLine, "obs_baro_descending", &descending);
+        if (!available) {
+            continue;
+        }
+        ++baroPoints;
+        baroMaxDescent = std::max(baroMaxDescent, descent);
+        baroMaxDescending = std::max(baroMaxDescending, descending);
+        baroAnyLowerPlatform = baroAnyLowerPlatform || lowerPlatform;
+        const int64_t delta = std::llabs(tMs - tCenter);
+        if (delta < baroAtDelta) {
+            baroAtDelta = delta;
+            baroAtAvailable = true;
+            baroAtDescent = descent;
+            baroAtDescending = descending;
+            baroAtLowerPlatform = lowerPlatform;
+        }
+    }
+
     std::string liveRadio = "{}";
     std::string livePdr = "{}";
     if (BaselineRuntime::GetInstance().Enabled()) {
@@ -1532,6 +1617,13 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         << ",\"net_post_5min_m\":" << pdrSum.net_post
         << ",\"outbound_hint\":" << (pdrSum.net_at_push >= 8.0 ? "true" : "false")
         << ",\"notes\":\"net = planar distance from walk-episode origin (not distance-to-home)\"}"
+        << ",\"baro\":{\"available\":" << (baroPoints > 0 ? "true" : "false")
+        << ",\"n_history_points\":" << baroPoints << ",\"max_descent_m\":" << baroMaxDescent
+        << ",\"max_descending\":" << baroMaxDescending << ",\"any_lower_platform\":"
+        << (baroAnyLowerPlatform ? "true" : "false") << ",\"at_push\":{\"available\":"
+        << (baroAtAvailable ? "true" : "false") << ",\"descent_m\":" << baroAtDescent
+        << ",\"descending\":" << baroAtDescending << ",\"lower_platform\":"
+        << (baroAtLowerPlatform ? "true" : "false") << "}}"
         << ",\"mag\":{\"n_samples\":" << magN << ",\"mag_ema_pre\":" << magEarly << ",\"mag_ema_post\":" << magLate
         << ",\"delta\":" << ((magEarly >= 0 && magLate >= 0) ? (magLate - magEarly) : 0.0) << "}"
         << ",\"live_radio_debug\":" << liveRadio << ",\"live_pdr_debug\":" << livePdr

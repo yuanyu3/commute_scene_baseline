@@ -1,5 +1,7 @@
 # Agent 可读语义信息
 
+> 本文的证据查询仍可参考，但末尾直接改 θ 的动作流程属于旧消融方案。当前动作边界见 [CONTEXT_TEMPLATE_PERSONALIZATION.md](CONTEXT_TEMPLATE_PERSONALIZATION.md)。
+
 面向 **θ 个性化 Agent**（`jiuwen_agent`）：只读证据 Tool 能拿到什么。  
 实时场景仍由 `SceneEngine` 判定；Agent **不读 raw CSV 行**，只读已压缩的语义。
 

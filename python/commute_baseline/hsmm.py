@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import IntEnum
 from typing import Any, Dict, List
@@ -38,6 +38,11 @@ class LeaveObservation:
     baro_descending: float = 0.0
     baro_lower_platform: float = 0.0
     baro_available: bool = False
+    sequence_available: bool = False
+    sequence_progress: float = 0.0
+    sequence_complete: float = 0.0
+    negative_pattern_match: float = 0.0
+    sequence_reliability: float = 0.0
 
 
 @dataclass
@@ -68,6 +73,30 @@ class LeaveHsmm:
         self._mass = [{}, {}, {}, {}]
         self._last_t = None
 
+    @staticmethod
+    def _effective_observation(obs: LeaveObservation, theta: Dict[str, Any]) -> LeaveObservation:
+        """Mask disabled channels before both transition and emission calculations."""
+        values: Dict[str, Any] = {}
+        if float(theta.get("w_walk", 0.0)) <= 0.0:
+            values["walking"] = 0.0
+        if float(theta.get("w_pdr", 0.0)) <= 0.0:
+            values["pdr_outbound"] = 0.0
+        if float(theta.get("w_geo", 0.0)) <= 0.0:
+            values["geo_outbound"] = 0.0
+        if float(theta.get("w_wifi", 0.0)) <= 0.0:
+            values.update(wifi_detach=0.0, attached=False)
+        if float(theta.get("w_cell", 0.0)) <= 0.0:
+            values["cell_detach"] = 0.0
+        if float(theta.get("w_ble", 0.0)) <= 0.0:
+            values["ble_detach"] = 0.0
+        if float(theta.get("w_time", 0.0)) <= 0.0:
+            values["time_prior"] = 0.0
+        if float(theta.get("w_baro", 0.0)) <= 0.0:
+            values.update(baro_descending=0.0, baro_lower_platform=0.0, baro_available=False)
+        if float(theta.get("w_risk", 0.8)) <= 0.0:
+            values.update(risk_available=False, risk_30s=0.0, risk_60s=0.0, risk_120s=0.0)
+        return replace(obs, **values) if values else obs
+
     def _initialize(self, obs: LeaveObservation, t: datetime) -> LeaveHsmmResult:
         initial = LeavePhase.OUTSIDE if obs.outside else LeavePhase.AT_ANCHOR
         self._mass = [{}, {}, {}, {}]
@@ -80,12 +109,9 @@ class LeaveHsmm:
         phase: LeavePhase, age_s: int, dt_s: int, obs: LeaveObservation, theta: Dict[str, Any]
     ) -> float:
         if phase == LeavePhase.AT_ANCHOR:
-            outbound = max(obs.pdr_outbound, obs.geo_outbound)
-            hazard = 0.00005 + 0.0015 * obs.time_prior + 0.004 * obs.walking + 0.002 * outbound
-            if obs.risk_available:
-                hazard += 0.012 * obs.risk_120s
-            if obs.approaching or obs.attached:
-                hazard *= 0.05
+            # Observation-independent candidate flow. Atomic observations are
+            # consumed once, by _emission().
+            hazard = max(0.0, float(theta.get("hsmm_at_anchor_exit_hazard_per_s", 0.0030)))
             return _clip01(1.0 - math.exp(-dt_s * hazard))
         if phase == LeavePhase.PRE_LEAVE:
             minimum = float(theta.get("hsmm_preleave_min_s", 10.0))
@@ -96,7 +122,7 @@ class LeaveHsmm:
             scale = max(5.0, float(theta.get("hsmm_preleave_mean_s", 90.0)) - minimum)
             return _clip01(1.0 - math.exp(-dt_s / scale))
         if phase == LeavePhase.LEAVING:
-            if obs.outside or obs.approaching or obs.attached:
+            if obs.outside:
                 return 0.95
             minimum = float(theta.get("hsmm_leaving_min_s", 10.0))
             if age_s < minimum:
@@ -105,7 +131,7 @@ class LeaveHsmm:
                 return 1.0
             scale = max(5.0, float(theta.get("hsmm_leaving_mean_s", 120.0)) - minimum)
             return _clip01(1.0 - math.exp(-dt_s / scale))
-        return 0.95 if (obs.inside or obs.attached or obs.approaching) else 0.0
+        return 0.95 if obs.inside else 0.0
 
     @staticmethod
     def _emission(obs: LeaveObservation, theta: Dict[str, Any]) -> List[float]:
@@ -127,7 +153,10 @@ class LeaveHsmm:
             [0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08, 0.82],
         ]
         keys = ["w_walk", "w_pdr", "w_geo", "w_wifi", "w_cell", "w_ble", "w_time", "w_baro", "w_baro"]
-        reliability = [0.25 + 3.0 * float(theta.get(key, 0.0)) for key in keys]
+        feature_reliability = [
+            0.0 if float(theta.get(key, 0.0)) <= 0.0 else 0.25 + 3.0 * float(theta.get(key, 0.0))
+            for key in keys
+        ]
         logs: List[float] = []
         for state in range(4):
             value = 0.0
@@ -136,16 +165,14 @@ class LeaveHsmm:
                     continue
                 mu = max(0.02, min(0.98, expected[state][feature]))
                 sample = _clip01(observation)
-                value += reliability[feature] * (sample * math.log(mu) + (1.0 - sample) * math.log(1.0 - mu))
+                value += feature_reliability[feature] * (
+                    sample * math.log(mu) + (1.0 - sample) * math.log(1.0 - mu)
+                )
             if obs.relation_known:
                 if obs.inside:
-                    strong_outbound = obs.walking >= 0.5 and (
-                        obs.wifi_detach + obs.pdr_outbound + obs.geo_outbound
-                    ) >= 0.8
-                    # Match C++: predictive leave happens while still INSIDE.
-                    relation = (
-                        [0.28, 0.42, 0.68, 0.02] if strong_outbound else [0.88, 0.62, 0.24, 0.02]
-                    )
+                    # Structural relation evidence must not inspect atomic
+                    # sensors a second time. Predictive LEAVING remains possible.
+                    relation = [0.65, 0.65, 0.65, 0.02]
                 elif obs.near:
                     relation = [0.18, 0.48, 0.72, 0.12]
                 elif obs.outside:
@@ -155,6 +182,14 @@ class LeaveHsmm:
                 value += 3.0 * math.log(max(1e-9, relation[state]))
             if obs.approaching or obs.attached:
                 value += 2.5 * math.log([0.92, 0.30, 0.02, 0.08][state])
+            if obs.sequence_available:
+                progress_llr = [-0.35, 0.65, 0.25, -0.30]
+                complete_llr = [-1.00, 0.15, 1.20, -0.35]
+                negative_llr = [0.80, 0.25, -1.00, -0.25]
+                seq_reliability = _clip01(obs.sequence_reliability)
+                value += 2.0 * seq_reliability * _clip01(obs.sequence_progress) * progress_llr[state]
+                value += 2.0 * seq_reliability * _clip01(obs.sequence_complete) * complete_llr[state]
+                value += 2.0 * seq_reliability * _clip01(obs.negative_pattern_match) * negative_llr[state]
             if obs.risk_available:
                 risk_expected = [
                     [0.03, 0.05, 0.08],
@@ -182,6 +217,7 @@ class LeaveHsmm:
         return dict(kept)
 
     def step(self, obs: LeaveObservation, t: datetime, theta: Dict[str, Any]) -> LeaveHsmmResult:
+        obs = self._effective_observation(obs, theta)
         if self._last_t is None:
             return self._initialize(obs, t)
         raw_dt = (t - self._last_t).total_seconds()
@@ -204,10 +240,7 @@ class LeaveHsmm:
                 if phase == LeavePhase.AT_ANCHOR:
                     add(LeavePhase.PRE_LEAVE, 0, exiting)
                 elif phase == LeavePhase.PRE_LEAVE:
-                    outbound = max(obs.pdr_outbound, obs.geo_outbound)
-                    share = _clip01(0.20 + 0.45 * outbound + 0.20 * obs.wifi_detach + 0.10 * obs.time_prior)
-                    if obs.risk_available:
-                        share = max(share, _clip01(0.15 + 0.70 * obs.risk_30s))
+                    share = _clip01(float(theta.get("hsmm_preleave_exit_to_leaving", 0.90)))
                     add(LeavePhase.LEAVING, 0, exiting * share)
                     add(LeavePhase.AT_ANCHOR, 0, exiting * (1.0 - share))
                 elif phase == LeavePhase.LEAVING:

@@ -178,71 +178,96 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
     if (lim == nullptr) {
         return false;
     }
-    // min/max unused for clipping (range unbounded). Only step is enforced per apply.
-    constexpr double kLo = -1.0e100;
-    constexpr double kHi = 1.0e100;
     if (param == "enter_leave") {
-        *lim = {kLo, kHi, 0.03};
+        *lim = {0.40, 0.85, 0.03};
         return true;
     }
     if (param == "exit_leave") {
-        *lim = {kLo, kHi, 0.03};
+        *lim = {0.20, 0.70, 0.03};
         return true;
     }
     if (param == "w_walk") {
-        *lim = {kLo, kHi, 0.05};
+        *lim = {0.0, 0.50, 0.05};
         return true;
     }
     if (param == "w_pdr") {
-        *lim = {kLo, kHi, 0.05};
+        *lim = {0.0, 0.40, 0.05};
         return true;
     }
     if (param == "w_geo") {
-        *lim = {kLo, kHi, 0.05};
+        *lim = {0.05, 0.40, 0.05};
         return true;
     }
     if (param == "w_wifi") {
-        *lim = {kLo, kHi, 0.02};
+        *lim = {0.0, 0.40, 0.02};
         return true;
     }
     if (param == "w_cell") {
-        *lim = {kLo, kHi, 0.02};
+        *lim = {0.0, 0.30, 0.02};
         return true;
     }
     if (param == "w_ble") {
-        *lim = {kLo, kHi, 0.02};
+        *lim = {0.0, 0.20, 0.02};
         return true;
     }
     if (param == "w_radio") {
-        *lim = {kLo, kHi, 0.05};
+        *lim = {0.0, 0.90, 0.05};
         return true;
     }
     if (param == "w_time") {
-        *lim = {kLo, kHi, 0.05};
+        *lim = {0.05, 0.35, 0.05};
         return true;
     }
     if (param == "w_baro") {
-        *lim = {kLo, kHi, 0.05};
+        *lim = {0.0, 0.40, 0.05};
         return true;
     }
     if (param == "weekday_leave_home_hour") {
-        *lim = {kLo, kHi, 0.083};
+        *lim = {0.0, 24.0, 0.10};
         return true;
     }
     if (param == "weekday_leave_company_hour") {
-        *lim = {kLo, kHi, 0.083};
+        *lim = {11.0, 21.0, 0.10};
         return true;
     }
     if (param == "arm_delay_s") {
-        *lim = {kLo, kHi, 5.0};
+        *lim = {0.0, 90.0, 5.0};
+        return true;
+    }
+    if (param == "hsmm_preleave_min_s") {
+        *lim = {0.0, 120.0, 5.0};
+        return true;
+    }
+    if (param == "hsmm_preleave_mean_s") {
+        *lim = {20.0, 240.0, 10.0};
+        return true;
+    }
+    if (param == "hsmm_preleave_max_s") {
+        *lim = {60.0, 900.0, 30.0};
+        return true;
+    }
+    if (param == "hsmm_leaving_min_s") {
+        *lim = {0.0, 120.0, 5.0};
+        return true;
+    }
+    if (param == "hsmm_leaving_mean_s") {
+        *lim = {20.0, 360.0, 10.0};
+        return true;
+    }
+    if (param == "hsmm_leaving_max_s") {
+        *lim = {60.0, 1200.0, 30.0};
         return true;
     }
     if (param == "lead_min_s") {
-        *lim = {kLo, kHi, 15.0};
+        *lim = {0.0, 600.0, 15.0};
         return true;
     }
     if (param == "lead_max_s") {
-        *lim = {kLo, kHi, 30.0};
+        *lim = {30.0, 900.0, 30.0};
+        return true;
+    }
+    if (param == "baro_min_descent_m") {
+        *lim = {2.0, 40.0, 2.0};
         return true;
     }
     return false;
@@ -257,6 +282,12 @@ double ClipDeltaToStep(double delta, double step)
         return delta;
     }
     return (delta > 0.0) ? step : -step;
+}
+
+double ClipDeltaToRange(double oldValue, double delta, const ParamLimit &lim)
+{
+    const double target = std::max(lim.minV, std::min(lim.maxV, oldValue + delta));
+    return target - oldValue;
 }
 
 bool ReadParamValue(const Theta &t, const std::string &param, double *out)
@@ -320,12 +351,40 @@ bool ReadParamValue(const Theta &t, const std::string &param, double *out)
         *out = t.arm_delay_s;
         return true;
     }
+    if (param == "hsmm_preleave_min_s") {
+        *out = t.hsmm_preleave_min_s;
+        return true;
+    }
+    if (param == "hsmm_preleave_mean_s") {
+        *out = t.hsmm_preleave_mean_s;
+        return true;
+    }
+    if (param == "hsmm_preleave_max_s") {
+        *out = t.hsmm_preleave_max_s;
+        return true;
+    }
+    if (param == "hsmm_leaving_min_s") {
+        *out = t.hsmm_leaving_min_s;
+        return true;
+    }
+    if (param == "hsmm_leaving_mean_s") {
+        *out = t.hsmm_leaving_mean_s;
+        return true;
+    }
+    if (param == "hsmm_leaving_max_s") {
+        *out = t.hsmm_leaving_max_s;
+        return true;
+    }
     if (param == "lead_min_s") {
         *out = t.lead_min_s;
         return true;
     }
     if (param == "lead_max_s") {
         *out = t.lead_max_s;
+        return true;
+    }
+    if (param == "baro_min_descent_m") {
+        *out = t.baro_min_descent_m;
         return true;
     }
     return false;
@@ -381,17 +440,20 @@ std::string RootDir()
 
 std::string GetParamLimitsJson()
 {
-    // Range unbounded: only per-apply step is enforced (ClipDeltaToStep).
-    return R"({"range":"unbounded","note":"min/max not enforced; each apply_theta_delta clipped to ±step",)"
-           R"("enter_leave":{"step":0.03},"exit_leave":{"step":0.03},)"
-           R"("w_walk":{"step":0.05},"w_pdr":{"step":0.05},)"
-           R"("w_geo":{"step":0.05},"w_wifi":{"step":0.02},)"
-           R"("w_cell":{"step":0.02},"w_ble":{"step":0.02},)"
-           R"("w_radio":{"step":0.05,"note":"legacy; prefer w_wifi/w_cell/w_ble"},)"
-           R"("w_time":{"step":0.05},"w_baro":{"step":0.05},)"
-           R"("weekday_leave_home_hour":{"step":0.083},)"
-           R"("weekday_leave_company_hour":{"step":0.083},"arm_delay_s":{"step":5},)"
-           R"("lead_min_s":{"step":15},"lead_max_s":{"step":30}})";
+    return R"({"range":"bounded","note":"each apply is clipped to ±step and absolute min/max",)"
+           R"("enter_leave":{"min":0.40,"max":0.85,"step":0.03},"exit_leave":{"min":0.20,"max":0.70,"step":0.03},)"
+           R"("w_walk":{"min":0,"max":0.50,"step":0.05},"w_pdr":{"min":0,"max":0.40,"step":0.05},)"
+           R"("w_geo":{"min":0.05,"max":0.40,"step":0.05},"w_wifi":{"min":0,"max":0.40,"step":0.02},)"
+           R"("w_cell":{"min":0,"max":0.30,"step":0.02},"w_ble":{"min":0,"max":0.20,"step":0.02},)"
+           R"("w_radio":{"min":0,"max":0.90,"step":0.05,"note":"legacy; prefer split channels"},)"
+           R"("w_time":{"min":0.05,"max":0.35,"step":0.05},"w_baro":{"min":0,"max":0.40,"step":0.05},)"
+           R"("weekday_leave_home_hour":{"min":0,"max":24,"step":0.10},)"
+           R"("weekday_leave_company_hour":{"min":11,"max":21,"step":0.10},"arm_delay_s":{"min":0,"max":90,"step":5},)"
+           R"("hsmm_preleave_min_s":{"min":0,"max":120,"step":5},"hsmm_preleave_mean_s":{"min":20,"max":240,"step":10},)"
+           R"("hsmm_preleave_max_s":{"min":60,"max":900,"step":30},"hsmm_leaving_min_s":{"min":0,"max":120,"step":5},)"
+           R"("hsmm_leaving_mean_s":{"min":20,"max":360,"step":10},"hsmm_leaving_max_s":{"min":60,"max":1200,"step":30},)"
+           R"("lead_min_s":{"min":0,"max":600,"step":15},"lead_max_s":{"min":30,"max":900,"step":30},)"
+           R"("baro_min_descent_m":{"min":2,"max":40,"step":2}})";
 }
 
 std::string ApplyThetaDeltaAction(const std::string &paramsJson)
@@ -427,6 +489,7 @@ std::string ApplyThetaDeltaAction(const std::string &paramsJson)
     std::string err;
     if (BaselineRuntime::GetInstance().Enabled() && BaselineRuntime::GetInstance().Engine() != nullptr) {
         ReadParamValue(BaselineRuntime::GetInstance().Engine()->GetTheta(), param, &oldV);
+        delta = ClipDeltaToRange(oldV, delta, lim);
         if (!BaselineRuntime::GetInstance().ApplyThetaDeltaAndPersist(param, delta, reason)) {
             return "{\"ok\":false,\"error\":\"ApplyThetaDeltaAndPersist failed\",\"param\":\"" + Esc(param) + "\"}";
         }
@@ -438,6 +501,7 @@ std::string ApplyThetaDeltaAction(const std::string &paramsJson)
         if (!ReadParamValue(t, param, &oldV)) {
             return "{\"ok\":false,\"error\":\"cannot read param\"}";
         }
+        delta = ClipDeltaToRange(oldV, delta, lim);
         if (!ApplyThetaDelta(&t, param, delta, &err)) {
             return "{\"ok\":false,\"error\":\"" + Esc(err.empty() ? "ApplyThetaDelta failed" : err) + "\"}";
         }

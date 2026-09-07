@@ -1,12 +1,13 @@
-# Host θ personalizer (real LLM) + DEBUG
+# Host constrained-template personalizer (real LLM)
 
 Linux/WSL only — links `third_party/bbpjiuwen/lib/libbbpjiuwen.so`.
 
 ## 普通跑
 
 ```bash
-cd /mnt/d/huawei/commute_scene_baseline
-bash examples/personalizer_llm/run.sh
+cd /mnt/d/commute_scene_baseline
+bash examples/personalizer_llm/run.sh /mnt/d/agent.env \
+  /mnt/d/commute_scene_baseline/output/context_template_0812_history --no-fixture
 ```
 
 ## DEBUG：看中间过程
@@ -32,9 +33,11 @@ DEBUG 打开后你会看到：
 | `----- ASSISTANT -----` | 模型中间推理文本 |
 | jiuwen `LOG(DEBUG)` | 框架内部日志（stderr） |
 | `run_data/agent_trace.jsonl` | **每次运行都会写** 的完整 stream（每行一条）；`--debug` 额外开 TRACE + 更详细终端输出 |
-| `run_data/param_changes.jsonl` | 实际改参 |
+| `run_data/active_context_template.json` | 当前通过回放验收的模板 |
+| `run_data/context_templates.jsonl` | 模板提交历史与前后指标 |
+| `run_data/param_changes.jsonl` | 普通链路应为空；只供旧改参消融实验 |
 | `run_data/audit.jsonl` | 审计 |
-| `run_data/theta.json` | 改后的 θ |
+| `run_data/theta.json` | 基线 θ；模板链路不修改它 |
 
 把 trace 拉到 Windows 看：
 
@@ -53,6 +56,6 @@ code D:\huawei\commute_scene_baseline\examples\personalizer_llm\run_data\agent_t
 Personalize Invoke 后看 Hilog；落盘看：
 
 - `/data/service/el1/public/commuteagentservice/personalize_jobs.jsonl`
-- `param_changes.jsonl` / `audit.jsonl` / `theta.json`
+- `active_context_template.json` / `context_templates.jsonl` / `audit.jsonl`
 
 需要更细 CSV 时：`SA_AGENT_DEBUG_SINKS=1`（与 LLM DEBUG 无关，是传感器 verbose 落盘）。

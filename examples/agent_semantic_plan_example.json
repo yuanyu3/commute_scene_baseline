@@ -1,0 +1,9 @@
+{
+  "primary_block": "radio_reliability",
+  "primary_direction": "decrease",
+  "secondary_block": "preleave_duration",
+  "secondary_direction": "increase",
+  "objective": "false_push",
+  "max_candidates": 12,
+  "min_improvement": 0.25
+}

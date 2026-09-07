@@ -31,6 +31,8 @@ while [[ $i -le $# ]]; do
   case "$a" in
     --debug|-d) EXTRA_ARGS+=(--debug) ;;
     --no-fixture) EXTRA_ARGS+=(--no-fixture) ;;
+    --diagnostic-only) EXTRA_ARGS+=(--diagnostic-only) ;;
+    --no-tools) EXTRA_ARGS+=(--no-tools) ;;
     --max-turn)
       EXTRA_ARGS+=(--max-turn)
       i=$((i+1))
@@ -45,6 +47,15 @@ while [[ $i -le $# ]]; do
       i=$((i+1))
       if [[ $i -gt $# ]]; then
         echo "ERROR: --system-prompt needs a value" >&2
+        exit 1
+      fi
+      EXTRA_ARGS+=("${args[$((i-1))]}")
+      ;;
+    --query-file)
+      EXTRA_ARGS+=(--query-file)
+      i=$((i+1))
+      if [[ $i -gt $# ]]; then
+        echo "ERROR: --query-file needs a value" >&2
         exit 1
       fi
       EXTRA_ARGS+=("${args[$((i-1))]}")

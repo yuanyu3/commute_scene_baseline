@@ -175,6 +175,49 @@ int main()
         return 1;
     }
 
+    // A zero weight disables the complete decision path for that sensor. Strong raw
+    // values must not survive through evidence hits, HSMM transitions, or attach gates.
+    Theta zeroTheta = theta;
+    zeroTheta.w_walk = 0.0;
+    zeroTheta.w_pdr = 0.0;
+    zeroTheta.w_geo = 0.0;
+    zeroTheta.w_wifi = 0.0;
+    zeroTheta.w_cell = 0.0;
+    zeroTheta.w_ble = 0.0;
+    zeroTheta.w_time = 0.0;
+    zeroTheta.w_baro = 0.0;
+    SceneEngine zeroEngine(anchors, zeroTheta);
+    TickFeatures fz = fp;
+    fz.t_ms += 300000;
+    fz.wifi_company_attach = true;
+    fz.wifi_company_detach = true;
+    fz.cell_leave_company = true;
+    fz.ble_company_detach = true;
+    fz.baro_available = true;
+    fz.baro_baseline_ready = true;
+    fz.baro_descent_m = 40.0;
+    fz.baro_descending = true;
+    fz.baro_stable_platform = true;
+    fz.baro_lower_platform = true;
+    const auto dz = zeroEngine.Step(fz);
+    if (dz.hits_company != 0 || dz.hsmm_obs_company.walking > 0.0 ||
+        dz.hsmm_obs_company.pdr_outbound > 0.0 || dz.hsmm_obs_company.wifi_detach > 0.0 ||
+        dz.hsmm_obs_company.cell_detach > 0.0 || dz.hsmm_obs_company.ble_detach > 0.0 ||
+        dz.hsmm_obs_company.time_prior > 0.0 || dz.hsmm_obs_company.baro_available ||
+        dz.hsmm_obs_company.attached) {
+        std::cerr << "FAIL: zero-weight sensor leaked into decision path"
+                  << " hits=" << dz.hits_company
+                  << " walk=" << dz.hsmm_obs_company.walking
+                  << " pdr=" << dz.hsmm_obs_company.pdr_outbound
+                  << " wifi=" << dz.hsmm_obs_company.wifi_detach
+                  << " cell=" << dz.hsmm_obs_company.cell_detach
+                  << " ble=" << dz.hsmm_obs_company.ble_detach
+                  << " time=" << dz.hsmm_obs_company.time_prior
+                  << " baro=" << dz.hsmm_obs_company.baro_available
+                  << " attached=" << dz.hsmm_obs_company.attached << "\n";
+        return 1;
+    }
+
     BaselineRuntime::GetInstance().Init("D:/huawei/commute_scene_baseline/config/anchors.json",
         "D:/huawei/commute_scene_baseline/config/theta_default.json");
     BaselineRuntime::GetInstance().OnWalkingStarted(f.t_ms - 30000);

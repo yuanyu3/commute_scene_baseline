@@ -3,9 +3,12 @@
  * No LLM / no OHOS required.
  */
 #include "commute_sa/action_ops.h"
+#include "commute_sa/context_template.h"
 #include "commute_sa/evidence_query.h"
+#include "commute_sa/personalization_optimizer.h"
 #include "commute_sa/product_store.h"
 
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
@@ -39,8 +42,52 @@ void Call(const char *tool, const std::string &out)
 
 }  // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+    // Dataset mode used by ablation scripts:
+    //   commute_offline_tools <root> <evaluate|rules|rule_optimize|agent_optimize|profile|
+    //     template_catalog|template_generate|template_trial|template_commit|template_discard|template_active|
+    //     template_evaluate_frozen> [json]
+    if (argc >= 3) {
+        const std::string dataRoot = argv[1];
+        const std::string command = argv[2];
+        const std::string params = argc >= 4 ? argv[3] : "{}";
+        if (!commute_sa::ProductStore::GetInstance().Init(dataRoot)) {
+            std::cout << "{\"ok\":false,\"error\":\"ProductStore init failed\"}\n";
+            return 1;
+        }
+        commute_sa::EvidenceQuery::GetInstance().SetRootDir(dataRoot);
+        if (command == "evaluate") {
+            std::cout << commute_sa::EvaluateThetaOnHistoryAction(params) << "\n";
+        } else if (command == "rules") {
+            std::cout << commute_sa::AnalyzePersonalizationRulesAction(params) << "\n";
+        } else if (command == "rule_optimize") {
+            std::cout << commute_sa::RunRulePersonalizationAction(params) << "\n";
+        } else if (command == "agent_optimize") {
+            std::cout << commute_sa::RunConstrainedThetaOptimizerAction(params) << "\n";
+        } else if (command == "profile") {
+            std::cout << commute_sa::GetPersonalizationProfileAction(params) << "\n";
+        } else if (command == "template_catalog") {
+            std::cout << commute_sa::GetContextTemplateCatalogAction(params) << "\n";
+        } else if (command == "template_generate") {
+            std::cout << commute_sa::GenerateContextTemplateAction(params) << "\n";
+        } else if (command == "template_trial") {
+            std::cout << commute_sa::GetContextTemplateTrialAction(params) << "\n";
+        } else if (command == "template_commit") {
+            std::cout << commute_sa::CommitContextTemplateAction(params) << "\n";
+        } else if (command == "template_discard") {
+            std::cout << commute_sa::DiscardContextTemplateAction(params) << "\n";
+        } else if (command == "template_active") {
+            std::cout << commute_sa::GetActiveContextTemplateAction(params) << "\n";
+        } else if (command == "template_evaluate_frozen") {
+            std::cout << commute_sa::EvaluateActiveContextTemplateOnHistoryAction(params) << "\n";
+        } else {
+            std::cout << "{\"ok\":false,\"error\":\"unknown dataset command\"}\n";
+            return 2;
+        }
+        return 0;
+    }
+
     const std::string root = "offline_tools_run";
     MKDIR(root.c_str());
     const std::string session = root + "/20260806_session";
@@ -67,6 +114,14 @@ int main()
         "\"acc\":15,\"walking\":true,\"home_relation\":\"NEAR\",\"dist_home_m\":48}\n"
         "{\"t_ms\":1700000120000,\"t_push_ms\":1700000000000,\"lat\":40.0500,\"lon\":116.1701,"
         "\"acc\":12,\"walking\":false,\"home_relation\":\"INSIDE\",\"dist_home_m\":18}\n");
+
+    // Three independent validated lower-platform episodes support deterministic
+    // estimation of the vertical parameter family.
+    WriteFile(root + "/policy_history.jsonl",
+        "{\"t_ms\":1799999940000,\"outcome_t_ms\":1800000000000,\"side\":\"company\",\"label\":\"CONFIRMED_LEAVE\",\"baro_descent_m\":18,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":1,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
+        "{\"t_ms\":1800086340000,\"outcome_t_ms\":1800086400000,\"side\":\"company\",\"label\":\"FALSE_PUSH\",\"baro_descent_m\":20,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":1,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
+        "{\"t_ms\":1800172740000,\"outcome_t_ms\":1800172800000,\"side\":\"company\",\"label\":\"CONFIRMED_LEAVE\",\"baro_descent_m\":22,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":1,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
+        "{\"t_ms\":1800259140000,\"outcome_t_ms\":1800259200000,\"side\":\"company\",\"label\":\"FALSE_PUSH\",\"baro_descent_m\":5,\"obs_pdr_outbound\":0.1,\"obs_walking\":1,\"obs_geo_outbound\":0,\"obs_wifi_detach\":1,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":0,\"obs_baro_lower_platform\":0,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n");
 
     // Fake Ability session CSVs (wallTsMs first column)
     WriteFile(session + "/wifi_data_smoke.csv",
@@ -141,6 +196,73 @@ int main()
             std::cerr << "FAIL theta not updated\n";
             ++fails;
         }
+    }
+
+    Section("ACTIVE_CONTEXT_TEMPLATE_RUNTIME");
+    WriteFile(root + "/active_context_template.json",
+        "{\"schema_version\":2,\"template_name\":\"runtime_smoke\",\"side\":\"company\","
+        "\"anchor_id\":\"co\",\"applicability\":\"baro_ready\","
+        "\"positive_sequence\":\"baro_descending,lower_platform,geo_outbound\","
+        "\"negative_pattern\":\"walking,no_baro_descent\",\"strength_level\":\"LOW\","
+        "\"parameter_families\":\"vertical_threshold\","
+        "\"personalized_vertical_threshold\":true,\"baro_min_descent_m\":20,\"baro_sample_count\":3,"
+        "\"strength\":0.2,\"rationale\":\"smoke\"}\n");
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    commute_sa::LeaveObservation runtimeObs;
+    runtimeObs.walking = 1.0;
+    runtimeObs.pdr_outbound = 1.0;
+    runtimeObs.wifi_detach = 1.0;
+    runtimeObs.baro_available = true;
+    runtimeObs.baro_lower_platform = 1.0;
+    runtimeObs.baro_descent_m = 15.0;
+    runtimeObs.baro_stable_platform = true;
+    runtimeObs.baro_stable_platform_known = true;
+    const bool applied = commute_sa::ApplyActiveContextTemplateObservation(
+        "company", "co", 1700000000000, &runtimeObs);
+    std::cout << "applied=" << applied << " walking_after=" << runtimeObs.walking
+              << " negative_match=" << runtimeObs.negative_pattern_match << "\n";
+    if (!applied || runtimeObs.baro_lower_platform != 0.0 || std::abs(runtimeObs.walking - 1.0) > 1.0e-9 ||
+        std::abs(runtimeObs.wifi_detach - 1.0) > 1.0e-9 ||
+        std::abs(runtimeObs.negative_pattern_match - 1.0) > 1.0e-9 ||
+        std::abs(runtimeObs.sequence_reliability - 0.2) > 1.0e-9) {
+        std::cerr << "FAIL active context template was not applied to realtime observation\n";
+        ++fails;
+    }
+
+    // Positive matching emits independent sequence evidence and leaves atomic
+    // sensor semantics unchanged.
+    commute_sa::LeaveObservation seq1;
+    seq1.baro_available = true;
+    seq1.baro_descending = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1700000005000, &seq1);
+    commute_sa::LeaveObservation seq2;
+    seq2.baro_available = true;
+    seq2.baro_descent_m = 25.0;
+    seq2.baro_stable_platform = true;
+    seq2.baro_stable_platform_known = true;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1700000010000, &seq2);
+    commute_sa::LeaveObservation seq3;
+    seq3.baro_available = true;
+    seq3.geo_outbound = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1700000015000, &seq3);
+    if (!seq3.sequence_available || std::abs(seq3.sequence_progress - 1.0) > 1.0e-9 ||
+        std::abs(seq3.sequence_complete - 1.0) > 1.0e-9 ||
+        std::abs(seq3.sequence_reliability - 0.2) > 1.0e-9 || std::abs(seq3.geo_outbound - 1.0) > 1.0e-9) {
+        std::cerr << "FAIL positive sequence did not emit independent completion evidence\n";
+        ++fails;
+    }
+
+    Section("PARAMETER_FAMILY_ESTIMATION");
+    const std::string generated = commute_sa::GenerateContextTemplateAction(
+        "{\"template_name\":\"parameter_family_smoke\",\"side\":\"company\",\"anchor_id\":\"co\","
+        "\"applicability\":\"always\",\"positive_sequence\":\"walking\","
+        "\"parameter_families\":\"vertical_threshold\",\"rationale\":\"smoke\"}");
+    Call("generate_context_template", generated);
+    if (generated.find("\"personalized_time\":false") == std::string::npos ||
+        generated.find("\"personalized_vertical_threshold\":true") == std::string::npos ||
+        generated.find("\"baro_sample_count\":3") == std::string::npos) {
+        std::cerr << "FAIL supported parameter families were not estimated from three episodes\n";
+        ++fails;
     }
 
     std::cout << "\n=== SUMMARY fails=" << fails << " ===\n";

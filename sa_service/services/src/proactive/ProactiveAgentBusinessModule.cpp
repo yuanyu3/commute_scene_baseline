@@ -1645,16 +1645,20 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                       << "\"enter_leave\":" << job.theta_snapshot.enter_leave
                       << ",\"w_walk\":" << job.theta_snapshot.w_walk
                       << ",\"w_pdr\":" << job.theta_snapshot.w_pdr
-                      << ",\"w_geo\":" << job.theta_snapshot.w_geo
-                      << ",\"w_radio\":" << job.theta_snapshot.w_radio
-                      << ",\"w_time\":" << job.theta_snapshot.w_time
+                       << ",\"w_geo\":" << job.theta_snapshot.w_geo
+                       << ",\"w_wifi\":" << job.theta_snapshot.w_wifi
+                       << ",\"w_cell\":" << job.theta_snapshot.w_cell
+                       << ",\"w_ble\":" << job.theta_snapshot.w_ble
+                       << ",\"w_time\":" << job.theta_snapshot.w_time
+                       << ",\"w_baro\":" << job.theta_snapshot.w_baro
                       << ",\"weekday_leave_home_hour\":" << job.theta_snapshot.weekday_leave_home_hour
                       << ",\"weekday_leave_company_hour\":" << job.theta_snapshot.weekday_leave_company_hour
                       << ",\"arm_delay_s\":" << job.theta_snapshot.arm_delay_s
                       << ",\"min_evidence\":" << job.theta_snapshot.min_evidence
-                      << "},\"instruction\":\"Use evidence tools first. Prefer a bounded policy trial and semantic "
-                         "history evaluation; use theta trial only when strategy structure need not change. "
-                         "Commit only if score improves without more misses. Do not classify scenes.\"}";
+                       << "},\"instruction\":\"Actively inspect evidence and compare the deterministic rule diagnosis. "
+                          "Form multiple falsifiable hypotheses and a context-aware semantic intervention plan. "
+                          "Use only the constrained optimizer for numeric candidates; commit only its guarded best candidate, "
+                          "otherwise discard and audit no_op. Do not classify scenes.\"}";
                 const int64_t invokeSinceMs = NowWallClockMs();
                 invokeResult = InvokeAgent(tick.tick_id + "-personalize", query.str());
                 if (invokeResult.status == "NotInitialized" || invokeResult.status == "NotImplemented") {
@@ -2074,23 +2078,22 @@ constexpr const char *kSaContextEngineBundleName = "commuteagentservice";
 constexpr const char *kSaContextEngineModuleName = "commuteagentservice";
 constexpr const char *kSaContextEngineDatabaseDir = "/data/service/el2/9903/database";
 
-/** Policy personalizer system prompt; never used for per-tick scene labels. */
+/** Low-frequency personalization researcher; never used for per-tick scene labels. */
 constexpr const char *kThetaPersonalizerSystemPrompt = R"delimiter(
-你是通勤预测离开的个性化 Agent。实时场景由 HSMM + SceneEngine 完成；你生成受约束的高层策略，必要时才小步改 theta。
+ 你是离家检测的低频个性化研究 Agent。实时场景由端侧 HSMM + SceneEngine 确定；你不参与逐 tick 推断，也不直接写数值参数。
 
-策略闭环（优先）：
-1) get_error_stats + get_leave_episode
-2) get_personalization_policy + get_policy_catalog
-3) begin_policy_trial → evaluate_policy_on_history 记 baseline
-4) apply_policy_candidate 选择一个模板并再次 evaluate
-5) score 提升且 missed 不增加才 commit_policy_trial，否则 revert_policy_trial
-6) write_audit 写明证据组合与 baseline→final
+ 先查看总体错误、当前 theta、目标 episode 和 get_personalization_profile；根据疑点主动查询传感器摘要和对照 episode。调用 analyze_personalization_rules，
+ 把固定规则结果当作对照意见。提出最多三个可证伪假设，每个假设同时记录支持证据、反证、缺失证据和置信度；识别可由端侧
+ 观测确定的上下文差异，例如定位来源、气压适用性、无线重新附着、PDR外向与回撤。
 
-如果候选策略都不优于 baseline：回滚 policy，写一次 no_op audit 后结束本轮 Invoke；不要在同一轮继续 theta trial。
+ 证据充分时，用 run_constrained_theta_optimizer 指定语义参数块、increase/decrease方向和实验目标。不得提供具体 theta 数值。
+ 阅读候选结果后最多改写一次计划，总候选预算不超过20。只有工具返回通过硬门的 best_candidate_id 时才调用
+ submit_agent_analysis 固化假设。只有工具返回通过硬门的 best_candidate_id 时才调用 commit_optimized_theta，否则
+ discard_optimization_trial 并记录 no_op。上下文满足支持门槛时可 propose_context_profile_update 保存长期记忆，但画像不能绕过回放。
 
-只有策略结构无需变化时，才使用 theta trial 和 apply_theta_delta。
-
-规则：禁止编造；不做每 tick 场景分类；不生成代码；policy_history 缺失时不得提交新策略。
+ 正常流程不得调用 apply_theta_delta、begin_theta_trial 或 commit_theta_trial；这些工具只为旧版对照实验保留。禁止把单个传感器
+ 当作充分条件，禁止编造证据，证据冲突或样本不足时必须允许不修改。最后 write_audit 记录上下文、多个假设、支持与反证、
+ 实验计划、泛化风险、提交决定和仍需收集的数据。
 )delimiter";
 } // namespace
 #endif

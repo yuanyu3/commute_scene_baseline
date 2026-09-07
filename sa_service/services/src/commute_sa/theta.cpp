@@ -214,8 +214,6 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         }
         return false;
     }
-    // Range limits intentionally removed: agent may explore freely. Per-call step
-    // clipping still happens in ApplyThetaDeltaAction via get_param_limits.step.
     if (param == "enter_leave") {
         theta->enter_leave = theta->enter_leave + delta;
     } else if (param == "exit_leave") {
@@ -252,14 +250,30 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         theta->weekday_leave_company_hour = theta->weekday_leave_company_hour + delta;
     } else if (param == "arm_delay_s") {
         theta->arm_delay_s = theta->arm_delay_s + delta;
+    } else if (param == "hsmm_preleave_min_s") {
+        theta->hsmm_preleave_min_s = theta->hsmm_preleave_min_s + delta;
+        theta->hsmm_preleave_mean_s = std::max(theta->hsmm_preleave_min_s, theta->hsmm_preleave_mean_s);
+        theta->hsmm_preleave_max_s = std::max(theta->hsmm_preleave_mean_s, theta->hsmm_preleave_max_s);
     } else if (param == "hsmm_preleave_mean_s") {
         theta->hsmm_preleave_mean_s = theta->hsmm_preleave_mean_s + delta;
         theta->hsmm_preleave_mean_s = std::max(theta->hsmm_preleave_min_s, theta->hsmm_preleave_mean_s);
         theta->hsmm_preleave_max_s = std::max(theta->hsmm_preleave_mean_s, theta->hsmm_preleave_max_s);
+    } else if (param == "hsmm_preleave_max_s") {
+        theta->hsmm_preleave_max_s = theta->hsmm_preleave_max_s + delta;
+        theta->hsmm_preleave_mean_s = std::min(theta->hsmm_preleave_mean_s, theta->hsmm_preleave_max_s);
+        theta->hsmm_preleave_min_s = std::min(theta->hsmm_preleave_min_s, theta->hsmm_preleave_mean_s);
+    } else if (param == "hsmm_leaving_min_s") {
+        theta->hsmm_leaving_min_s = theta->hsmm_leaving_min_s + delta;
+        theta->hsmm_leaving_mean_s = std::max(theta->hsmm_leaving_min_s, theta->hsmm_leaving_mean_s);
+        theta->hsmm_leaving_max_s = std::max(theta->hsmm_leaving_mean_s, theta->hsmm_leaving_max_s);
     } else if (param == "hsmm_leaving_mean_s") {
         theta->hsmm_leaving_mean_s = theta->hsmm_leaving_mean_s + delta;
         theta->hsmm_leaving_mean_s = std::max(theta->hsmm_leaving_min_s, theta->hsmm_leaving_mean_s);
         theta->hsmm_leaving_max_s = std::max(theta->hsmm_leaving_mean_s, theta->hsmm_leaving_max_s);
+    } else if (param == "hsmm_leaving_max_s") {
+        theta->hsmm_leaving_max_s = theta->hsmm_leaving_max_s + delta;
+        theta->hsmm_leaving_mean_s = std::min(theta->hsmm_leaving_mean_s, theta->hsmm_leaving_max_s);
+        theta->hsmm_leaving_min_s = std::min(theta->hsmm_leaving_min_s, theta->hsmm_leaving_mean_s);
     } else if (param == "lead_min_s") {
         theta->lead_min_s = theta->lead_min_s + delta;
         if (theta->lead_min_s > theta->lead_max_s) {
@@ -270,12 +284,23 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         if (theta->lead_max_s < theta->lead_min_s) {
             theta->lead_min_s = theta->lead_max_s;
         }
+    } else if (param == "baro_min_descent_m") {
+        theta->baro_min_descent_m = theta->baro_min_descent_m + delta;
     } else {
         if (err) {
             *err = "unknown param: " + param;
         }
         return false;
     }
+    // Preserve cross-parameter invariants for every caller, including the live
+    // BaselineRuntime path. Absolute min/max are enforced by the action/optimizer
+    // catalogs; these relationships cannot be validated one field at a time.
+    theta->exit_leave = std::min(theta->exit_leave, theta->enter_leave - 0.01);
+    theta->hsmm_preleave_mean_s = std::max(theta->hsmm_preleave_min_s, theta->hsmm_preleave_mean_s);
+    theta->hsmm_preleave_max_s = std::max(theta->hsmm_preleave_mean_s, theta->hsmm_preleave_max_s);
+    theta->hsmm_leaving_mean_s = std::max(theta->hsmm_leaving_min_s, theta->hsmm_leaving_mean_s);
+    theta->hsmm_leaving_max_s = std::max(theta->hsmm_leaving_mean_s, theta->hsmm_leaving_max_s);
+    theta->lead_max_s = std::max(theta->lead_min_s, theta->lead_max_s);
     return true;
 }
 

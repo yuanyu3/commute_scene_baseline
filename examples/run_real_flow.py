@@ -105,6 +105,21 @@ def main() -> int:
         help="comma-separated GPS source types treated as an outdoor confirmation",
     )
     ap.add_argument(
+        "--episode-truth",
+        default="auto",
+        choices=["auto", "leave", "not_leave", "unknown"],
+        help=(
+            "closed-window truth. auto uses independent outdoor GPS; leave/not_leave are explicit dataset truth; "
+            "unknown leaves a no-push/no-outdoor window unlabeled"
+        ),
+    )
+    ap.add_argument(
+        "--truth-event-ms",
+        type=int,
+        default=0,
+        help="optional ground-truth leave time for --episode-truth leave (defaults to first outdoor fix or final tick)",
+    )
+    ap.add_argument(
         "--stop-at-motion",
         action="store_true",
         help="truncate replay at the last acc/gyro/mag/rv/baro sample",
@@ -137,6 +152,10 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     session = out / "session"
     session.mkdir(exist_ok=True)
+    (session / "metadata.json").write_text(
+        json.dumps({"location_crs": args.location_crs}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     raw = load_location_csv_dir(args.raw_dir, source_crs=args.location_crs)
     sensor = load_sensor_gps(args.sensor_dir)
@@ -280,11 +299,12 @@ def main() -> int:
             bt, bp = baro_series[baro_i]
             baro.observe(bt, bp)
             baro_i += 1
+        wifi_enabled = float(theta.get("w_wifi", 0.0)) > 0.0
+        cell_enabled = float(theta.get("w_cell", 0.0)) > 0.0
         workplace_ready = (
-            radio_snap.company_dwell_ready
-            or radio_snap.company_site_wifi_coverage >= 0.50
-            or radio_snap.company_site_cell_match
-        )
+            wifi_enabled
+            and (radio_snap.company_dwell_ready or radio_snap.company_site_wifi_coverage >= 0.50)
+        ) or (cell_enabled and radio_snap.company_site_cell_match)
         baro_snap = baro.evaluate(tick_t, workplace_ready, float(theta.get("baro_min_descent_m", 12.0)))
         pdr_net_out = pdr_net_at(pdr_series, tick_t)
         feat = TickFeatures(
@@ -381,6 +401,91 @@ def main() -> int:
     sorted_dec = sorted(decisions, key=lambda r: r["t_ms"])
 
     policy_rows = []
+
+    def append_policy_window(
+        side: str,
+        label: str,
+        start_ms: int,
+        outcome_ms: int,
+        lead_s: float | None,
+    ) -> None:
+        """Store the immutable pre-update evidence window used by later counterfactual replay."""
+        for r in sorted_dec:
+            if r["t_ms"] < start_ms or r["t_ms"] > outcome_ms:
+                continue
+            ev = r.get("evidence", {}).get(side, {})
+            obs = ev.get("obs", {})
+            rel = r["home_relation"] if side == "home" else r["company_relation"]
+            policy_rows.append(
+                {
+                    "t_ms": r["t_ms"],
+                    "outcome_t_ms": outcome_ms,
+                    "side": side,
+                    "label": label,
+                    "preleave_probability": r["hsmm_preleave_home"] if side == "home" else r["hsmm_preleave_company"],
+                    "leaving_probability": r["score_home"] if side == "home" else r["score_company"],
+                    "hits": ev.get("hits", r.get("hits_home", 0) if side == "home" else r.get("hits_company", 0)),
+                    "walking": r["walking"],
+                    "pdr_net_out_m": ev.get("pdr_net_out", 0.0),
+                    "wifi_detach": ev.get("wifi_detach", False),
+                    "cell_leave": ev.get("cell_leave", False),
+                    "ble_detach": ev.get("ble_detach", False),
+                    "geo_outbound": float(ev.get("s_geo", 0.0)) >= float(theta.get("thr_geo", 0.5)),
+                    "has_usable_gps": rel != "UNKNOWN",
+                    "baro_available": r.get("baro_pressure_hpa") is not None,
+                    "baro_baseline_ready": r.get("baro_baseline_ready", False),
+                    "baro_descent_m": r.get("baro_descent_m", 0.0),
+                    "baro_lower_platform": r.get("baro_lower_platform", False),
+                    "obs_walking": float(obs.get("walking", ev.get("s_walk", 0.0))),
+                    "obs_pdr_outbound": float(obs.get("pdr_outbound", ev.get("s_pdr", 0.0))),
+                    "obs_geo_outbound": float(obs.get("geo_outbound", ev.get("s_geo", 0.0))),
+                    "obs_wifi_detach": float(obs.get("wifi_detach", ev.get("s_wifi", 0.0))),
+                    "obs_cell_detach": float(obs.get("cell_detach", ev.get("s_cell", 0.0))),
+                    "obs_ble_detach": float(obs.get("ble_detach", ev.get("s_ble", 0.0))),
+                    "obs_time_prior": float(obs.get("time_prior", ev.get("s_time", 0.0))),
+                    "obs_baro_descending": float(obs.get("baro_descending", r.get("baro_descending", 0.0))),
+                    "obs_baro_lower_platform": float(obs.get("baro_lower_platform", 1.0 if r.get("baro_lower_platform") else 0.0)),
+                    "obs_baro_available": bool(obs.get("baro_available", r.get("baro_baseline_ready", False))),
+                    "obs_sequence_available": bool(obs.get("sequence_available", False)),
+                    "obs_sequence_progress": float(obs.get("sequence_progress", 0.0)),
+                    "obs_sequence_complete": float(obs.get("sequence_complete", 0.0)),
+                    "obs_negative_pattern_match": float(obs.get("negative_pattern_match", 0.0)),
+                    "obs_sequence_reliability": float(obs.get("sequence_reliability", 0.0)),
+                    "obs_relation_known": bool(obs.get("relation_known", rel != "UNKNOWN")),
+                    "obs_inside": bool(obs.get("inside", rel == "INSIDE")),
+                    "obs_near": bool(obs.get("near", rel == "NEAR")),
+                    "obs_outside": bool(obs.get("outside", rel == "OUTSIDE")),
+                    "obs_approaching": bool(obs.get("approaching", ev.get("approaching", False))),
+                    "obs_attached": bool(obs.get("attached", False)),
+                    "lead_s": lead_s,
+                }
+            )
+
+    # Ground truth is independent of the model push, but an outdoor GPS fix is
+    # not itself a leave event: a session may begin outdoors while the user is
+    # returning to the company.  Require an observed company origin followed
+    # by an outward INSIDE/NEAR -> OUTSIDE transition.
+    observed_company_gt: list[int] = []
+    saw_company_origin = False
+    leave_event_open = False
+    previous_company_relation = "UNKNOWN"
+    for r in sorted_dec:
+        relation = r.get("company_relation", "UNKNOWN")
+        if relation in ("INSIDE", "NEAR"):
+            saw_company_origin = True
+            leave_event_open = False
+        outdoor = r.get("gps_source_type") in outdoor_source_types
+        approaching = bool(r.get("evidence", {}).get("company", {}).get("approaching", False))
+        crossed_outward = previous_company_relation in ("INSIDE", "NEAR") and relation == "OUTSIDE"
+        if saw_company_origin and outdoor and crossed_outward and not approaching and not leave_event_open:
+            observed_company_gt.append(r["t_ms"])
+            leave_event_open = True
+        if relation != "UNKNOWN":
+            previous_company_relation = relation
+    company_gt = list(observed_company_gt) if args.episode_truth in ("auto", "leave") else []
+    if args.episode_truth == "leave" and not company_gt and sorted_dec:
+        company_gt.append(args.truth_event_ms if args.truth_event_ms > 0 else sorted_dec[-1]["t_ms"])
+
     with episodes_path.open("w", encoding="utf-8") as ep, samples_path.open("w", encoding="utf-8") as sp:
         for push in pushes:
             t_push = push["t_ms"]
@@ -444,7 +549,10 @@ def main() -> int:
                 if rel_now != "UNKNOWN":
                     last_rel = rel_now
                     last_dist = dist_now
-                outdoor_fix = r.get("gps_source_type") in outdoor_source_types
+                outdoor_fix = (
+                    args.episode_truth != "not_leave" and
+                    r.get("gps_source_type") in outdoor_source_types
+                )
                 if use_home:
                     if t_star is None and rel_now == "OUTSIDE":
                         t_star = r["t_ms"]
@@ -480,6 +588,7 @@ def main() -> int:
                         "t_label_ms": t_label,
                         "t_push_ms": t_push,
                         "label": label,
+                        "side": "home" if use_home else "company",
                         "home_relation": last_rel if use_home else push["home_relation"],
                         "anchor_relation": last_rel,
                         "dist_home_m": last_dist if use_home and last_dist is not None else -1,
@@ -491,59 +600,53 @@ def main() -> int:
                 )
                 + "\n"
             )
-            # Keep only semantic evidence for the Agent. The policy evaluator
-            # reconstructs minimum evidence duration from consecutive ticks.
             side = "home" if use_home else "company"
-            outcome_ms = t_star if t_star is not None else t_push
-            for r in sorted_dec:
-                if r["t_ms"] < t_push - 600000 or r["t_ms"] > outcome_ms:
-                    continue
-                ev = r.get("evidence", {}).get(side, {})
-                obs = ev.get("obs", {})
-                rel = r["home_relation"] if side == "home" else r["company_relation"]
-                policy_rows.append(
-                    {
-                        "t_ms": r["t_ms"],
-                        "outcome_t_ms": outcome_ms,
-                        "side": side,
-                        "label": label,
-                        "preleave_probability": r["hsmm_preleave_home"] if side == "home" else r["hsmm_preleave_company"],
-                        "leaving_probability": r["score_home"] if side == "home" else r["score_company"],
-                        "hits": ev.get("hits", r.get("hits_home", 0) if side == "home" else r.get("hits_company", 0)),
-                        "walking": r["walking"],
-                        "pdr_net_out_m": ev.get("pdr_net_out", 0.0),
-                        "wifi_detach": ev.get("wifi_detach", False),
-                        "cell_leave": ev.get("cell_leave", False),
-                        "ble_detach": ev.get("ble_detach", False),
-                        "geo_outbound": float(ev.get("s_geo", 0.0)) >= float(theta.get("thr_geo", 0.5)),
-                        "has_usable_gps": rel != "UNKNOWN",
-                        "baro_available": r.get("baro_pressure_hpa") is not None,
-                        "baro_baseline_ready": r.get("baro_baseline_ready", False),
-                        "baro_descent_m": r.get("baro_descent_m", 0.0),
-                        "baro_lower_platform": r.get("baro_lower_platform", False),
-                        "obs_walking": float(obs.get("walking", ev.get("s_walk", 0.0))),
-                        "obs_pdr_outbound": float(obs.get("pdr_outbound", ev.get("s_pdr", 0.0))),
-                        "obs_geo_outbound": float(obs.get("geo_outbound", ev.get("s_geo", 0.0))),
-                        "obs_wifi_detach": float(obs.get("wifi_detach", ev.get("s_wifi", 0.0))),
-                        "obs_cell_detach": float(obs.get("cell_detach", ev.get("s_cell", 0.0))),
-                        "obs_ble_detach": float(obs.get("ble_detach", ev.get("s_ble", 0.0))),
-                        "obs_time_prior": float(obs.get("time_prior", ev.get("s_time", 0.0))),
-                        "obs_baro_descending": float(obs.get("baro_descending", r.get("baro_descending", 0.0))),
-                        "obs_baro_lower_platform": float(obs.get("baro_lower_platform", 1.0 if r.get("baro_lower_platform") else 0.0)),
-                        "obs_baro_available": bool(obs.get("baro_available", r.get("baro_baseline_ready", False))),
-                        "obs_relation_known": bool(obs.get("relation_known", rel != "UNKNOWN")),
-                        "obs_inside": bool(obs.get("inside", rel == "INSIDE")),
-                        "obs_near": bool(obs.get("near", rel == "NEAR")),
-                        "obs_outside": bool(obs.get("outside", rel == "OUTSIDE")),
-                        "obs_approaching": bool(obs.get("approaching", ev.get("approaching", False))),
-                        "obs_attached": bool(obs.get("attached", False)),
-                        "lead_s": lead_s,
-                    }
-                )
+            # A false-push episode remains open until its settle/label time.
+            # Post-push vertical completion or return evidence is essential for
+            # context-template learning and must not be truncated at t_push.
+            outcome_ms = t_star if t_star is not None else t_label
+            append_policy_window(side, label, t_push - 600000, outcome_ms, lead_s)
             print(
                 f"LABEL {label} push@{push['t']} t_label={t_label} lead_s={lead_s} "
                 f"anchor_rel={last_rel} dist={last_dist}"
             )
+
+        company_pushes = [p for p in pushes if p["scene"] == "LEAVING_COMPANY"]
+        for t_star in company_gt:
+            matched = any(0 <= t_star - p["t_ms"] <= int(args.settle_s * 1000) for p in company_pushes)
+            if matched:
+                continue
+            label_row = {
+                "type": "label",
+                "t_label_ms": t_star,
+                "t_push_ms": 0,
+                "label": "MISSED_LEAVE",
+                "side": "company",
+                "anchor_relation": "OUTSIDE",
+                "t_star_ms": t_star,
+                "truth_source": "EXPLICIT_LEAVE" if args.episode_truth == "leave" else "OUTDOOR_GPS",
+                "lead_s": None,
+            }
+            ep.write(json.dumps(label_row, ensure_ascii=False) + "\n")
+            append_policy_window("company", "MISSED_LEAVE", t_star - 600000, t_star, None)
+            print(f"LABEL MISSED_LEAVE t_label={t_star} truth={label_row['truth_source']}")
+
+        if args.episode_truth == "not_leave" and not company_pushes and sorted_dec:
+            outcome_ms = sorted_dec[-1]["t_ms"]
+            label_row = {
+                "type": "label",
+                "t_label_ms": outcome_ms,
+                "t_push_ms": 0,
+                "label": "TRUE_NEGATIVE",
+                "side": "company",
+                "anchor_relation": sorted_dec[-1]["company_relation"],
+                "t_star_ms": None,
+                "truth_source": "EXPLICIT_NOT_LEAVE",
+                "lead_s": None,
+            }
+            ep.write(json.dumps(label_row, ensure_ascii=False) + "\n")
+            append_policy_window("company", "TRUE_NEGATIVE", outcome_ms - 600000, outcome_ms, None)
+            print(f"LABEL TRUE_NEGATIVE t_label={outcome_ms} truth=EXPLICIT_NOT_LEAVE")
 
     policy_history_path.write_text(
         "\n".join(json.dumps(row, ensure_ascii=False) for row in policy_rows) +

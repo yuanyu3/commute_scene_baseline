@@ -15,7 +15,7 @@ AT_ANCHOR -> PRE_LEAVE -> LEAVING -> OUTSIDE
 - `LEAVING`：连续证据支持正在离开；`P(LEAVING)` 可进入产品 `LEAVING_*`。
 - `OUTSIDE`：已越出锚点，只用于确认和回标，禁止此时推送“带钥匙”。家侧仍由 GPS 围栏确认；**公司侧以 `source_type` 为准**：附近时 `2`=公司内，`2→1`=出大门。
 
-模型分别为家和公司维护 `(state, elapsed_second)` 概率质量。转移 hazard 依赖状态已持续时间，因此不是普通 HMM 的无记忆自循环。超过 `hsmm_max_gap_s` 的采样间隔会重置过滤器，避免用过期状态污染当前判断。
+模型分别为家和公司维护 `(state, elapsed_second)` 概率质量。转移 hazard 只依赖状态已持续时间、固定拓扑以及 INSIDE/OUTSIDE 等结构关系；walking、PDR、Wi-Fi、Cell、time、baro 等原子证据只在发射似然中使用一次。超过 `hsmm_max_gap_s` 的采样间隔会重置过滤器，避免用过期状态污染当前判断。
 
 ## 观测
 
@@ -32,10 +32,16 @@ AT_ANCHOR -> PRE_LEAVE -> LEAVING -> OUTSIDE
 | time_prior | 个人典型离开时间窗 |
 | baro_descending | 气压正在下行 |
 | baro_lower_platform | 到达更低气压平台（如下到一楼/大堂） |
+| sequence_progress | Agent 模板正向序列的完成比例 |
+| sequence_complete | Agent 模板正向序列已经完整发生 |
+| negative_pattern_match | Agent 模板负向模式同时成立 |
+| sequence_reliability | 经确定性验证器选定的模板可靠度/作用强度 |
 
 各状态对上述观测有不同的初始期望，使用分数型 Bernoulli 似然更新后验。`w_walk`、`w_pdr`、`w_geo`、`w_wifi`、`w_cell`、`w_ble`、`w_time`、`w_baro` 现在控制对应观测的可靠度（`w_baro` 同时作用于 descending / lower_platform 两项），不再直接相加产生离家分数。
 
-GPS `INSIDE/NEAR/OUTSIDE`、approaching 和 Wi-Fi attach 作为强观测。公司相对位置在校园附近时由 `source_type` 判定（`2` 内 / `1` 外），`r_in`/`r_out` 只作附近辅助；推送频控、一次一推、OUTSIDE 禁推、approaching 禁推仍是模型外硬约束。当仍为 INSIDE 但行走+无线电/PDR 出站证据足够强时，HSMM 允许 `P(LEAVING)` 升高，以便在出大门前预测推送。
+`w_x=0` 的语义是“该原子观测通道对决策不可用”，而不是“观测值恰好为 0”。该通道会从 evidence hits、HSMM 发射似然、传感器派生 attach 门控和工作场所气压基线初始化中移除；上下文模板也不能重新注入它。原始传感器数据仍可采集和落盘，供诊断或以后重新启用。GPS 的 `INSIDE/OUTSIDE` 场景关系、OUTSIDE 禁推、冷却和一次一推属于独立的产品安全事实，不由 `w_geo` 关闭。
+
+GPS `INSIDE/NEAR/OUTSIDE`、approaching 和 Wi-Fi attach 作为强观测。公司相对位置在校园附近时由 `source_type` 判定（`2` 内 / `1` 外），`r_in`/`r_out` 只作附近辅助；推送频控、一次一推、OUTSIDE 禁推、approaching 禁推仍是模型外硬约束。INSIDE 只排斥 OUTSIDE，不再根据 walking/radio/PDR 二次改写关系似然；这些原子证据通过发射模型将概率从 AT_ANCHOR/PRE_LEAVE 推向 LEAVING。
 
 ## 参数语义
 
@@ -73,13 +79,30 @@ cmake --build sa_cpp/build_hsmm
 
 ## Persistent company radio fingerprint
 
-`config/company_radio_fingerprint.json` is the reusable cross-session profile. It is separate from the expiring on-device `radio_soft.json`. Build company WiFi Top-K and recurring Cell IDs from a test/history set with:
+`config/company_radio_fingerprint.json` is the reusable workplace profile. It is separate from the expiring on-device `radio_soft.json`. A floor-specific profile must be built only from explicitly labelled dwell recordings on that floor; do not build it from complete departure/return routes merely because their GPS remains inside the company fence. The current demo profile uses the three synchronized fifth-floor dwell recordings from 0812:
 
 ```bash
 python examples/build_company_radio_fingerprint.py \
-  --data-root /mnt/d/0812 \
-  --top-k 12 --cell-top-k 8 \
-  --min-sessions 5 --min-session-ratio 0.15
+  --dwell-session /mnt/d/0812/20260812_105415 \
+  --dwell-session /mnt/d/0812/20260812_105416 \
+  --dwell-session /mnt/d/0812/20260812_105417 \
+  --floor-label floor_5 --top-k 12 --preserve-cell
 ```
 
+`--preserve-cell` keeps the existing company-wide cellular fingerprint unchanged; only WiFi is narrowed to the fifth-floor dwell context.
+
 Offline replay loads this file by default. On device, copy it to `/data/service/el1/public/commuteagentservice/company_radio_fingerprint.json`; `BaselineRuntime` loads it at startup. WiFi coverage or Cell match can establish a trusted workplace context/barometer baseline, but is never push permission by itself.
+
+For a static workplace-floor WiFi profile, `company_site_wifi_coverage` means fingerprint recall (`matched floor BSSIDs / all floor-profile BSSIDs`), not the fraction of every AP in the current scan. The default state machine is deliberately asymmetric:
+
+- recall `<= 0.20` for three fresh observable scans (or 30 seconds) confirms detach;
+- recall `>= 0.50` for two fresh scans (or 15 seconds) confirms reattach;
+- values between the thresholds retain the prior state;
+- repeated engine ticks without a new WiFi scan cannot advance confirmation;
+- detach is armed only after the floor fingerprint has first been observed at attach-level recall.
+
+Raw recall remains available for diagnostics and workplace/barometer readiness. The HSMM-facing WiFi similarity is gated by the confirmed state, preventing one stale low scan from being counted repeatedly as new leave evidence.
+
+BLE samples continue to be collected, but BLE evidence is disabled by default (`ble_evidence_enabled=false`, `w_ble=0`) because ambient personal-device MAC churn is not a reliable anchor signal. It should only be enabled after stable beacon identities are captured.
+
+The static Cell profile is a target-floor whitelist rather than a set of floor/outdoor classes. Cell IDs are categorical, so tolerance is temporal rather than numeric: the current implementation uses the fraction of valid samples matching the whitelist in a 15-second window. A ratio `<=0.20` confirms floor detach after three fresh samples; a ratio `>=0.60` confirms floor reattach. Intermediate ratios retain the prior state. The state is armed only after the target-floor whitelist has first been observed.

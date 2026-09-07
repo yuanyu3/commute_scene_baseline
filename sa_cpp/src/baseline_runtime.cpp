@@ -188,8 +188,11 @@ TickDecision BaselineRuntime::OnTick(
     feat.ble_company_detach = radioSnap.ble_company_detach;
     feat.wifi_jaccard_home = radioSnap.jaccard_home;
     feat.wifi_jaccard_company = radioSnap.jaccard_company;
-    const bool workplaceReady = radioSnap.company_dwell_ready || radioSnap.company_site_wifi_coverage >= 0.50 ||
-        radioSnap.company_site_cell_match;
+    const auto &runtimeTheta = engine_->GetTheta();
+    const bool workplaceReady =
+        (runtimeTheta.w_wifi > 0.0 &&
+            (radioSnap.company_dwell_ready || radioSnap.company_site_wifi_coverage >= 0.50)) ||
+        (runtimeTheta.w_cell > 0.0 && radioSnap.company_site_cell_match);
     const BaroSnapshot baroSnap = baro_.Evaluate(tMs, workplaceReady,
         engine_->GetTheta().baro_min_descent_m);
     feat.baro_available = baroSnap.available;

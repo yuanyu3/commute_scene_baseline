@@ -39,6 +39,7 @@ class BleSample:
 
 @dataclass
 class RadioConfig:
+    ble_evidence_enabled: bool = False
     rssi_min: int = -85
     rssi_strong: int = -75
     dwell_learn_ms: int = 180_000
@@ -49,6 +50,11 @@ class RadioConfig:
     churn_baseline_ms: int = 120_000
     rssi_drop_db: float = 12.0
     cell_stable_ms: int = 90_000
+    site_cell_window_ms: int = 15_000
+    site_cell_detach_match_ratio: float = 0.20
+    site_cell_attach_match_ratio: float = 0.60
+    site_cell_min_samples: int = 4
+    site_cell_confirm_samples: int = 3
     detach_confirm_ms: int = 15_000
     detach_confirm_scans: int = 2
     history_cap: int = 40
@@ -56,6 +62,12 @@ class RadioConfig:
     attach_n_strong_delta: int = 5
     attach_n_strong_abs: int = 8
     jaccard_attach: float = 0.55
+    site_wifi_detach_recall: float = 0.20
+    site_wifi_attach_recall: float = 0.50
+    site_wifi_detach_confirm_scans: int = 3
+    site_wifi_attach_confirm_scans: int = 2
+    site_wifi_detach_confirm_ms: int = 30_000
+    site_wifi_attach_confirm_ms: int = 15_000
 
 
 @dataclass
@@ -74,9 +86,11 @@ class RadioSnapshot:
     home_dwell_ready: bool = False
     company_dwell_ready: bool = False
     n_strong: int = 0
+    # Recall of the static workplace-floor fingerprint.
     company_site_wifi_coverage: float = 0.0
     company_site_wifi_matches: int = 0
     company_site_cell_match: bool = False
+    company_site_cell_match_ratio: float = 0.0
     company_site_ble_matches: int = 0
     reason: str = ""
 
@@ -137,15 +151,19 @@ class RadioEvidence:
         self._ble_company_streak = 0
         self._ble_home_since = 0
         self._ble_company_since = 0
-        # A site profile is an optional, cross-session company fingerprint.
-        # Unlike a dwell soft-set, it is deliberately broad: compare how much
-        # of the *current* scan is known at the company, not its Jaccard score
-        # against every AP ever observed across the whole building.
+        # A site profile is an optional, cross-session workplace-floor fingerprint.
         self.company_site_wifi: Set[str] = set()
         self.company_site_cells: Set[int] = set()
         self.company_site_ble: Set[str] = set()
         self._company_site_ble_seen = False
+        self._company_site_wifi_attached_seen = False
         self._company_site_wifi_detached_seen = False
+        self._last_wifi_evaluated_scan_ms = -1
+        self._company_site_cell_attached_seen = False
+        self._company_site_cell_detached = False
+        self._company_site_cell_detach_streak = 0
+        self._company_site_cell_attach_streak = 0
+        self._last_cell_evaluated_sample_ms = -1
 
     def import_company_site_fingerprint(self, body: dict) -> bool:
         """Load a locally built company profile; returns whether it has WiFi."""
@@ -162,6 +180,18 @@ class RadioEvidence:
         self.company_site_ble = {
             str(x).lower() for x in ble.get("macs", []) if str(x).strip()
         }
+        self._company_site_wifi_attached_seen = False
+        self._company_site_wifi_detached_seen = False
+        self._last_wifi_evaluated_scan_ms = -1
+        self._company_detach_streak = 0
+        self._company_detach_since = 0
+        self._company_attach_streak = 0
+        self._company_attach_since = 0
+        self._company_site_cell_attached_seen = False
+        self._company_site_cell_detached = False
+        self._company_site_cell_detach_streak = 0
+        self._company_site_cell_attach_streak = 0
+        self._last_cell_evaluated_sample_ms = -1
         return bool(self.company_site_wifi)
 
     def import_company_site_fingerprint_file(self, path: str) -> bool:
@@ -199,6 +229,8 @@ class RadioEvidence:
             company_dwell_ready=self.company.ready,
         )
         cur = self.wifi_history[-1] if self.wifi_history else None
+        fresh_wifi_scan = cur is not None and cur.t_ms != self._last_wifi_evaluated_scan_ms
+        company_site_scan_observed = False
         if cur is None:
             out.reason = "no_wifi"
         else:
@@ -211,6 +243,7 @@ class RadioEvidence:
                 raw_co, out.company_site_wifi_coverage, out.company_site_wifi_matches = (
                     self._detach_site_wifi(cur)
                 )
+                company_site_scan_observed = bool(_strong_set(cur, self.cfg.rssi_min))
                 out.jaccard_company = out.company_site_wifi_coverage
                 out.reason = "company_site_wifi"
             elif self.company.ready:
@@ -225,19 +258,44 @@ class RadioEvidence:
                 raw_co, out.jaccard_churn = self._temporal_churn(t_ms, cur)
 
             out.wifi_home_detach = self._latch(
-                raw_home, "_home_detach_streak", "_home_detach_since", t_ms
+                raw_home,
+                "_home_detach_streak",
+                "_home_detach_since",
+                t_ms,
+                fresh_wifi_scan,
+                self.cfg.detach_confirm_scans,
+                self.cfg.detach_confirm_ms,
             )
-            out.wifi_company_detach = self._latch(
-                raw_co, "_company_detach_streak", "_company_detach_since", t_ms
+            company_detach_scans = (
+                self.cfg.site_wifi_detach_confirm_scans
+                if self.company_site_wifi
+                else self.cfg.detach_confirm_scans
             )
-            if self.company_site_wifi and out.wifi_company_detach:
-                self._company_site_wifi_detached_seen = True
+            company_detach_confirmed = self._latch(
+                raw_co,
+                "_company_detach_streak",
+                "_company_detach_since",
+                t_ms,
+                fresh_wifi_scan and (not self.company_site_wifi or company_site_scan_observed),
+                company_detach_scans,
+                (
+                    self.cfg.site_wifi_detach_confirm_ms
+                    if self.company_site_wifi
+                    else self.cfg.detach_confirm_ms
+                ),
+            )
+            if self.company_site_wifi:
+                if company_detach_confirmed:
+                    self._company_site_wifi_detached_seen = True
+                out.wifi_company_detach = self._company_site_wifi_detached_seen
+            else:
+                out.wifi_company_detach = company_detach_confirmed
 
             raw_att_h = self._attach_signal(t_ms, cur, self.home, out.jaccard_home)
             raw_att_c = (
                 self._company_site_wifi_detached_seen
-                and out.company_site_wifi_matches >= 2
-                and out.company_site_wifi_coverage >= 0.50
+                and company_site_scan_observed
+                and out.company_site_wifi_coverage >= self.cfg.site_wifi_attach_recall
                 if self.company_site_wifi
                 else self._attach_signal(t_ms, cur, self.company, out.jaccard_company)
             )
@@ -247,10 +305,31 @@ class RadioEvidence:
                 raw_att_h = True
                 raw_att_c = True
             out.wifi_home_attach = self._latch(
-                raw_att_h, "_home_attach_streak", "_home_attach_since", t_ms
+                raw_att_h,
+                "_home_attach_streak",
+                "_home_attach_since",
+                t_ms,
+                fresh_wifi_scan,
+                self.cfg.detach_confirm_scans,
+                self.cfg.detach_confirm_ms,
+            )
+            company_attach_scans = (
+                self.cfg.site_wifi_attach_confirm_scans
+                if self.company_site_wifi
+                else self.cfg.detach_confirm_scans
             )
             out.wifi_company_attach = self._latch(
-                raw_att_c, "_company_attach_streak", "_company_attach_since", t_ms
+                raw_att_c,
+                "_company_attach_streak",
+                "_company_attach_since",
+                t_ms,
+                fresh_wifi_scan and (not self.company_site_wifi or company_site_scan_observed),
+                company_attach_scans,
+                (
+                    self.cfg.site_wifi_attach_confirm_ms
+                    if self.company_site_wifi
+                    else self.cfg.detach_confirm_ms
+                ),
             )
             # Attach and detach are mutually exclusive for gating.
             if out.wifi_home_attach:
@@ -262,35 +341,89 @@ class RadioEvidence:
                 self._company_detach_streak = 0
                 self._company_detach_since = 0
                 self._company_site_wifi_detached_seen = False
+            self._last_wifi_evaluated_scan_ms = cur.t_ms
+            if self.company_site_wifi:
+                # Preserve raw recall in company_site_wifi_coverage, but expose
+                # only the confirmed state to HSMM to avoid reusing a stale low
+                # scan as strong evidence on every engine tick.
+                out.jaccard_company = 0.0 if out.wifi_company_detach else 1.0
 
-        ble_raw, _ = self._ble_churn(t_ms)
-        out.ble_home_detach = self._latch(ble_raw, "_ble_home_streak", "_ble_home_since", t_ms)
-        if self.company_site_ble:
-            site_ble = self._site_ble_matches(t_ms)
-            out.company_site_ble_matches = site_ble
-            if site_ble >= 2:
-                self._company_site_ble_seen = True
-            ble_raw = self._company_site_ble_seen and site_ble == 0
-        out.ble_company_detach = self._latch(ble_raw, "_ble_company_streak", "_ble_company_since", t_ms)
+        if self.cfg.ble_evidence_enabled:
+            ble_raw, _ = self._ble_churn(t_ms)
+            out.ble_home_detach = self._latch(ble_raw, "_ble_home_streak", "_ble_home_since", t_ms)
+            if self.company_site_ble:
+                site_ble = self._site_ble_matches(t_ms)
+                out.company_site_ble_matches = site_ble
+                if site_ble >= 2:
+                    self._company_site_ble_seen = True
+                ble_raw = self._company_site_ble_seen and site_ble == 0
+            out.ble_company_detach = self._latch(
+                ble_raw, "_ble_company_streak", "_ble_company_since", t_ms
+            )
 
         cell_raw = self._cell_leave(t_ms)
-        if cell_raw:
-            self._cell_home_streak += 1
-            self._cell_company_streak += 1
-        else:
-            self._cell_home_streak = 0
-            self._cell_company_streak = 0
+        fresh_cell = bool(self.cell_history) and (
+            self.cell_history[-1].t_ms != self._last_cell_evaluated_sample_ms
+        )
+        if fresh_cell:
+            if cell_raw:
+                self._cell_home_streak += 1
+                if not self.company_site_cells:
+                    self._cell_company_streak += 1
+            else:
+                self._cell_home_streak = 0
+                if not self.company_site_cells:
+                    self._cell_company_streak = 0
         out.cell_leave_home = self._cell_home_streak >= self.cfg.detach_confirm_scans
-        out.cell_leave_company = self._cell_company_streak >= self.cfg.detach_confirm_scans
+        out.cell_leave_company = (
+            not self.company_site_cells
+            and self._cell_company_streak >= self.cfg.detach_confirm_scans
+        )
         if self.cell_history and self.company_site_cells:
             out.company_site_cell_match = self.cell_history[-1].cell_id in self.company_site_cells
-            if out.company_site_cell_match:
-                out.cell_leave_company = False
+            recent = [
+                x
+                for x in self.cell_history
+                if x.cell_id and 0 <= t_ms - x.t_ms <= self.cfg.site_cell_window_ms
+            ]
+            matched = sum(x.cell_id in self.company_site_cells for x in recent)
+            if recent:
+                out.company_site_cell_match_ratio = matched / len(recent)
+            observable = len(recent) >= self.cfg.site_cell_min_samples
+            if fresh_cell and observable:
+                if out.company_site_cell_match_ratio >= self.cfg.site_cell_attach_match_ratio:
+                    self._company_site_cell_attached_seen = True
+                raw_floor_detach = (
+                    self._company_site_cell_attached_seen
+                    and out.company_site_cell_match_ratio <= self.cfg.site_cell_detach_match_ratio
+                )
+                raw_floor_attach = (
+                    self._company_site_cell_detached
+                    and out.company_site_cell_match_ratio >= self.cfg.site_cell_attach_match_ratio
+                )
+                self._company_site_cell_detach_streak = (
+                    self._company_site_cell_detach_streak + 1 if raw_floor_detach else 0
+                )
+                self._company_site_cell_attach_streak = (
+                    self._company_site_cell_attach_streak + 1 if raw_floor_attach else 0
+                )
+                if self._company_site_cell_detach_streak >= self.cfg.site_cell_confirm_samples:
+                    self._company_site_cell_detached = True
+                    self._company_site_cell_attach_streak = 0
+                if self._company_site_cell_attach_streak >= self.cfg.site_cell_confirm_samples:
+                    self._company_site_cell_detached = False
+                    self._company_site_cell_detach_streak = 0
+                    self._company_site_cell_attach_streak = 0
+            out.cell_leave_company = self._company_site_cell_detached
+        if self.cell_history:
+            self._last_cell_evaluated_sample_ms = self.cell_history[-1].t_ms
 
         if self.cell_history:
             cid = self.cell_history[-1].cell_id
             if cid and cid != self.stable_cell_id:
-                if out.cell_leave_home or out.cell_leave_company:
+                if out.cell_leave_home or (
+                    not self.company_site_cells and out.cell_leave_company
+                ):
                     self.stable_cell_id = cid
                     self.stable_cell_since_ms = self.cell_history[-1].t_ms
                     self._cell_home_streak = 0
@@ -315,17 +448,30 @@ class RadioEvidence:
 
         return json.dumps({"home": side(self.home), "company": side(self.company)}, ensure_ascii=False)
 
-    def _latch(self, raw: bool, streak_attr: str, since_attr: str, t_ms: int) -> bool:
+    def _latch(
+        self,
+        raw: bool,
+        streak_attr: str,
+        since_attr: str,
+        t_ms: int,
+        fresh: bool = True,
+        confirm_scans: Optional[int] = None,
+        confirm_ms: Optional[int] = None,
+    ) -> bool:
+        confirm_scans = confirm_scans or self.cfg.detach_confirm_scans
+        confirm_ms = confirm_ms if confirm_ms is not None else self.cfg.detach_confirm_ms
         streak = getattr(self, streak_attr)
         since = getattr(self, since_attr)
+        if not fresh:
+            return streak >= confirm_scans
         if raw:
             if streak == 0:
                 since = t_ms
             streak += 1
             setattr(self, streak_attr, streak)
             setattr(self, since_attr, since)
-            return streak >= self.cfg.detach_confirm_scans or (
-                since > 0 and (t_ms - since) >= self.cfg.detach_confirm_ms
+            return streak >= confirm_scans or (
+                since > 0 and (t_ms - since) >= confirm_ms
             )
         setattr(self, streak_attr, 0)
         setattr(self, since_attr, 0)
@@ -398,11 +544,14 @@ class RadioEvidence:
         if not current:
             return False, 0.0, 0
         matches = len(current & self.company_site_wifi)
-        coverage = matches / len(current)
-        # A building-wide profile can contain hundreds of APs. A real detach
-        # is therefore an absence of known company APs from the current scan,
-        # not a low overlap with that large historic union.
-        return matches < 2 or coverage < 0.35, coverage, matches
+        coverage = matches / len(self.company_site_wifi)
+        if coverage >= self.cfg.site_wifi_attach_recall:
+            self._company_site_wifi_attached_seen = True
+        detached = (
+            self._company_site_wifi_attached_seen
+            and coverage <= self.cfg.site_wifi_detach_recall
+        )
+        return detached, coverage, matches
 
     def _site_ble_matches(self, t_ms: int) -> int:
         current = {

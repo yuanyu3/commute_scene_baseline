@@ -497,7 +497,8 @@ def replay_session(
                 "truth_source": truth_source,
                 "lead_s": lead_s,
                 "side": "home" if use_home else "company",
-            }            labels.append(lab)
+            }
+            labels.append(lab)
             ep.write(json.dumps(lab, ensure_ascii=False) + "\n")
 
         # Missed leave: GT leave with no company push in lookback

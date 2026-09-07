@@ -35,6 +35,8 @@ struct BleSample {
 };
 
 struct RadioEvidenceConfig {
+    /** Keep collecting BLE, but do not emit BLE evidence until stable beacons are configured. */
+    bool ble_evidence_enabled = false;
     /** Min RSSI to count an AP into sets. */
     int32_t rssi_min = -85;
     /** Stronger threshold for "still attached" checks. */
@@ -51,6 +53,15 @@ struct RadioEvidenceConfig {
     double jaccard_churn = 0.35;
     /** Jaccard(current, dwell) above this → attach (when dwell set ready). */
     double jaccard_attach = 0.55;
+    /** Fraction of the static workplace-floor fingerprint still visible at/below which detach is suspected. */
+    double site_wifi_detach_recall = 0.20;
+    /** Fingerprint recall at/above which return to the workplace floor is suspected. */
+    double site_wifi_attach_recall = 0.50;
+    /** Floor fingerprints need stronger detach confirmation than generic radio churn. */
+    int site_wifi_detach_confirm_scans = 3;
+    int site_wifi_attach_confirm_scans = 2;
+    int64_t site_wifi_detach_confirm_ms = 30000;
+    int64_t site_wifi_attach_confirm_ms = 15000;
     /** Strong-AP count rise vs baseline → attach. */
     int attach_n_strong_delta = 5;
     int attach_n_strong_abs = 8;
@@ -60,6 +71,12 @@ struct RadioEvidenceConfig {
     double rssi_drop_db = 12.0;
     /** Cell must be stable this long before a change counts as leave. */
     int64_t cell_stable_ms = 90000;
+    /** Static target-floor Cell whitelist smoothing and hysteresis. */
+    int64_t site_cell_window_ms = 15000;
+    double site_cell_detach_match_ratio = 0.20;
+    double site_cell_attach_match_ratio = 0.60;
+    int site_cell_min_samples = 4;
+    int site_cell_confirm_samples = 3;
     /** Detach must hold this long (or N scans) before latching true. */
     int64_t detach_confirm_ms = 15000;
     int detach_confirm_scans = 2;
@@ -87,9 +104,11 @@ struct RadioDetachSnapshot {
     double jaccard_churn = 1.0;
     bool home_dwell_ready = false;
     bool company_dwell_ready = false;
+    /** Recall of the static workplace-floor fingerprint: matched profile APs / profile APs. */
     double company_site_wifi_coverage = 0.0;
     int company_site_wifi_matches = 0;
     bool company_site_cell_match = false;
+    double company_site_cell_match_ratio = 0.0;
     int n_strong = 0;
     std::string reason;
 };
@@ -165,7 +184,14 @@ private:
     DwellState company_;
     std::unordered_set<std::string> company_site_wifi_;
     std::unordered_set<int64_t> company_site_cells_;
+    bool company_site_wifi_attached_seen_ = false;
     bool company_site_wifi_detached_seen_ = false;
+    int64_t last_wifi_evaluated_scan_ms_ = -1;
+    bool company_site_cell_attached_seen_ = false;
+    bool company_site_cell_detached_ = false;
+    int company_site_cell_detach_streak_ = 0;
+    int company_site_cell_attach_streak_ = 0;
+    int64_t last_cell_evaluated_sample_ms_ = -1;
     bool soft_dirty_ = false;
     int64_t last_soft_persist_ms_ = 0;
 

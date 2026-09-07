@@ -19,7 +19,7 @@ struct Theta {
     /** Split radio modalities (prefer these over legacy w_radio). */
     double w_wifi = 0.12;
     double w_cell = 0.08;
-    double w_ble = 0.02;
+    double w_ble = 0.0;
     /**
      * Legacy combined radio weight. Load-only fallback when w_wifi/w_cell/w_ble absent:
      * split ≈ 0.55/0.30/0.15 into wifi/cell/ble.
@@ -97,9 +97,12 @@ inline LeaveHsmmConfig HsmmConfigFromTheta(const Theta &theta)
     config.leaving_mean_s = std::max(config.leaving_min_s, theta.hsmm_leaving_mean_s);
     config.leaving_max_s = std::max(config.leaving_mean_s, theta.hsmm_leaving_max_s);
     config.max_gap_s = std::max(1.0, theta.hsmm_max_gap_s);
-    config.reliability = {{0.25 + 3.0 * theta.w_walk, 0.25 + 3.0 * theta.w_pdr, 0.25 + 3.0 * theta.w_geo,
-        0.25 + 3.0 * theta.w_wifi, 0.25 + 3.0 * theta.w_cell, 0.25 + 3.0 * theta.w_ble, 0.25 + 3.0 * theta.w_time,
-        0.25 + 3.0 * theta.w_baro, 0.25 + 3.0 * theta.w_baro}};
+    const auto reliability = [](double weight) {
+        return weight <= 0.0 ? 0.0 : 0.25 + 3.0 * weight;
+    };
+    config.reliability = {{reliability(theta.w_walk), reliability(theta.w_pdr), reliability(theta.w_geo),
+        reliability(theta.w_wifi), reliability(theta.w_cell), reliability(theta.w_ble), reliability(theta.w_time),
+        reliability(theta.w_baro), reliability(theta.w_baro)}};
     return config;
 }
 

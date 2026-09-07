@@ -25,6 +25,7 @@ set(COMMUTE_SA_ROOT "${REPO_ROOT}/sa_cpp")
 
 add_library(commute_sa_host STATIC
   "${COMMUTE_SA_ROOT}/src/anchors.cpp"
+  "${COMMUTE_SA_ROOT}/src/crs.cpp"
   "${COMMUTE_SA_ROOT}/src/theta.cpp"
   "${COMMUTE_SA_ROOT}/src/leave_hsmm.cpp"
   "${COMMUTE_SA_ROOT}/src/scene_engine.cpp"
@@ -33,6 +34,8 @@ add_library(commute_sa_host STATIC
   "${COMMUTE_SA_ROOT}/src/pdr_evidence.cpp"
   "${COMMUTE_SA_ROOT}/src/baro_evidence.cpp"
   "${COMMUTE_SA_ROOT}/src/personalization.cpp"
+  "${COMMUTE_SA_ROOT}/src/personalization_optimizer.cpp"
+  "${COMMUTE_SA_ROOT}/src/context_template.cpp"
   "${COMMUTE_SA_ROOT}/src/personalization_policy.cpp"
   "${COMMUTE_SA_ROOT}/src/product_store.cpp"
   "${COMMUTE_SA_ROOT}/src/evidence_query.cpp"

@@ -1,5 +1,7 @@
 # Commute Scene Baseline — 项目介绍
 
+> 状态说明：本文保留早期“Agent 直接微调 θ”的项目背景。当前默认实现已经切换为“Agent 组合模板结构、C++ 选择强度并回放验收”，请以 [CONTEXT_TEMPLATE_PERSONALIZATION.md](CONTEXT_TEMPLATE_PERSONALIZATION.md) 为准；直接改参代码仅用于消融对照。
+
 面向通勤场景的**端侧实时场景基线** + **低频 θ 个性化**。在用户**尚未完全离家**时预测出门意图，触发「带钥匙」等主动服务；平时不调大模型，仅在推送复盘 / 日终用 Jiuwen Agent 微调参数。
 
 本仓库**独立**，不依赖 `helloworld_agent`。坐标全链路 **WGS84**。

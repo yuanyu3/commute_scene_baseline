@@ -45,7 +45,7 @@ DEFAULT_THETA: Dict[str, Any] = {
     "w_geo": 0.20,
     "w_wifi": 0.12,
     "w_cell": 0.08,
-    "w_ble": 0.02,
+    "w_ble": 0.0,
     "w_time": 0.20,
     # Per-channel hit thresholds (score in [0,1] counts as evidence if >= thr).
     "thr_walk": 0.5,
@@ -184,22 +184,22 @@ def _wifi_cell_ble_weights(theta: Dict[str, Any]) -> tuple[float, float, float]:
         return (
             float(theta.get("w_wifi", 0.12)),
             float(theta.get("w_cell", 0.08)),
-            float(theta.get("w_ble", 0.02)),
+            float(theta.get("w_ble", 0.0)),
         )
     wr = float(theta.get("w_radio", 0.15))
     return wr * 0.55, wr * 0.30, wr * 0.15
 
 
 def _wifi_leave_score(jaccard: float, attach: bool, theta: Dict[str, Any]) -> float:
-    """Continuous WiFi leave score from soft/baseline Jaccard. Attach ⇒ 0."""
+    """Continuous leave score across the detach/attach hysteresis band."""
     if attach:
         return 0.0
     thr = float(theta.get("thr_wifi_jaccard", 0.30))
     thr = max(1e-3, min(0.99, thr))
     if jaccard <= thr:
         return 1.0
-    # jac in (thr, 1] → linear down to 0
-    return _clip01((1.0 - jaccard) / (1.0 - thr))
+    attach_thr = min(1.0, thr + 0.25)
+    return _clip01((attach_thr - jaccard) / max(1e-3, attach_thr - thr))
 
 
 def score_leaving_anchor(
@@ -231,22 +231,30 @@ def score_leaving_anchor(
     thr_cell = float(theta.get("thr_cell", 0.5))
     thr_ble = float(theta.get("thr_ble", 0.5))
     thr_time = float(theta.get("thr_time", 0.5))
+    w_wifi, w_cell, w_ble = _wifi_cell_ble_weights(theta)
+    use_walk = float(theta.get("w_walk", 0.0)) > 0.0
+    use_pdr = float(theta.get("w_pdr", 0.0)) > 0.0
+    use_geo = float(theta.get("w_geo", 0.0)) > 0.0
+    use_wifi = w_wifi > 0.0
+    use_cell = w_cell > 0.0
+    use_ble = w_ble > 0.0
+    use_time = float(theta.get("w_time", 0.0)) > 0.0
 
-    s_walk = 1.0 if feat.walking else 0.0
-    if s_walk >= thr_walk:
+    s_walk = 1.0 if use_walk and feat.walking else 0.0
+    if use_walk and s_walk >= thr_walk:
         hits += 1
     ev["s_walk"] = round(s_walk, 3)
     ev["walk"] = feat.walking
 
     pdr_eff = 0.0 if approaching else pdr_net_out
-    s_pdr = _clip01(pdr_eff / max(15.0, r_in * 0.3))
-    if s_pdr >= thr_pdr:
+    s_pdr = _clip01(pdr_eff / max(15.0, r_in * 0.3)) if use_pdr else 0.0
+    if use_pdr and s_pdr >= thr_pdr:
         hits += 1
     ev["s_pdr"] = round(s_pdr, 3)
     ev["pdr_net_out"] = round(pdr_eff, 2)
 
     s_geo = 0.0
-    if not gps_dist_unreliable:
+    if use_geo and not gps_dist_unreliable:
         if dist_m is not None and rel in (Relation.INSIDE, Relation.NEAR):
             if prev_dist is not None and dist_m > prev_dist + 3:
                 s_geo = _clip01(dist_m / max(r_out, 1))
@@ -255,11 +263,11 @@ def score_leaving_anchor(
             # No static NEAR leave credit.
         elif rel == Relation.OUTSIDE and not approaching:
             s_geo = 0.8
-    elif rel == Relation.OUTSIDE and not approaching:
+    elif use_geo and rel == Relation.OUTSIDE and not approaching:
         # source_type 2→1 (or GNSS while near company) is the precise gate-leave.
         s_geo = 1.0
     s_geo *= _clip01(float(feat.gps_trust))
-    if s_geo >= thr_geo:
+    if use_geo and s_geo >= thr_geo:
         hits += 1
     ev["s_geo"] = round(s_geo, 3)
     ev["geo"] = round(s_geo, 2)
@@ -267,32 +275,32 @@ def score_leaving_anchor(
     ev["dist_m"] = None if dist_m is None else round(dist_m, 1)
 
     # Continuous WiFi; bool detach is fallback when jaccard not fed.
-    s_wifi = _wifi_leave_score(wifi_jaccard, wifi_attach or approaching, theta)
-    if s_wifi < 1e-6 and wifi_detach and not wifi_attach and not approaching and not radio_suppressed:
+    s_wifi = _wifi_leave_score(wifi_jaccard, wifi_attach or approaching, theta) if use_wifi else 0.0
+    if use_wifi and s_wifi < 1e-6 and wifi_detach and not wifi_attach and not approaching and not radio_suppressed:
         s_wifi = 1.0
     if radio_suppressed:
         s_wifi = 0.0
-    if s_wifi >= thr_wifi:
+    if use_wifi and s_wifi >= thr_wifi:
         hits += 1
     ev["s_wifi"] = round(s_wifi, 3)
     ev["wifi_jaccard"] = round(wifi_jaccard, 3)
     ev["wifi_detach"] = wifi_detach
     ev["wifi_attach"] = wifi_attach
 
-    s_cell = 0.0 if (radio_suppressed or approaching or wifi_attach) else (1.0 if cell_leave else 0.0)
-    if s_cell >= thr_cell:
+    s_cell = 0.0 if (not use_cell or radio_suppressed or approaching or wifi_attach) else (1.0 if cell_leave else 0.0)
+    if use_cell and s_cell >= thr_cell:
         hits += 1
     ev["s_cell"] = round(s_cell, 3)
     ev["cell_leave"] = cell_leave
 
-    s_ble = 0.0 if (radio_suppressed or approaching) else (1.0 if ble_detach else 0.0)
-    if s_ble >= thr_ble:
+    s_ble = 0.0 if (not use_ble or radio_suppressed or approaching) else (1.0 if ble_detach else 0.0)
+    if use_ble and s_ble >= thr_ble:
         hits += 1
     ev["s_ble"] = round(s_ble, 3)
     ev["ble_detach"] = ble_detach
 
-    s_time = _time_prior(feat.t, center_hour, float(theta["leave_window_min"]))
-    if s_time >= thr_time:
+    s_time = _time_prior(feat.t, center_hour, float(theta["leave_window_min"])) if use_time else 0.0
+    if use_time and s_time >= thr_time:
         hits += 1
     ev["s_time"] = round(s_time, 3)
     ev["time_prior"] = round(s_time, 2)
@@ -306,7 +314,6 @@ def score_leaving_anchor(
         ev["toward_anchor"] = True
         return 0.0, ev, 0
 
-    w_wifi, w_cell, w_ble = _wifi_cell_ble_weights(theta)
     channels = {
         "walk": (float(theta["w_walk"]), s_walk),
         "pdr": (float(theta["w_pdr"]), s_pdr),
@@ -400,7 +407,7 @@ class SceneEngine:
         sticky = self.scene in (Scene.AT_COMPANY, Scene.LEAVING_COMPANY)
         near = (
             sticky
-            or feat.wifi_company_attach
+            or (float(self.theta.get("w_wifi", 0.0)) > 0.0 and feat.wifi_company_attach)
             or dist <= vicinity
             or geo_rel in (Relation.INSIDE, Relation.NEAR)
         )
@@ -534,6 +541,8 @@ class SceneEngine:
         if self._was_walking and not feat.walking:
             self._last_walk_stop_at = feat.t
         self._was_walking = feat.walking
+        wifi_home_attach = float(self.theta.get("w_wifi", 0.0)) > 0.0 and feat.wifi_home_attach
+        wifi_company_attach = float(self.theta.get("w_wifi", 0.0)) > 0.0 and feat.wifi_company_attach
         home, company = self.anchors.home, self.anchors.company
         h_rel, d_home = self._rel(feat, home)
         c_rel, d_co, near_company = self._company_rel(feat)
@@ -552,7 +561,7 @@ class SceneEngine:
             if self._prev_gps_source_type == GPS_SOURCE_OUTDOOR and company_source_indoor:
                 approach_c = True
                 self._return_from_outside_company = True
-            if feat.wifi_company_attach:
+            if wifi_company_attach:
                 approach_c = True
             if company_gate_leave:
                 approach_c = False
@@ -560,9 +569,9 @@ class SceneEngine:
             approach_c = self._update_approach(
                 "company", c_rel, d_co, self.prev_rel_company, self.prev_dist_company, gps_trust
             )
-        if feat.wifi_home_attach:
+        if wifi_home_attach:
             approach_h = True
-        if feat.wifi_company_attach:
+        if wifi_company_attach:
             approach_c = True
         if company_gate_leave:
             approach_c = False
@@ -581,7 +590,7 @@ class SceneEngine:
             feat.cell_leave_home,
             feat.ble_home_detach,
             feat.wifi_jaccard_home,
-            feat.wifi_home_attach,
+            wifi_home_attach,
             float(self.theta["weekday_leave_home_hour"]),
             self.theta,
             self.prev_dist_home,
@@ -599,7 +608,7 @@ class SceneEngine:
             feat.cell_leave_company,
             feat.ble_company_detach,
             feat.wifi_jaccard_company,
-            feat.wifi_company_attach,
+            wifi_company_attach,
             float(self.theta["weekday_leave_company_hour"]),
             self.theta,
             self.prev_dist_company,
@@ -616,7 +625,11 @@ class SceneEngine:
         ec["company_gate_leave"] = company_gate_leave
 
         def hsmm_observation(ev: Dict[str, Any], rel: Relation, approaching: bool, attached: bool) -> LeaveObservation:
-            baro_ready = feat.baro_available and feat.baro_baseline_ready
+            baro_ready = (
+                float(self.theta.get("w_baro", 0.0)) > 0.0
+                and feat.baro_available
+                and feat.baro_baseline_ready
+            )
             return LeaveObservation(
                 walking=float(ev.get("s_walk", 0.0)),
                 pdr_outbound=float(ev.get("s_pdr", 0.0)),
@@ -636,8 +649,8 @@ class SceneEngine:
                 baro_available=baro_ready,
             )
 
-        obs_h = hsmm_observation(eh, h_rel, approach_h, feat.wifi_home_attach)
-        obs_c = hsmm_observation(ec, c_rel, approach_c, feat.wifi_company_attach)
+        obs_h = hsmm_observation(eh, h_rel, approach_h, wifi_home_attach)
+        obs_c = hsmm_observation(ec, c_rel, approach_c, wifi_company_attach)
         hsmm_home = self._hsmm_home.step(obs_h, feat.t, self.theta)
         hsmm_company = self._hsmm_company.step(obs_c, feat.t, self.theta)
         eh["obs"] = asdict(obs_h)
@@ -714,7 +727,7 @@ class SceneEngine:
             self._leave_home_since = self._leave_home_since or feat.t
             active_eta = eta_home
             lead_ok, lead_block = self._lead_window_ok(eta_home)
-            if feat.wifi_home_attach or approach_h:
+            if wifi_home_attach or approach_h:
                 push_block = "APPROACHING"
             elif h_rel == Relation.OUTSIDE:
                 push_block = "OUTSIDE"
@@ -734,7 +747,7 @@ class SceneEngine:
             self._leave_company_since = self._leave_company_since or feat.t
             active_eta = eta_co
             lead_ok, lead_block = self._lead_window_ok(eta_co)
-            if feat.wifi_company_attach or approach_c:
+            if wifi_company_attach or approach_c:
                 push_block = "APPROACHING"
             elif c_rel == Relation.OUTSIDE:
                 push_block = "OUTSIDE"
@@ -776,20 +789,20 @@ class SceneEngine:
         if (
             should_service
             and intent == "DEPARTURE_NOTIFICATION"
-            and (h_rel == Relation.OUTSIDE or approach_h or feat.wifi_home_attach)
+            and (h_rel == Relation.OUTSIDE or approach_h or wifi_home_attach)
         ):
             should_service = False
             intent = "NONE"
-            push_block = "APPROACHING" if approach_h or feat.wifi_home_attach else "OUTSIDE"
+            push_block = "APPROACHING" if approach_h or wifi_home_attach else "OUTSIDE"
             self._leave_home_pushed = False
         if (
             should_service
             and intent == "LEAVE_COMPANY_NOTIFICATION"
-            and (c_rel == Relation.OUTSIDE or approach_c or feat.wifi_company_attach)
+            and (c_rel == Relation.OUTSIDE or approach_c or wifi_company_attach)
         ):
             should_service = False
             intent = "NONE"
-            push_block = "APPROACHING" if approach_c or feat.wifi_company_attach else "OUTSIDE"
+            push_block = "APPROACHING" if approach_c or wifi_company_attach else "OUTSIDE"
             self._leave_company_pushed = False
 
         uncertainty = "MEDIUM"
