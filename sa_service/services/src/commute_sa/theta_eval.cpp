@@ -153,6 +153,7 @@ struct HsmmEpisode {
     std::string side;
     std::string label;
     int64_t outcome_ms = 0;
+    int64_t abort_ms = 0;
     std::vector<HsmmTick> ticks;
 };
 
@@ -191,6 +192,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     int nConfirmed = 0;
     int nMissedLabel = 0;
     int nTrueNegative = 0;
+    int nAborted = 0;
     int nUnscored = 0;
     int falseAvoided = 0;
     int falseKept = 0;
@@ -199,6 +201,9 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     int confirmedKept = 0;
     int missed = 0;
     int recovered = 0;
+    int abortedIntentRecognized = 0;
+    int abortedCancelRecognized = 0;
+    int abortedVisiblePush = 0;
     int leadOk = 0;
     int leadLate = 0;
     int leadEarly = 0;
@@ -226,7 +231,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         bool episodeStart = true;
         std::ostringstream trace;
         bool firstTrace = true;
-        int64_t firstReadyMs = 0, firstCompleteMs = 0, firstThresholdMs = 0;
+        int64_t firstReadyMs = 0, firstCompleteMs = 0, firstThresholdMs = 0, firstCancelMs = 0;
         int negativeTicks = 0, productBlockedTicks = 0, armBlockedTicks = 0;
         for (const auto &tick : ep.ticks) {
             if (cutoffMs > 0 && tick.t_ms > cutoffMs) break;
@@ -238,6 +243,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             observation.sequence_complete = 0.0;
             observation.sequence_ready = -1.0;
             observation.negative_pattern_match = 0.0;
+            observation.cancel_sequence_match = 0.0;
             observation.sequence_reliability = 0.0;
             if (adapter) {
                 adapter(observation, episodeStart);
@@ -254,6 +260,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             if (!firstReadyMs && observation.sequence_ready >= 0.5) firstReadyMs = tick.t_ms;
             if (!firstCompleteMs && observation.sequence_complete >= 0.5) firstCompleteMs = tick.t_ms;
             if (observation.negative_pattern_match >= 0.5) ++negativeTicks;
+            if (!firstCancelMs && observation.cancel_sequence_match >= 0.5) firstCancelMs = tick.t_ms;
             if (result.LeavingProbability() >= theta.enter_leave) {
                 if (!firstThresholdMs) firstThresholdMs = tick.t_ms;
                 if (observation.outside || observation.approaching || observation.attached ||
@@ -272,6 +279,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                     << ",\"sequence_complete\":" << observation.sequence_complete
                     << ",\"sequence_ready\":" << observation.sequence_ready
                     << ",\"negative_match\":" << observation.negative_pattern_match
+                    << ",\"cancel_match\":" << observation.cancel_sequence_match
                     << ",\"threshold_pass\":" << (result.LeavingProbability() >= theta.enter_leave ? "true" : "false")
                     << ",\"product_gate_pass\":" << (!observation.outside && !observation.approaching &&
                         !observation.attached && (observation.inside || observation.near) ? "true" : "false")
@@ -289,6 +297,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                     : 0.0;
             }
         }
+        const bool isAborted = ep.label == "ABORTED_LEAVE";
         const bool isSoft = ep.label == "FALSE_PUSH" && EpisodeHasBaroLowerPlatform(ep);
         if (summaries) {
             summaries->push_back({ep.side + ":" + std::to_string(ep.outcome_ms) + ":" + ep.label + ":" + ep.episode_id,
@@ -309,7 +318,17 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             else if (early > 0) ++leadEarly;
             else ++leadOk;
         }
-        if (ep.label == "FALSE_PUSH" || ep.label == "TRUE_NEGATIVE") {
+        if (isAborted) {
+            ++nAborted;
+            const int64_t branchMs = ep.abort_ms > 0 ? ep.abort_ms : ep.outcome_ms;
+            if (firstThresholdMs > 0 && (branchMs <= 0 || firstThresholdMs <= branchMs)) {
+                ++abortedIntentRecognized;
+            }
+            if (firstCancelMs > 0 && (branchMs <= 0 || firstCancelMs >= branchMs)) {
+                ++abortedCancelRecognized;
+            }
+            if (wouldPush) ++abortedVisiblePush;
+        } else if (ep.label == "FALSE_PUSH" || ep.label == "TRUE_NEGATIVE") {
             if (ep.label == "TRUE_NEGATIVE") {
                 ++nTrueNegative;
             }
@@ -354,6 +373,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             << ",\"first_ready_t_ms\":" << firstReadyMs
             << ",\"first_complete_t_ms\":" << firstCompleteMs
             << ",\"first_threshold_t_ms\":" << firstThresholdMs
+            << ",\"first_cancel_t_ms\":" << firstCancelMs
             << ",\"negative_match_ticks\":" << negativeTicks
             << ",\"threshold_product_blocked_ticks\":" << productBlockedTicks
             << ",\"threshold_arm_blocked_ticks\":" << armBlockedTicks;
@@ -366,12 +386,13 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     // soft_false_avoided already folded into missed. Hard FALSE_PUSH only in false_*.
     const double scoreValue = 2.0 * static_cast<double>(falseAvoided) - 2.0 * static_cast<double>(falseKept) +
         1.5 * static_cast<double>(confirmedKept + softFalseKept) - 3.0 * static_cast<double>(missed) +
-        1.5 * static_cast<double>(recovered) + leadUtility;
+        1.5 * static_cast<double>(recovered) + 0.75 * static_cast<double>(abortedIntentRecognized) +
+        1.25 * static_cast<double>(abortedCancelRecognized) + leadUtility;
     const double leadMae = (leadErrN > 0) ? (leadAbsErrSum / static_cast<double>(leadErrN)) : -1.0;
 
     std::ostringstream oss;
     oss << "{\"ok\":true,\"method\":\"hsmm_window_replay\""
-        << ",\"score_version\":2,\"lead_utility\":" << leadUtility
+        << ",\"score_version\":3,\"lead_utility\":" << leadUtility
         << ",\"late_seconds\":" << lateSeconds
         << ",\"mean_lead_s\":" << (leadErrN ? leadSum / leadErrN : -1.0)
         << ",\"prefix_cutoff_ms\":" << cutoffMs
@@ -382,14 +403,19 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
            "Product bans (OUTSIDE/approaching/attach) stay in C++. Filtered by focus_side. "
            "FALSE_PUSH with obs_baro_lower_platform counted as soft_false_* and scored as positives "
            "(kept=+1.5 like confirmed; avoided folds into missed_leave=-3). "
-            "Hard FALSE_PUSH and explicit TRUE_NEGATIVE stay in false_kept/false_avoided.\""
+           "ABORTED_LEAVE rewards recognizing intent before abort_t_ms and matching a cancel sequence after it; "
+           "it is not a hard negative. Hard FALSE_PUSH and explicit TRUE_NEGATIVE stay in false_kept/false_avoided.\""
         << ",\"n_episodes\":" << n << ",\"n_false_push\":" << nFalse << ",\"n_confirmed_leave\":" << nConfirmed
         << ",\"n_missed_leave_label\":" << nMissedLabel
         << ",\"n_true_negative\":" << nTrueNegative
+        << ",\"n_aborted_leave\":" << nAborted
         << ",\"false_avoided\":" << falseAvoided << ",\"false_kept\":" << falseKept
         << ",\"soft_false_avoided\":" << softFalseAvoided << ",\"soft_false_kept\":" << softFalseKept
         << ",\"confirmed_kept\":" << confirmedKept << ",\"missed_leave\":" << missed
         << ",\"recovered_miss\":" << recovered << ",\"unscored\":" << nUnscored
+        << ",\"aborted_intent_recognized\":" << abortedIntentRecognized
+        << ",\"aborted_cancel_recognized\":" << abortedCancelRecognized
+        << ",\"aborted_visible_push\":" << abortedVisiblePush
         << ",\"lead_ok\":" << leadOk << ",\"lead_late\":" << leadLate << ",\"lead_early\":" << leadEarly
         << ",\"lead_mae_to_mid_s\":" << leadMae << ",\"score\":" << scoreValue
         << ",\"theta\":{\"enter_leave\":" << theta.enter_leave << ",\"lead_min_s\":" << theta.lead_min_s
@@ -407,6 +433,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
            "Positives: CONFIRMED_LEAVE and soft_false (FALSE_PUSH with baro_lower_platform / lobby-1F). "
            "soft_false_kept is rewarded; soft_false_avoided counts as missed. "
            "Hard false_kept (no baro_lower_platform) is the suppress target. "
+           "ABORTED_LEAVE is reported separately from false pushes. "
            "Diagnose obs_* before choosing enter_leave vs a channel w_*.\"}";
     return oss.str();
 }
@@ -417,6 +444,25 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
     std::ifstream in(path);
     if (!in.is_open() || out == nullptr) {
         return false;
+    }
+    struct Interpretation { std::string type; int64_t abort_ms = 0; };
+    std::map<std::string, Interpretation> interpretations;
+    {
+        std::ifstream labels(rootDir + "/episode_interpretations.jsonl");
+        std::string labelLine;
+        while (std::getline(labels, labelLine)) {
+            std::string side;
+            std::string episodeId;
+            std::string type;
+            int64_t outcomeMs = 0;
+            int64_t abortMs = 0;
+            if (!ExtractString(labelLine, "side", &side) ||
+                !ExtractString(labelLine, "episode_id", &episodeId) ||
+                !ExtractString(labelLine, "episode_type", &type) || type != "ABORTED_LEAVE" ||
+                !ExtractInt64(labelLine, "outcome_t_ms", &outcomeMs) ||
+                !ExtractInt64(labelLine, "abort_t_ms", &abortMs)) continue;
+            interpretations[side + ":" + std::to_string(outcomeMs) + ":" + episodeId] = {type, abortMs};
+        }
     }
     std::map<std::string, HsmmEpisode> grouped;
     std::string line;
@@ -442,10 +488,13 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
         ExtractNumber(line, "obs_time_prior", &tick.obs.time_prior);
         ExtractNumber(line, "obs_baro_descending", &tick.obs.baro_descending);
         ExtractNumber(line, "obs_baro_lower_platform", &tick.obs.baro_lower_platform);
+        ExtractNumber(line, "obs_baro_ascending", &tick.obs.baro_ascending);
+        ExtractNumber(line, "obs_vertical_closure", &tick.obs.vertical_closure);
         ExtractBool(line, "obs_sequence_available", &tick.obs.sequence_available);
         ExtractNumber(line, "obs_sequence_progress", &tick.obs.sequence_progress);
         ExtractNumber(line, "obs_sequence_complete", &tick.obs.sequence_complete);
         ExtractNumber(line, "obs_negative_pattern_match", &tick.obs.negative_pattern_match);
+        ExtractNumber(line, "obs_cancel_sequence_match", &tick.obs.cancel_sequence_match);
         ExtractNumber(line, "obs_sequence_reliability", &tick.obs.sequence_reliability);
         ExtractNumber(line, "baro_descent_m", &tick.obs.baro_descent_m);
         tick.obs.baro_stable_platform_known = ExtractBool(
@@ -472,17 +521,26 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
         ExtractString(line, "label", &label);
         int64_t outcomeMs = tick.t_ms;
         ExtractInt64(line, "outcome_t_ms", &outcomeMs);
+        int64_t abortMs = 0;
+        ExtractInt64(line, "abort_t_ms", &abortMs);
         if (sinceMs > 0 && outcomeMs > 0 && outcomeMs < sinceMs) {
             continue;
         }
         std::string episodeId;
         ExtractString(line, "episode_id", &episodeId);
+        const auto interpretation = interpretations.find(
+            side + ":" + std::to_string(outcomeMs) + ":" + episodeId);
+        if (interpretation != interpretations.end() && label == "FALSE_PUSH") {
+            label = interpretation->second.type;
+            abortMs = interpretation->second.abort_ms;
+        }
         const std::string key = side + ":" + std::to_string(outcomeMs) + ":" + label + ":" + episodeId;
         auto &ep = grouped[key];
         ep.episode_id = episodeId;
         ep.side = side;
         ep.label = label;
         ep.outcome_ms = outcomeMs;
+        ep.abort_ms = abortMs;
         ep.ticks.push_back(tick);
         ++nObs;
     }

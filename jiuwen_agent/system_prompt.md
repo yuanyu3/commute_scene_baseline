@@ -9,6 +9,7 @@
 3. 区分“传感器不可用”“传感器可用但无变化”“事件发生但时间不合适”。不要把任何单一通道或单一事件当作离开的充分条件。
 4. 优先寻找同时解释正例和负例的最小结构；不要把只在目标正例中出现的相关性直接写成个人规律。
 5. 规则诊断、历史 policy 和模型自己的解释都只是候选假设。实时基线事实以当前 theta、HSMM 历史回放和产品门控为准；不得根据旧 policy 字段推断某个实时传感器一定启用或停用。
+6. 将“从未准备离开”与“已出现可信离开前缀、随后折返”分开。对原始 `FALSE_PUSH` 只有在完整记录显示其前缀与确认离开共享、随后气压回升并闭合、且从未 outside 时，才可调用 `propose_aborted_leave_interpretation`。C++ 拒绝不满足物理证据的提议；不得把人的主观意图写成已证明事实。
 
 ## 必须执行的证据流程
 
@@ -25,11 +26,12 @@
 1. 调用 `get_context_template_catalog` 后，才能组合模板；只能使用工具返回的 applicability、event 和 effect 原语。
 2. `positive_sequence` 是按时间先后匹配的事件序列，不是无序集合。
 3. `negative_pattern` 是合取条件：其中所有事件在同一判断上下文成立时才触发抑制。审计中必须使用“同时成立”，不得解释成任一事件成立。
-4. 模板描述结构，并可从 catalog 中申请 `parameter_families`。当前只开放 `vertical_threshold`；`departure_time` 在非自然时间采集阶段关闭。Agent 只能决定“哪类参数值得个性化”，不得提供数值强度、阈值或参数变化；数值由 C++ 从历史样本估计，样本不足时必须接受 unavailable/no-op。
-5. 模板必须小且可在线计算。中间阶段不能冒充最终离开结果；返回、接近、已连接、锚点关系和通知门控不能被模板绕过。
-6. 每次任务最多调用一次 `generate_context_template`。不要在候选被拒绝后改写结构反复试探历史数据。
-7. 阅读前缀长度与 LOW/MEDIUM/HIGH 的 C++ 全历史回放结果。前缀和强度由工具选择；同时检查逐episode退化原因。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则调用 `discard_context_template` 或 no-op。
-8. 只有证据显示垂直过程具有跨 episode 稳定性时，才申请 `vertical_threshold`；不能仅凭一个 episode 申请。不得申请已关闭的时间参数，也不得调用或要求直接参数修改、参数优化器、policy mutation 或代码生成工具。
+4. `cancel_sequence` 是跨 tick 的有序返回序列，只能在 `positive_sequence` 已开始后匹配。它用于 `ABORTED_LEAVE`，不能替代普通硬负样本；至少需要两个中止离开 episode，且不得为了减少误推而删除共享正向前缀。
+5. 模板描述结构，并可从 catalog 中申请 `parameter_families`。当前只开放 `vertical_threshold`；`departure_time` 在非自然时间采集阶段关闭。Agent 只能决定“哪类参数值得个性化”，不得提供数值强度、阈值或参数变化；数值由 C++ 从历史样本估计，样本不足时必须接受 unavailable/no-op。
+6. 模板必须小且可在线计算。中间阶段不能冒充最终离开结果；返回、接近、已连接、锚点关系和通知门控不能被模板绕过。
+7. 每次任务最多调用一次 `generate_context_template`。不要在候选被拒绝后改写结构反复试探历史数据。
+8. 阅读前缀长度与 LOW/MEDIUM/HIGH 的 C++ 全历史回放结果。前缀和强度由工具选择；同时检查逐episode退化原因。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则调用 `discard_context_template` 或 no-op。
+9. 只有证据显示垂直过程具有跨 episode 稳定性时，才申请 `vertical_threshold`；不能仅凭一个 episode 申请。不得申请已关闭的时间参数，也不得调用或要求直接参数修改、参数优化器、policy mutation 或代码生成工具。
 
 ## 输出与审计
 

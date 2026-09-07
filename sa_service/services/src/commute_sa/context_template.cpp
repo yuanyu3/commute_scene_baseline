@@ -38,6 +38,10 @@ struct Metrics {
     int confirmed_kept = 0;
     int missed_leave = 0;
     int recovered_miss = 0;
+    int n_aborted_leave = 0;
+    int aborted_intent_recognized = 0;
+    int aborted_cancel_recognized = 0;
+    int aborted_visible_push = 0;
 };
 
 struct TemplateSpec {
@@ -47,6 +51,8 @@ struct TemplateSpec {
     std::string anchor_id = "company_001";
     std::string applicability = "baro_ready";
     std::vector<std::string> positive_sequence;
+    /** Ordered return sequence; active only after the positive prefix starts. */
+    std::vector<std::string> cancel_sequence;
     std::vector<std::string> negative_pattern;
     std::vector<std::string> parameter_families;
     std::vector<std::string> unavailable_parameter_families;
@@ -85,8 +91,14 @@ bool gActiveLoaded = false;
 bool gActivePresent = false;
 TemplateSpec gActiveSpec;
 double gActiveStrength = 0.0;
-size_t gActiveSequenceIndex = 0;
-int64_t gActiveLastMatchMs = 0;
+struct TemplateRuntimeState {
+    size_t positive_index = 0;
+    size_t cancel_index = 0;
+    int64_t last_match_ms = 0;
+    int64_t cancel_until_ms = 0;
+};
+
+TemplateRuntimeState gActiveState;
 
 std::string RootDir()
 {
@@ -213,7 +225,7 @@ const std::set<std::string> &SupportedEvents()
 {
     static const std::set<std::string> events = {"walking", "pdr_outbound", "geo_outbound", "wifi_detach",
         "cell_detach", "ble_detach", "baro_descending", "lower_platform", "outside", "approaching",
-        "attached", "no_baro_descent", "no_geo_outbound"};
+        "attached", "baro_ascending", "vertical_closure", "no_baro_descent", "no_geo_outbound"};
     return events;
 }
 
@@ -276,6 +288,23 @@ struct EpisodeParameterEvidence {
 
 std::vector<EpisodeParameterEvidence> LoadParameterEvidence()
 {
+    std::map<std::string, std::string> interpretations;
+    {
+        std::ifstream labels(RootDir() + "/episode_interpretations.jsonl");
+        std::string labelLine;
+        while (std::getline(labels, labelLine)) {
+            std::string side;
+            std::string episodeId;
+            std::string type;
+            double outcome = 0.0;
+            if (ExtractString(labelLine, "side", &side) &&
+                ExtractString(labelLine, "episode_id", &episodeId) &&
+                ExtractString(labelLine, "episode_type", &type) && type == "ABORTED_LEAVE" &&
+                ExtractNumber(labelLine, "outcome_t_ms", &outcome)) {
+                interpretations[side + ":" + std::to_string(static_cast<int64_t>(outcome)) + ":" + episodeId] = type;
+            }
+        }
+    }
     std::ifstream in(RootDir() + "/policy_history.jsonl");
     std::map<std::string, EpisodeParameterEvidence> grouped;
     std::string line;
@@ -284,12 +313,17 @@ std::vector<EpisodeParameterEvidence> LoadParameterEvidence()
         double outcomeValue = 0.0;
         std::string side;
         std::string label;
+        std::string episodeId;
         if (!ExtractNumber(line, "outcome_t_ms", &outcomeValue) ||
             !ExtractString(line, "side", &side) || !ExtractString(line, "label", &label)) {
             continue;
         }
         outcomeMs = static_cast<int64_t>(outcomeValue);
-        const std::string key = side + ":" + std::to_string(outcomeMs) + ":" + label;
+        ExtractString(line, "episode_id", &episodeId);
+        const auto interpretation = interpretations.find(
+            side + ":" + std::to_string(outcomeMs) + ":" + episodeId);
+        if (label == "FALSE_PUSH" && interpretation != interpretations.end()) label = interpretation->second;
+        const std::string key = side + ":" + std::to_string(outcomeMs) + ":" + label + ":" + episodeId;
         auto &episode = grouped[key];
         episode.side = side;
         episode.label = label;
@@ -349,7 +383,8 @@ void EstimateRequestedParameters(const Theta &theta, TemplateSpec *spec)
                 if (episode.side != spec->side || episode.max_baro_descent_m <= 0.0) continue;
                 // A labeled lobby/lower-platform intermediate is valid
                 // vertical evidence even if the user has not crossed outside.
-                if ((episode.label == "CONFIRMED_LEAVE" || episode.label == "FALSE_PUSH") &&
+                if ((episode.label == "CONFIRMED_LEAVE" || episode.label == "ABORTED_LEAVE" ||
+                    episode.label == "FALSE_PUSH") &&
                     episode.lower_platform) {
                     positives.push_back(episode.max_baro_descent_m);
                 } else if ((episode.label == "FALSE_PUSH" || episode.label == "TRUE_NEGATIVE") &&
@@ -389,6 +424,8 @@ bool EventActive(const std::string &event, const LeaveObservation &obs)
     if (event == "ble_detach") return obs.ble_detach >= 0.5;
     if (event == "baro_descending") return obs.baro_descending >= 0.5;
     if (event == "lower_platform") return obs.baro_lower_platform >= 0.5;
+    if (event == "baro_ascending") return obs.baro_ascending >= 0.5;
+    if (event == "vertical_closure") return obs.vertical_closure >= 0.5;
     if (event == "outside") return obs.outside;
     if (event == "approaching") return obs.approaching;
     if (event == "attached") return obs.attached;
@@ -399,9 +436,9 @@ bool EventActive(const std::string &event, const LeaveObservation &obs)
     return false;
 }
 
-bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs, size_t *sequenceIndex)
+bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs, TemplateRuntimeState *state)
 {
-    if (obs == nullptr || sequenceIndex == nullptr) return false;
+    if (obs == nullptr || state == nullptr) return false;
     // Replaying an observation that was previously produced under another
     // active template must not carry old template evidence into this trial.
     obs->sequence_available = true;
@@ -409,6 +446,7 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
     obs->sequence_complete = 0.0;
     obs->sequence_ready = spec.ready_prefix_length > 0 ? 0.0 : -1.0;
     obs->negative_pattern_match = 0.0;
+    obs->cancel_sequence_match = 0.0;
     obs->sequence_reliability = Clip01(strength);
     if (spec.personalized_time && obs->t_ms > 0) {
         obs->time_prior = PersonalizedTimePrior(obs->t_ms, spec.time_center_hour, spec.time_window_min);
@@ -417,21 +455,48 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         obs->baro_lower_platform = obs->baro_stable_platform &&
             obs->baro_descent_m >= spec.baro_min_descent_m ? 1.0 : 0.0;
     }
-    const size_t previousIndex = *sequenceIndex;
-    if (*sequenceIndex < spec.positive_sequence.size() &&
-        EventActive(spec.positive_sequence[*sequenceIndex], *obs)) {
-        ++(*sequenceIndex);
+    if (state->cancel_until_ms > 0) {
+        if (obs->t_ms <= state->cancel_until_ms) {
+            obs->negative_pattern_match = 1.0;
+            obs->cancel_sequence_match = 1.0;
+            return false;
+        }
+        state->cancel_until_ms = 0;
+    }
+    const size_t previousPositive = state->positive_index;
+    const size_t previousCancel = state->cancel_index;
+    if (state->positive_index < spec.positive_sequence.size() &&
+        EventActive(spec.positive_sequence[state->positive_index], *obs)) {
+        ++state->positive_index;
     }
     if (!spec.positive_sequence.empty()) {
-        const double progress = static_cast<double>(*sequenceIndex) /
+        const double progress = static_cast<double>(state->positive_index) /
             static_cast<double>(spec.positive_sequence.size());
         obs->sequence_progress = Clip01(progress);
         if (spec.ready_prefix_length > 0) {
-            obs->sequence_ready = *sequenceIndex >= static_cast<size_t>(spec.ready_prefix_length) ? 1.0 : 0.0;
+            obs->sequence_ready = state->positive_index >= static_cast<size_t>(spec.ready_prefix_length) ? 1.0 : 0.0;
         }
-        if (*sequenceIndex >= spec.positive_sequence.size()) {
+        if (state->positive_index >= spec.positive_sequence.size()) {
             obs->sequence_complete = 1.0;
         }
+    }
+
+    // A cancellation can only explain a reversal after this episode has
+    // entered the learned departure prefix. It is never a global negative.
+    if (state->positive_index > 0 && state->cancel_index < spec.cancel_sequence.size() &&
+        EventActive(spec.cancel_sequence[state->cancel_index], *obs)) {
+        ++state->cancel_index;
+    }
+    if (!spec.cancel_sequence.empty() && state->cancel_index >= spec.cancel_sequence.size()) {
+        constexpr int64_t kCancelHoldMs = 120000;
+        state->cancel_until_ms = obs->t_ms + kCancelHoldMs;
+        state->positive_index = 0;
+        state->cancel_index = 0;
+        obs->sequence_progress = 0.0;
+        obs->sequence_complete = 0.0;
+        obs->sequence_ready = spec.ready_prefix_length > 0 ? 0.0 : -1.0;
+        obs->negative_pattern_match = 1.0;
+        obs->cancel_sequence_match = 1.0;
     }
 
     bool negative = !spec.negative_pattern.empty();
@@ -439,15 +504,15 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
     if (negative) {
         obs->negative_pattern_match = 1.0;
     }
-    return *sequenceIndex > previousIndex;
+    return state->positive_index > previousPositive || state->cancel_index > previousCancel ||
+        state->cancel_until_ms > 0;
 }
 
 void LoadActiveTemplateLocked()
 {
     gActiveLoaded = true;
     gActivePresent = false;
-    gActiveSequenceIndex = 0;
-    gActiveLastMatchMs = 0;
+    gActiveState = TemplateRuntimeState {};
 
     std::ifstream in(RootDir() + "/active_context_template.json");
     if (!in.is_open()) return;
@@ -456,6 +521,7 @@ void LoadActiveTemplateLocked()
     const std::string json = body.str();
     TemplateSpec spec;
     std::string positiveCsv;
+    std::string cancelCsv;
     std::string negativeCsv;
     std::string parameterFamiliesCsv;
     double strength = 0.0;
@@ -468,9 +534,11 @@ void LoadActiveTemplateLocked()
         return;
     }
     ExtractString(json, "negative_pattern", &negativeCsv);
+    ExtractString(json, "cancel_sequence", &cancelCsv);
     ExtractString(json, "parameter_families", &parameterFamiliesCsv);
     ExtractString(json, "rationale", &spec.rationale);
     spec.positive_sequence = SplitCsv(positiveCsv);
+    spec.cancel_sequence = SplitCsv(cancelCsv);
     spec.negative_pattern = SplitCsv(negativeCsv);
     spec.parameter_families = SplitCsv(parameterFamiliesCsv);
     ExtractBool(json, "personalized_time", &spec.personalized_time);
@@ -488,7 +556,10 @@ void LoadActiveTemplateLocked()
     if (ExtractNumber(json, "baro_sample_count", &count)) spec.baro_sample_count = static_cast<int>(count);
     if (strength <= 0.0 || strength > 1.0) return;
     for (const auto &event : spec.positive_sequence) if (SupportedEvents().count(event) == 0) return;
+    for (const auto &event : spec.cancel_sequence) if (SupportedEvents().count(event) == 0) return;
     for (const auto &event : spec.negative_pattern) if (SupportedEvents().count(event) == 0) return;
+    if (spec.positive_sequence.size() > 6 || spec.cancel_sequence.size() > 6 ||
+        spec.negative_pattern.size() > 6) return;
     for (const auto &family : spec.parameter_families) {
         if (SupportedParameterFamilies().count(family) == 0) return;
     }
@@ -527,20 +598,28 @@ Metrics ParseMetrics(const std::string &json)
     integer("confirmed_kept", &metrics.confirmed_kept);
     integer("missed_leave", &metrics.missed_leave);
     integer("recovered_miss", &metrics.recovered_miss);
+    integer("n_aborted_leave", &metrics.n_aborted_leave);
+    integer("aborted_intent_recognized", &metrics.aborted_intent_recognized);
+    integer("aborted_cancel_recognized", &metrics.aborted_cancel_recognized);
+    integer("aborted_visible_push", &metrics.aborted_visible_push);
     return metrics;
 }
 
 std::string MetricsJson(const Metrics &m)
 {
     std::ostringstream out;
-    out << "{\"score_version\":2,\"mean_lead_s\":" << m.mean_lead_s
+    out << "{\"score_version\":3,\"mean_lead_s\":" << m.mean_lead_s
         << ",\"late_seconds\":" << m.late_seconds
         << ",\"score\":" << m.score << ",\"n_episodes\":" << m.n_episodes
         << ",\"n_false_push\":" << m.n_false_push << ",\"n_confirmed_leave\":" << m.n_confirmed_leave
         << ",\"n_missed_leave_label\":" << m.n_missed_leave_label << ",\"false_kept\":" << m.false_kept
         << ",\"false_avoided\":" << m.false_avoided << ",\"soft_false_kept\":" << m.soft_false_kept
         << ",\"confirmed_kept\":" << m.confirmed_kept << ",\"missed_leave\":" << m.missed_leave
-        << ",\"recovered_miss\":" << m.recovered_miss << '}';
+        << ",\"recovered_miss\":" << m.recovered_miss
+        << ",\"n_aborted_leave\":" << m.n_aborted_leave
+        << ",\"aborted_intent_recognized\":" << m.aborted_intent_recognized
+        << ",\"aborted_cancel_recognized\":" << m.aborted_cancel_recognized
+        << ",\"aborted_visible_push\":" << m.aborted_visible_push << '}';
     return out.str();
 }
 
@@ -556,44 +635,54 @@ bool Eligible(const Metrics &base, const Metrics &candidate, std::string *why)
     if (candidate.confirmed_kept < base.confirmed_kept) { if (why) *why = "confirmed_recall_decreased"; return false; }
     if (candidate.soft_false_kept < base.soft_false_kept) { if (why) *why = "lower_platform_positive_decreased"; return false; }
     if (candidate.false_kept > base.false_kept) { if (why) *why = "hard_false_push_increased"; return false; }
+    if (candidate.aborted_intent_recognized < base.aborted_intent_recognized) {
+        if (why) *why = "aborted_intent_recognition_decreased"; return false;
+    }
+    if (candidate.aborted_visible_push > base.aborted_visible_push) {
+        if (why) *why = "aborted_visible_push_increased"; return false;
+    }
     return true;
 }
 
 ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
 {
-    size_t sequenceIndex = 0;
-    int64_t lastMatchMs = 0;
-    return [spec, strength, sequenceIndex, lastMatchMs](LeaveObservation &obs, bool episodeStart) mutable {
-        if (episodeStart) { sequenceIndex = 0; lastMatchMs = 0; }
+    TemplateRuntimeState state;
+    return [spec, strength, state](LeaveObservation &obs, bool episodeStart) mutable {
+        if (episodeStart) state = TemplateRuntimeState {};
         obs.sequence_available = false;
         obs.sequence_progress = 0.0;
         obs.sequence_complete = 0.0;
         obs.sequence_ready = -1.0;
         obs.negative_pattern_match = 0.0;
+        obs.cancel_sequence_match = 0.0;
         obs.sequence_reliability = 0.0;
         if (!obs.context_side.empty() && obs.context_side != spec.side) return;
         if (spec.applicability == "baro_ready" && !obs.baro_available) return;
-        if (lastMatchMs > 0 && (obs.t_ms < lastMatchMs || obs.t_ms - lastMatchMs > 600000)) {
-            sequenceIndex = 0;
-            lastMatchMs = 0;
+        if (state.last_match_ms > 0 &&
+            (obs.t_ms < state.last_match_ms || obs.t_ms - state.last_match_ms > 600000)) {
+            state = TemplateRuntimeState {};
         }
-        if (ApplySpec(spec, strength, &obs, &sequenceIndex)) lastMatchMs = obs.t_ms;
-        if (obs.outside || obs.approaching || obs.attached) { sequenceIndex = 0; lastMatchMs = 0; }
+        if (ApplySpec(spec, strength, &obs, &state)) state.last_match_ms = obs.t_ms;
+        if (obs.outside || obs.approaching || (obs.attached && state.cancel_until_ms <= 0)) {
+            state = TemplateRuntimeState {};
+        }
     };
 }
 
 std::string SpecJson(const TemplateSpec &spec, const std::string &strengthName = "", double strength = 0.0)
 {
     std::ostringstream out;
-    out << "{\"schema_version\":4,\"ready_prefix_length\":" << spec.ready_prefix_length
+    out << "{\"schema_version\":5,\"ready_prefix_length\":" << spec.ready_prefix_length
         << ",\"template_name\":\"" << Esc(spec.template_name)
         << "\",\"side\":\"" << Esc(spec.side) << "\",\"anchor_id\":\"" << Esc(spec.anchor_id)
         << "\",\"applicability\":\"" << Esc(spec.applicability)
         << "\",\"positive_sequence\":\"" << Esc(JoinCsv(spec.positive_sequence))
+        << "\",\"cancel_sequence\":\"" << Esc(JoinCsv(spec.cancel_sequence))
         << "\",\"negative_pattern\":\"" << Esc(JoinCsv(spec.negative_pattern))
         << "\",\"parameter_families\":\"" << Esc(JoinCsv(spec.parameter_families))
         << "\",\"positive_effect\":\"emit_progress_completion_and_optional_prefix_readiness\","
-           "\"negative_effect\":\"emit_negative_pattern_match\"";
+           "\"negative_effect\":\"emit_negative_pattern_match\","
+           "\"cancel_effect\":\"after a started positive prefix, ordered return events emit a bounded cancel observation\"";
     out << ",\"personalized_time\":" << (spec.personalized_time ? "true" : "false")
         << ",\"time_center_hour\":" << spec.time_center_hour
         << ",\"time_window_min\":" << spec.time_window_min
@@ -629,6 +718,7 @@ std::string TrialJson(const Trial &trial)
     }
     out << "],\"commit_guard\":{\"score_must_improve\":true,\"hard_false_must_not_increase\":true,"
            "\"confirmed_and_lower_platform_positives_must_not_decrease\":true,\"missed_must_not_increase\":true,"
+           "\"aborted_intent_must_not_decrease\":true,\"aborted_visible_push_must_not_increase\":true,"
            "\"per_episode_no_new_false_or_lost_positive\":true,\"per_episode_positive_must_not_be_later\":true}}";
     return out.str();
 }
@@ -637,13 +727,14 @@ std::string TrialJson(const Trial &trial)
 
 std::string GetContextTemplateCatalogAction(const std::string &)
 {
-    return "{\"ok\":true,\"schema_version\":4,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
+    return "{\"ok\":true,\"schema_version\":5,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
            "\"applicability\":[\"always\",\"baro_ready\"],"
            "\"events\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\","
            "\"ble_detach\",\"baro_descending\",\"lower_platform\",\"outside\",\"approaching\","
-           "\"attached\",\"no_baro_descent\",\"no_geo_outbound\"],"
+           "\"attached\",\"baro_ascending\",\"vertical_closure\",\"no_baro_descent\",\"no_geo_outbound\"],"
            "\"effects\":{\"positive_sequence\":\"emit progress/completion and replay-calibrated prefix readiness; readiness replaces, never adds to, legacy positive evidence\","
            "\"negative_pattern\":\"emit an independent negative_pattern_match observation\","
+           "\"cancel_sequence\":\"ordered reversal after a started positive prefix; emits a 120-second cancel observation\","
            "\"strength\":\"emit sequence_reliability selected by deterministic replay\"},"
            "\"parameter_families\":{\"vertical_threshold\":\"anchor-scoped stable descent threshold; needs 3 validated lower-platform episodes\"},"
            "\"disabled_parameter_families\":{\"departure_time\":\"disabled while collection timestamps are not representative of normal behavior\"},"
@@ -651,10 +742,150 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"strengths\":\"LOW|MEDIUM|HIGH selected by deterministic replay with continuous lead score and no false/missed regression\"}";
 }
 
+std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJson)
+{
+    std::string side;
+    std::string episodeId;
+    std::string rationale;
+    double outcomeValue = 0.0;
+    double confidence = 0.0;
+    if (!ExtractString(paramsJson, "side", &side) ||
+        !ExtractString(paramsJson, "episode_id", &episodeId) || episodeId.empty() ||
+        !ExtractNumber(paramsJson, "outcome_t_ms", &outcomeValue) || outcomeValue <= 0 ||
+        !ExtractNumber(paramsJson, "confidence", &confidence) || confidence < 0.5 || confidence > 1.0 ||
+        !ExtractString(paramsJson, "rationale", &rationale) || rationale.empty()) {
+        return "{\"ok\":false,\"error\":\"side, episode_id, outcome_t_ms, confidence>=0.5 and rationale required\"}";
+    }
+    if (side != "company" && side != "home") {
+        return "{\"ok\":false,\"error\":\"side must be company|home\"}";
+    }
+    const int64_t outcomeMs = static_cast<int64_t>(outcomeValue);
+    const Theta theta = CurrentTheta();
+    std::ifstream in(RootDir() + "/policy_history.jsonl");
+    if (!in.is_open()) return "{\"ok\":false,\"error\":\"policy_history.jsonl missing\"}";
+
+    bool found = false;
+    bool originalFalse = false;
+    bool outside = false;
+    bool lowerPlatform = false;
+    bool walking = false;
+    bool outbound = false;
+    bool sawAscendingAfterDescent = false;
+    bool sawClosureAfterDescent = false;
+    double maxDescent = 0.0;
+    int64_t firstMaterialDescentMs = 0;
+    int64_t abortMs = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string rowSide;
+        std::string rowEpisode;
+        std::string label;
+        double rowOutcome = 0.0;
+        if (!ExtractString(line, "side", &rowSide) || rowSide != side ||
+            !ExtractString(line, "episode_id", &rowEpisode) || rowEpisode != episodeId ||
+            !ExtractNumber(line, "outcome_t_ms", &rowOutcome) ||
+            static_cast<int64_t>(rowOutcome) != outcomeMs) continue;
+        found = true;
+        ExtractString(line, "label", &label);
+        originalFalse = originalFalse || label == "FALSE_PUSH";
+        double value = 0.0;
+        int64_t tMs = 0;
+        if (ExtractNumber(line, "t_ms", &value)) tMs = static_cast<int64_t>(value);
+        if (ExtractNumber(line, "baro_descent_m", &value)) {
+            maxDescent = std::max(maxDescent, value);
+            if (!firstMaterialDescentMs && value >= std::max(4.0, theta.baro_min_descent_m)) {
+                firstMaterialDescentMs = tMs;
+            }
+        }
+        bool boolean = false;
+        if (ExtractBool(line, "obs_outside", &boolean) && boolean) outside = true;
+        if (ExtractNumber(line, "obs_baro_lower_platform", &value) && value >= 0.5) lowerPlatform = true;
+        if (ExtractNumber(line, "obs_walking", &value) && value >= 0.5) walking = true;
+        const char *outboundFields[] = {"obs_pdr_outbound", "obs_geo_outbound", "obs_wifi_detach"};
+        for (const char *field : outboundFields) {
+            if (ExtractNumber(line, field, &value) && value >= 0.5) outbound = true;
+        }
+        if (firstMaterialDescentMs > 0 && tMs >= firstMaterialDescentMs &&
+            ExtractNumber(line, "obs_baro_ascending", &value) && value >= 0.5) {
+            sawAscendingAfterDescent = true;
+            if (!abortMs) abortMs = tMs;
+        }
+        if (firstMaterialDescentMs > 0 && tMs >= firstMaterialDescentMs &&
+            ExtractNumber(line, "obs_vertical_closure", &value) && value >= 0.5) {
+            sawClosureAfterDescent = true;
+            if (!abortMs) abortMs = tMs;
+        }
+    }
+
+    if (!found || !originalFalse) {
+        return "{\"ok\":false,\"error\":\"matching original FALSE_PUSH episode not found\"}";
+    }
+    const bool candidatePrefix = maxDescent >= std::max(4.0, theta.baro_min_descent_m) &&
+        (lowerPlatform || walking || outbound);
+    const int candidateSupport = (walking ? 1 : 0) | (outbound ? 2 : 0) | (lowerPlatform ? 4 : 0);
+    bool confirmedSharedPrefix = false;
+    std::ifstream confirmedIn(RootDir() + "/policy_history.jsonl");
+    std::map<std::string, std::pair<bool, int>> confirmedEvidence;
+    while (std::getline(confirmedIn, line)) {
+        std::string rowSide;
+        std::string label;
+        std::string rowEpisode;
+        double rowOutcome = 0.0;
+        if (!ExtractString(line, "side", &rowSide) || rowSide != side ||
+            !ExtractString(line, "label", &label) || label != "CONFIRMED_LEAVE" ||
+            !ExtractNumber(line, "outcome_t_ms", &rowOutcome)) continue;
+        ExtractString(line, "episode_id", &rowEpisode);
+        const std::string key = std::to_string(static_cast<int64_t>(rowOutcome)) + ":" + rowEpisode;
+        double value = 0.0;
+        if (ExtractNumber(line, "baro_descent_m", &value) &&
+            value >= std::max(4.0, theta.baro_min_descent_m)) confirmedEvidence[key].first = true;
+        if (ExtractNumber(line, "obs_walking", &value) && value >= 0.5) confirmedEvidence[key].second |= 1;
+        const char *outboundFields[] = {"obs_pdr_outbound", "obs_geo_outbound", "obs_wifi_detach"};
+        for (const char *field : outboundFields) {
+            if (ExtractNumber(line, field, &value) && value >= 0.5) confirmedEvidence[key].second |= 2;
+        }
+        if (ExtractNumber(line, "obs_baro_lower_platform", &value) && value >= 0.5)
+            confirmedEvidence[key].second |= 4;
+    }
+    for (const auto &entry : confirmedEvidence) {
+        if (entry.second.first && (entry.second.second & candidateSupport) != 0) {
+            confirmedSharedPrefix = true;
+            break;
+        }
+    }
+    const bool sharedDeparturePrefix = candidatePrefix && confirmedSharedPrefix;
+    if (!sharedDeparturePrefix || !sawAscendingAfterDescent || !sawClosureAfterDescent || outside) {
+        std::ostringstream rejected;
+        rejected << "{\"ok\":false,\"error\":\"physical reversal validation failed\",\"validation\":{"
+                 << "\"shared_departure_prefix\":" << (sharedDeparturePrefix ? "true" : "false")
+                 << ",\"confirmed_prefix_reference\":" << (confirmedSharedPrefix ? "true" : "false")
+                 << ",\"ascending_after_descent\":" << (sawAscendingAfterDescent ? "true" : "false")
+                 << ",\"vertical_closure_after_descent\":" << (sawClosureAfterDescent ? "true" : "false")
+                 << ",\"outside_observed\":" << (outside ? "true" : "false") << "}}";
+        return rejected.str();
+    }
+
+    std::ofstream out(RootDir() + "/episode_interpretations.jsonl", std::ios::out | std::ios::app);
+    if (!out.is_open()) return "{\"ok\":false,\"error\":\"cannot persist episode interpretation\"}";
+    out << "{\"created_at_ms\":" << NowMs() << ",\"side\":\"" << Esc(side)
+        << "\",\"episode_id\":\"" << Esc(episodeId) << "\",\"outcome_t_ms\":" << outcomeMs
+        << ",\"original_label\":\"FALSE_PUSH\",\"episode_type\":\"ABORTED_LEAVE\""
+        << ",\"abort_t_ms\":" << abortMs << ",\"confidence\":" << confidence
+        << ",\"max_baro_descent_m\":" << maxDescent
+        << ",\"validation\":{\"shared_departure_prefix\":true,\"confirmed_prefix_reference\":true,"
+           "\"ascending_after_descent\":true,"
+           "\"vertical_closure_after_descent\":true,\"outside_observed\":false}"
+        << ",\"rationale\":\"" << Esc(rationale) << "\"}\n";
+    return "{\"ok\":true,\"episode_type\":\"ABORTED_LEAVE\",\"original_label\":\"FALSE_PUSH\","
+           "\"episode_id\":\"" + Esc(episodeId) + "\",\"abort_t_ms\":" + std::to_string(abortMs) +
+           ",\"note\":\"Validated physical reversal; subjective intent remains an inference\"}";
+}
+
 std::string GenerateContextTemplateAction(const std::string &paramsJson)
 {
     TemplateSpec spec;
     std::string positiveCsv;
+    std::string cancelCsv;
     std::string negativeCsv;
     std::string parameterFamiliesCsv;
     if (!ExtractString(paramsJson, "template_name", &spec.template_name) || spec.template_name.empty() ||
@@ -662,6 +893,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         return "{\"ok\":false,\"error\":\"template_name and comma-separated positive_sequence required\"}";
     }
     ExtractString(paramsJson, "negative_pattern", &negativeCsv);
+    ExtractString(paramsJson, "cancel_sequence", &cancelCsv);
     ExtractString(paramsJson, "parameter_families", &parameterFamiliesCsv);
     ExtractString(paramsJson, "side", &spec.side);
     ExtractString(paramsJson, "anchor_id", &spec.anchor_id);
@@ -674,6 +906,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         return "{\"ok\":false,\"error\":\"applicability must be always|baro_ready\"}";
     }
     spec.positive_sequence = SplitCsv(positiveCsv);
+    spec.cancel_sequence = SplitCsv(cancelCsv);
     spec.negative_pattern = SplitCsv(negativeCsv);
     spec.parameter_families = SplitCsv(parameterFamiliesCsv);
     std::set<std::string> seenFamilies;
@@ -695,7 +928,13 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
             return "{\"ok\":false,\"error\":\"unsupported negative event\",\"event\":\"" + Esc(event) + "\"}";
         }
     }
-    if (spec.positive_sequence.size() > 6 || spec.negative_pattern.size() > 6) {
+    for (const auto &event : spec.cancel_sequence) {
+        if (SupportedEvents().count(event) == 0 || event.rfind("no_", 0) == 0) {
+            return "{\"ok\":false,\"error\":\"unsupported cancel event\",\"event\":\"" + Esc(event) + "\"}";
+        }
+    }
+    if (spec.positive_sequence.size() > 6 || spec.cancel_sequence.size() > 6 ||
+        spec.negative_pattern.size() > 6) {
         return "{\"ok\":false,\"error\":\"template primitive budget exceeded\",\"max_per_clause\":6}";
     }
 
@@ -705,6 +944,10 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     const Metrics baseline = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
         RootDir(), theta, {}, 0, 100, false, 0, &baselineEpisodes));
     if (!baseline.ok) return "{\"ok\":false,\"error\":\"baseline history replay unavailable\"}";
+    if (!spec.cancel_sequence.empty() && baseline.n_aborted_leave < 2) {
+        return "{\"ok\":false,\"error\":\"cancel_sequence requires at least 2 ABORTED_LEAVE episodes\","
+               "\"n_aborted_leave\":" + std::to_string(baseline.n_aborted_leave) + "}";
+    }
 
     Trial trial;
     trial.active = true;
@@ -878,7 +1121,10 @@ std::string DiagnoseContextTemplateOnHistoryAction(const std::string &args)
             obs.sequence_complete = 0;
             obs.sequence_ready = -1;
         }
-        if (ablation == "negative" || ablation == "both") obs.negative_pattern_match = 0;
+        if (ablation == "negative" || ablation == "both") {
+            obs.negative_pattern_match = 0;
+            obs.cancel_sequence_match = 0;
+        }
     };
     const auto active = EvaluateThetaOnHistoryWithAdapterJson(
         RootDir(), theta, BuildAdapter(spec, strength), 0, static_cast<int>(limit));
@@ -905,15 +1151,16 @@ bool ApplyActiveContextTemplateObservation(const std::string &side, const std::s
         return false;
     }
     // A stale partial sequence must not leak into a later departure episode.
-    if (gActiveLastMatchMs > 0 && (tMs < gActiveLastMatchMs || tMs - gActiveLastMatchMs > 600000)) {
-        gActiveSequenceIndex = 0;
-        gActiveLastMatchMs = 0;
+    if (gActiveState.last_match_ms > 0 &&
+        (tMs < gActiveState.last_match_ms || tMs - gActiveState.last_match_ms > 600000)) {
+        gActiveState = TemplateRuntimeState {};
     }
-    const bool advanced = ApplySpec(gActiveSpec, gActiveStrength, observation, &gActiveSequenceIndex);
-    if (advanced) gActiveLastMatchMs = tMs;
-    if (observation->outside || observation->approaching || observation->attached) {
-        gActiveSequenceIndex = 0;
-        gActiveLastMatchMs = 0;
+    observation->t_ms = tMs;
+    const bool advanced = ApplySpec(gActiveSpec, gActiveStrength, observation, &gActiveState);
+    if (advanced) gActiveState.last_match_ms = tMs;
+    if (observation->outside || observation->approaching ||
+        (observation->attached && gActiveState.cancel_until_ms <= 0)) {
+        gActiveState = TemplateRuntimeState {};
     }
     return true;
 }
@@ -923,8 +1170,7 @@ void ReloadActiveContextTemplateRuntime()
     std::lock_guard<std::mutex> lock(gTemplateMutex);
     gActiveLoaded = false;
     gActivePresent = false;
-    gActiveSequenceIndex = 0;
-    gActiveLastMatchMs = 0;
+    gActiveState = TemplateRuntimeState {};
 }
 
 }  // namespace commute_sa

@@ -316,6 +316,8 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
     out.observation.baro_descending = baroReady ? feat.baro_descending : 0.0;
     out.observation.baro_lower_platform = baroReady && feat.baro_lower_platform ? 1.0 : 0.0;
     out.observation.baro_available = baroReady;
+    out.observation.baro_ascending = baroReady ? feat.baro_ascending : 0.0;
+    out.observation.vertical_closure = baroReady && feat.vertical_closure ? 1.0 : 0.0;
     out.hits = hits;
     return out;
 }
@@ -425,6 +427,8 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         if (theta_.w_baro <= 0.0) {
             obs->baro_descending = 0.0;
             obs->baro_lower_platform = 0.0;
+            obs->baro_ascending = 0.0;
+            obs->vertical_closure = 0.0;
             obs->baro_available = false;
         }
     };

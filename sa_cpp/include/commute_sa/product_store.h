@@ -38,7 +38,7 @@ public:
         double scoreCompany, bool hasDistHome, double distHomeM, bool walking, double enterLeave, int minEvidence,
         const std::string &homeRelation = "", double etaLeaveS = -1.0);
 
-    /** CONFIRMED_LEAVE | FALSE_PUSH | MISSED_LEAVE | UNKNOWN */
+    /** CONFIRMED_LEAVE | ABORTED_LEAVE | FALSE_PUSH | MISSED_LEAVE | UNKNOWN */
     void AppendLeaveLabel(int64_t tLabelMs, int64_t tPushMs, const std::string &label, const std::string &homeRelation,
         bool hasDistHome, double distHomeM);
 

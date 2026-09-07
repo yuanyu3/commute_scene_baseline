@@ -10,7 +10,7 @@
 
   "stream": false,
 
-  "description": "Low-frequency personalization: evidence discovery plus bounded policy/theta counterfactual trials. Not per tick.",
+  "description": "Low-frequency personalization: evidence discovery, validated aborted-leave interpretation and bounded context-template synthesis. Not per tick.",
 
   "system_prompt_file": "system_prompt.md",
 
@@ -30,35 +30,25 @@
 
       "get_leave_sensor_summary"
 
+      ,"diagnose_context_template"
+
     ],
 
     "action": [
 
-      "get_personalization_policy",
+      "get_context_template_catalog",
 
-      "get_policy_catalog",
+      "get_active_context_template",
 
-      "begin_policy_trial",
+      "propose_aborted_leave_interpretation",
 
-      "apply_policy_candidate",
+      "generate_context_template",
 
-      "evaluate_policy_on_history",
+      "get_context_template_trial",
 
-      "revert_policy_trial",
+      "commit_context_template",
 
-      "commit_policy_trial",
-
-      "get_param_limits",
-
-      "begin_theta_trial",
-
-      "apply_theta_delta",
-
-      "evaluate_theta_on_history",
-
-      "revert_theta_trial",
-
-      "commit_theta_trial",
+      "discard_context_template",
 
       "write_audit",
 
@@ -92,7 +82,7 @@
 
     "query": "commute_sa::EvidenceQuery",
 
-    "actions": "commute_sa::action_ops + personalization_policy + theta_eval",
+    "actions": "commute_sa::context_template + theta_eval",
 
     "host": "OHOS SA ProactiveAgentBusinessModule::TryInitializeAgent"
 

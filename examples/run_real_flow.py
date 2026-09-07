@@ -337,7 +337,9 @@ def main() -> int:
             baro_baseline_ready=baro_snap.baseline_ready,
             baro_stable_platform=baro_snap.stable_platform,
             baro_descending=baro_snap.descending,
+            baro_ascending=baro_snap.ascending,
             baro_lower_platform=baro_snap.lower_platform,
+            vertical_closure=baro_snap.vertical_closure,
             baro_mode=args.baro_mode,
         )
         d = engine.step(feat)
@@ -358,7 +360,9 @@ def main() -> int:
             "baro_baseline_ready": baro_snap.baseline_ready,
             "baro_stable_platform": baro_snap.stable_platform,
             "baro_descending": round(baro_snap.descending, 3),
+            "baro_ascending": round(baro_snap.ascending, 3),
             "baro_lower_platform": baro_snap.lower_platform,
+            "vertical_closure": baro_snap.vertical_closure,
             "acc": held_gps.acc,
             "gps_source_type": held_gps.source_type,
             "walking": walk_on,
@@ -450,6 +454,8 @@ def main() -> int:
                     "obs_time_prior": float(obs.get("time_prior", ev.get("s_time", 0.0))),
                     "obs_baro_descending": float(obs.get("baro_descending", r.get("baro_descending", 0.0))),
                     "obs_baro_lower_platform": float(obs.get("baro_lower_platform", 1.0 if r.get("baro_lower_platform") else 0.0)),
+                    "obs_baro_ascending": float(obs.get("baro_ascending", r.get("baro_ascending", 0.0))),
+                    "obs_vertical_closure": float(obs.get("vertical_closure", 1.0 if r.get("vertical_closure") else 0.0)),
                     "obs_baro_available": bool(obs.get("baro_available", r.get("baro_baseline_ready", False))),
                     "obs_sequence_available": bool(obs.get("sequence_available", False)),
                     "obs_sequence_progress": float(obs.get("sequence_progress", 0.0)),

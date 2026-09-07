@@ -14,6 +14,11 @@ std::string GetActiveContextTemplateAction(const std::string &paramsJson);
 std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &paramsJson);
 /** Read-only model intervention: disable positive/negative/both sequence terms and replay. */
 std::string DiagnoseContextTemplateOnHistoryAction(const std::string &paramsJson);
+/**
+ * Validate an Agent-proposed FALSE_PUSH -> ABORTED_LEAVE interpretation from
+ * raw replay semantics and append a non-destructive label override.
+ */
+std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJson);
 
 /**
  * Validate an Agent-composed event sequence, replay LOW/MEDIUM/HIGH effect

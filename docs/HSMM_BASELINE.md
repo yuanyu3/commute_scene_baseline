@@ -35,6 +35,7 @@ AT_ANCHOR -> PRE_LEAVE -> LEAVING -> OUTSIDE
 | sequence_progress | Agent 模板正向序列的完成比例 |
 | sequence_complete | Agent 模板正向序列已经完整发生 |
 | negative_pattern_match | Agent 模板负向模式同时成立 |
+| cancel_sequence_match | 正向前缀启动后，有序返回序列已经完成；与负向交互项一起抑制 LEAVING |
 | sequence_reliability | 经确定性验证器选定的模板可靠度/作用强度 |
 
 各状态对上述观测有不同的初始期望，使用分数型 Bernoulli 似然更新后验。`w_walk`、`w_pdr`、`w_geo`、`w_wifi`、`w_cell`、`w_ble`、`w_time`、`w_baro` 现在控制对应观测的可靠度（`w_baro` 同时作用于 descending / lower_platform 两项），不再直接相加产生离家分数。

@@ -17,6 +17,10 @@ int main()
     for (int i = 0; i < 70; ++i) baro.Observe(t + 16000 + i * 100, 1002.0); // about 16.8 m
     auto fullDrop = baro.Evaluate(t + 23000, false, 12.0);
     if (!fullDrop.lower_platform) return 3;
-    std::cout << "baro ok descent_m=" << fullDrop.descent_m << "\n";
+    for (int i = 0; i < 70; ++i) baro.Observe(t + 24000 + i * 100, 1000.0);
+    auto returned = baro.Evaluate(t + 31000, false, 12.0);
+    if (returned.ascending < 0.5 || !returned.vertical_closure || returned.descent_m > 3.0) return 4;
+    std::cout << "baro ok descent_m=" << fullDrop.descent_m
+              << " return_closure=" << returned.vertical_closure << "\n";
     return 0;
 }

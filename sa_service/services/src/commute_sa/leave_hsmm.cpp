@@ -202,6 +202,8 @@ LeaveHsmmResult LeaveHsmm::Step(
     if (config.reliability[7] <= 0.0 && config.reliability[8] <= 0.0) {
         effective.baro_descending = 0.0;
         effective.baro_lower_platform = 0.0;
+        effective.baro_ascending = 0.0;
+        effective.vertical_closure = 0.0;
         effective.baro_available = false;
     }
     if (!initialized_) {

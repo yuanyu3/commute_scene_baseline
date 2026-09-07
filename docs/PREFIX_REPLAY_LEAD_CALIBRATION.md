@@ -46,7 +46,7 @@ timing_utility = 1 - (late + early) / 60
 
 Agent仍不指定这些数值。每个候选回放同一训练历史，必须提升得分至少0.25、不增加硬误推和漏报、不损失已确认及软正样本召回；替换已有模板时还须通过已有模板的同类检查。前缀候选缺少硬负样本时不接受。合格候选按 `score - 0.1 * strength` 选择。检查是样本计数级，不是统计安全保证，也尚不是逐episode不退化/P10提前量约束。
 
-保存schema_version=4及选中的 `ready_prefix_length`。缺少该字段的旧模板继续使用原有融合方式。CLI增加 `template_fit`，在同一进程生成并提交候选，避免分两次CLI调用丢失内存trial。
+保存 `ready_prefix_length`。该阶段产物为 schema v4；当前运行时 schema v5 在此基础上增加 `cancel_sequence`，缺少新字段的旧模板仍兼容。CLI增加 `template_fit`，在同一进程生成并提交候选，避免分两次CLI调用丢失内存trial。
 
 ### 4. 在线作用
 

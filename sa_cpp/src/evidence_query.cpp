@@ -1544,7 +1544,10 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
     int baroPoints = 0;
     double baroMaxDescent = 0.0;
     double baroMaxDescending = 0.0;
+    double baroMaxAscending = 0.0;
     bool baroAnyLowerPlatform = false;
+    bool baroAnyVerticalClosure = false;
+    int64_t baroFirstVerticalClosureMs = 0;
     bool baroAtAvailable = false;
     bool baroAtLowerPlatform = false;
     double baroAtDescent = 0.0;
@@ -1563,17 +1566,26 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         bool lowerPlatform = false;
         double descent = 0.0;
         double descending = 0.0;
+        double ascending = 0.0;
+        double closure = 0.0;
         ExtractBool(historyLine, "baro_available", &available);
         ExtractBool(historyLine, "baro_lower_platform", &lowerPlatform);
         ExtractNumber(historyLine, "baro_descent_m", &descent);
         ExtractNumber(historyLine, "obs_baro_descending", &descending);
+        ExtractNumber(historyLine, "obs_baro_ascending", &ascending);
+        ExtractNumber(historyLine, "obs_vertical_closure", &closure);
         if (!available) {
             continue;
         }
         ++baroPoints;
         baroMaxDescent = std::max(baroMaxDescent, descent);
         baroMaxDescending = std::max(baroMaxDescending, descending);
+        baroMaxAscending = std::max(baroMaxAscending, ascending);
         baroAnyLowerPlatform = baroAnyLowerPlatform || lowerPlatform;
+        if (closure >= 0.5) {
+            baroAnyVerticalClosure = true;
+            if (!baroFirstVerticalClosureMs) baroFirstVerticalClosureMs = tMs;
+        }
         const int64_t delta = std::llabs(tMs - tCenter);
         if (delta < baroAtDelta) {
             baroAtDelta = delta;
@@ -1619,7 +1631,9 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         << ",\"notes\":\"net = planar distance from walk-episode origin (not distance-to-home)\"}"
         << ",\"baro\":{\"available\":" << (baroPoints > 0 ? "true" : "false")
         << ",\"n_history_points\":" << baroPoints << ",\"max_descent_m\":" << baroMaxDescent
-        << ",\"max_descending\":" << baroMaxDescending << ",\"any_lower_platform\":"
+        << ",\"max_descending\":" << baroMaxDescending << ",\"max_ascending\":" << baroMaxAscending
+        << ",\"any_vertical_closure\":" << (baroAnyVerticalClosure ? "true" : "false")
+        << ",\"first_vertical_closure_t_ms\":" << baroFirstVerticalClosureMs << ",\"any_lower_platform\":"
         << (baroAnyLowerPlatform ? "true" : "false") << ",\"at_push\":{\"available\":"
         << (baroAtAvailable ? "true" : "false") << ",\"descent_m\":" << baroAtDescent
         << ",\"descending\":" << baroAtDescending << ",\"lower_platform\":"

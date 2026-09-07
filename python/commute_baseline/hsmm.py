@@ -37,6 +37,8 @@ class LeaveObservation:
     risk_120s: float = 0.0
     baro_descending: float = 0.0
     baro_lower_platform: float = 0.0
+    baro_ascending: float = 0.0
+    vertical_closure: float = 0.0
     baro_available: bool = False
     sequence_available: bool = False
     sequence_progress: float = 0.0
@@ -93,7 +95,13 @@ class LeaveHsmm:
         if float(theta.get("w_time", 0.0)) <= 0.0:
             values["time_prior"] = 0.0
         if float(theta.get("w_baro", 0.0)) <= 0.0:
-            values.update(baro_descending=0.0, baro_lower_platform=0.0, baro_available=False)
+            values.update(
+                baro_descending=0.0,
+                baro_lower_platform=0.0,
+                baro_ascending=0.0,
+                vertical_closure=0.0,
+                baro_available=False,
+            )
         if float(theta.get("w_risk", 0.8)) <= 0.0:
             values.update(risk_available=False, risk_30s=0.0, risk_60s=0.0, risk_120s=0.0)
         return replace(obs, **values) if values else obs

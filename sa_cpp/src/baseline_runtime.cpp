@@ -199,8 +199,10 @@ TickDecision BaselineRuntime::OnTick(
     feat.baro_baseline_ready = baroSnap.baseline_ready;
     feat.baro_descent_m = baroSnap.descent_m;
     feat.baro_descending = baroSnap.descending;
+    feat.baro_ascending = baroSnap.ascending;
     feat.baro_stable_platform = baroSnap.stable_platform;
     feat.baro_lower_platform = baroSnap.lower_platform;
+    feat.vertical_closure = baroSnap.vertical_closure;
     if (engine_ != nullptr) {
         if (!FocusAllowsHome(engine_->GetTheta().focus_side)) {
             feat.wifi_home_detach = false;

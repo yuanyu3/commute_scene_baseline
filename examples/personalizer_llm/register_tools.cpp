@@ -111,6 +111,10 @@ std::string GetProfile(const std::string &p) { return commute_sa::GetPersonaliza
 std::string ProposeProfile(const std::string &p) { return commute_sa::ProposeContextProfileUpdateAction(p); }
 std::string SubmitAnalysis(const std::string &p) { return commute_sa::SubmitAgentAnalysisAction(p); }
 std::string GetTemplateCatalog(const std::string &p) { return commute_sa::GetContextTemplateCatalogAction(p); }
+std::string ProposeAbortedLeave(const std::string &p)
+{
+    return commute_sa::ProposeAbortedLeaveInterpretationAction(p);
+}
 std::string GenerateTemplate(const std::string &p) { return commute_sa::GenerateContextTemplateAction(p); }
 std::string GetTemplateTrial(const std::string &p) { return commute_sa::GetContextTemplateTrialAction(p); }
 std::string CommitTemplate(const std::string &p) { return commute_sa::CommitContextTemplateAction(p); }
@@ -194,6 +198,12 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("get_context_template_catalog",
         "Return bounded event/effect primitives that the Agent may compose into a new context template", {},
         &GetTemplateCatalog);
+    Reg("propose_aborted_leave_interpretation",
+        "Propose a FALSE_PUSH as ABORTED_LEAVE; C++ requires a confirmed shared prefix, ascent, vertical closure and no outside",
+        {{"side", "company|home", "string", true}, {"episode_id", "exact episode id", "string", true},
+            {"outcome_t_ms", "exact outcome timestamp", "integer", true},
+            {"confidence", "0.5..1", "number", true}, {"rationale", "evidence-grounded inference", "string", true}},
+        &ProposeAbortedLeave);
     Reg("diagnose_context_template",
         "Read-only active-template ablation on the same history: compare per-episode push timing, prefix readiness, completion and gates. Not physical causal proof; never tunes or commits.",
         {{"ablation", "disable positive|negative|both sequence terms", "string", true},
@@ -206,6 +216,7 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"anchor_id", "context anchor identifier", "string", true},
             {"applicability", "always|baro_ready", "string", true},
             {"positive_sequence", "comma-separated supported events in temporal order", "string", true},
+            {"cancel_sequence", "optional ordered return events after the positive prefix starts", "string", false},
             {"negative_pattern", "comma-separated events that jointly suppress nonspecific leave evidence", "string", false},
             {"parameter_families", "optional vertical_threshold; departure_time is disabled; C++ estimates values", "string", false},
             {"rationale", "evidence-grounded explanation", "string", true}},

@@ -308,6 +308,20 @@
     },
 
     {
+      "name": "propose_aborted_leave_interpretation",
+      "category": "template",
+      "description": "Propose that an original FALSE_PUSH is an ABORTED_LEAVE. C++ validates material descent, a shared prefix found in confirmed history, later ascent and vertical closure, and absence of outside before appending a non-destructive interpretation.",
+      "input_schema": {
+        "side": "home|company",
+        "episode_id": "exact string from history",
+        "outcome_t_ms": "exact integer from history",
+        "confidence": "0.5..1",
+        "rationale": "evidence-grounded inference"
+      },
+      "output_schema": {"ok": "bool", "episode_type": "ABORTED_LEAVE", "abort_t_ms": "int"}
+    },
+
+    {
       "name": "diagnose_context_template",
       "category": "evidence",
       "description": "Read-only sequence-term intervention on an active template. Compare matched episode rows; no fit or commit and no physical causal guarantee.",
@@ -325,6 +339,7 @@
         "anchor_id": "string",
         "applicability": "always|baro_ready",
         "positive_sequence": "comma-separated catalog events",
+        "cancel_sequence": "comma-separated ordered return events, optional; requires >=2 ABORTED_LEAVE episodes",
         "negative_pattern": "comma-separated catalog events, optional",
         "parameter_families": "vertical_threshold, optional; departure_time disabled; Agent supplies no values",
         "rationale": "string"

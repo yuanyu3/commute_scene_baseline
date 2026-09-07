@@ -333,12 +333,15 @@ void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::
             << ",\"obs_time_prior\":" << row.hsmm_obs.time_prior
             << ",\"obs_baro_descending\":" << row.hsmm_obs.baro_descending
             << ",\"obs_baro_lower_platform\":" << row.hsmm_obs.baro_lower_platform
+            << ",\"obs_baro_ascending\":" << row.hsmm_obs.baro_ascending
+            << ",\"obs_vertical_closure\":" << row.hsmm_obs.vertical_closure
             << ",\"obs_baro_available\":" << (row.hsmm_obs.baro_available ? "true" : "false")
             << ",\"obs_sequence_available\":" << (row.hsmm_obs.sequence_available ? "true" : "false")
             << ",\"obs_sequence_progress\":" << row.hsmm_obs.sequence_progress
             << ",\"obs_sequence_complete\":" << row.hsmm_obs.sequence_complete
             << ",\"obs_sequence_ready\":" << row.hsmm_obs.sequence_ready
             << ",\"obs_negative_pattern_match\":" << row.hsmm_obs.negative_pattern_match
+            << ",\"obs_cancel_sequence_match\":" << row.hsmm_obs.cancel_sequence_match
             << ",\"obs_sequence_reliability\":" << row.hsmm_obs.sequence_reliability
             << ",\"obs_relation_known\":" << (row.hsmm_obs.relation_known ? "true" : "false")
             << ",\"obs_inside\":" << (row.hsmm_obs.inside ? "true" : "false")
