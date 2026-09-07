@@ -290,6 +290,7 @@ void ProductStore::ObservePolicyFeatures(const TickFeatures &f, const TickDecisi
         row.baro_available = f.baro_available;
         row.baro_baseline_ready = f.baro_baseline_ready;
         row.baro_descent_m = f.baro_descent_m;
+        row.baro_stable_platform = f.baro_stable_platform;
         row.baro_lower_platform = f.baro_lower_platform;
         row.hsmm_obs = obs;
         policyBuffer_.push_back(row);
@@ -321,6 +322,7 @@ void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::
             << ",\"baro_available\":" << (row.baro_available ? "true" : "false")
             << ",\"baro_baseline_ready\":" << (row.baro_baseline_ready ? "true" : "false")
             << ",\"baro_descent_m\":" << row.baro_descent_m
+            << ",\"baro_stable_platform\":" << (row.baro_stable_platform ? "true" : "false")
             << ",\"baro_lower_platform\":" << (row.baro_lower_platform ? "true" : "false")
             << ",\"obs_walking\":" << row.hsmm_obs.walking
             << ",\"obs_pdr_outbound\":" << row.hsmm_obs.pdr_outbound
@@ -332,6 +334,11 @@ void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::
             << ",\"obs_baro_descending\":" << row.hsmm_obs.baro_descending
             << ",\"obs_baro_lower_platform\":" << row.hsmm_obs.baro_lower_platform
             << ",\"obs_baro_available\":" << (row.hsmm_obs.baro_available ? "true" : "false")
+            << ",\"obs_sequence_available\":" << (row.hsmm_obs.sequence_available ? "true" : "false")
+            << ",\"obs_sequence_progress\":" << row.hsmm_obs.sequence_progress
+            << ",\"obs_sequence_complete\":" << row.hsmm_obs.sequence_complete
+            << ",\"obs_negative_pattern_match\":" << row.hsmm_obs.negative_pattern_match
+            << ",\"obs_sequence_reliability\":" << row.hsmm_obs.sequence_reliability
             << ",\"obs_relation_known\":" << (row.hsmm_obs.relation_known ? "true" : "false")
             << ",\"obs_inside\":" << (row.hsmm_obs.inside ? "true" : "false")
             << ",\"obs_near\":" << (row.hsmm_obs.near ? "true" : "false")

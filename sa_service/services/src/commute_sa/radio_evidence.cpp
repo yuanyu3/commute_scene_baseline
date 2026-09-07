@@ -68,7 +68,10 @@ void RadioEvidence::Reset(bool keepSoft)
     } else {
         company_site_wifi_.clear();
         company_site_cells_.clear();
+        company_site_wifi_attached_seen_ = false;
         company_site_wifi_detached_seen_ = false;
+        company_site_cell_attached_seen_ = false;
+        company_site_cell_detached_ = false;
         soft_dirty_ = false;
         last_soft_persist_ms_ = 0;
     }
@@ -89,6 +92,10 @@ void RadioEvidence::Reset(bool keepSoft)
     ble_company_streak_ = 0;
     ble_home_since_ms_ = 0;
     ble_company_since_ms_ = 0;
+    last_wifi_evaluated_scan_ms_ = -1;
+    last_cell_evaluated_sample_ms_ = -1;
+    company_site_cell_detach_streak_ = 0;
+    company_site_cell_attach_streak_ = 0;
 }
 
 void RadioEvidence::TrimHistoryLocked()
@@ -485,6 +492,8 @@ RadioDetachSnapshot RadioEvidence::Evaluate(int64_t tMs)
     }
 
     const WifiScanSample *curWifi = wifiHistory_.empty() ? nullptr : &wifiHistory_.back();
+    const bool freshWifiScan = curWifi != nullptr && curWifi->t_ms != last_wifi_evaluated_scan_ms_;
+    bool companySiteScanObserved = false;
     std::string whyHome;
     std::string whyCo;
     std::string whyChurn;
@@ -497,15 +506,26 @@ RadioDetachSnapshot RadioEvidence::Evaluate(int64_t tMs)
         }
         if (!company_site_wifi_.empty()) {
             const auto current = StrongSet(*curWifi, cfg_.rssi_min);
+            companySiteScanObserved = !current.empty();
             for (const auto &bssid : current) {
                 if (company_site_wifi_.count(bssid) != 0) {
                     ++out.company_site_wifi_matches;
                 }
             }
-            out.company_site_wifi_coverage = current.empty() ? 0.0 :
-                static_cast<double>(out.company_site_wifi_matches) / static_cast<double>(current.size());
+            // This is fingerprint recall, not matches/current-scan-size. Nearby
+            // unrelated AP density must not make an on-floor scan look detached.
+            out.company_site_wifi_coverage = static_cast<double>(out.company_site_wifi_matches) /
+                static_cast<double>(company_site_wifi_.size());
             out.jaccard_company = out.company_site_wifi_coverage;
-            rawCo = out.company_site_wifi_matches < 2 || out.company_site_wifi_coverage < 0.35;
+            if (freshWifiScan && companySiteScanObserved &&
+                out.company_site_wifi_coverage >= cfg_.site_wifi_attach_recall) {
+                company_site_wifi_attached_seen_ = true;
+            }
+            rawCo = companySiteScanObserved && company_site_wifi_attached_seen_ &&
+                out.company_site_wifi_coverage <= cfg_.site_wifi_detach_recall;
+            if (rawCo) {
+                whyCo = "company_floor_fingerprint_low";
+            }
         } else if (company_.ready) {
             rawCo = DetachAgainstDwellLocked(company_, *curWifi, &out.jaccard_company, &whyCo);
         }
@@ -540,10 +560,40 @@ RadioDetachSnapshot RadioEvidence::Evaluate(int64_t tMs)
         return false;
     };
 
-    out.wifi_home_detach = latch(rawHome, &home_detach_streak_, &home_detach_since_ms_);
-    out.wifi_company_detach = latch(rawCo, &company_detach_streak_, &company_detach_since_ms_);
-    if (!company_site_wifi_.empty() && out.wifi_company_detach) {
-        company_site_wifi_detached_seen_ = true;
+    // Evaluate() can run many times between WiFi scans. Confirmation counters
+    // must advance only on a new observable scan, never by reusing one sample.
+    auto wifiLatch = [&](bool raw, int *streak, int64_t *sinceMs, bool fresh, int confirmScans,
+                         int64_t confirmMs) -> bool {
+        if (!fresh) {
+            return *streak >= confirmScans;
+        }
+        if (raw) {
+            if (*streak == 0) {
+                *sinceMs = tMs;
+            }
+            ++(*streak);
+            return *streak >= confirmScans ||
+                (*sinceMs > 0 && (tMs - *sinceMs) >= confirmMs);
+        }
+        *streak = 0;
+        *sinceMs = 0;
+        return false;
+    };
+
+    out.wifi_home_detach = wifiLatch(rawHome, &home_detach_streak_, &home_detach_since_ms_, freshWifiScan,
+        cfg_.detach_confirm_scans, cfg_.detach_confirm_ms);
+    const int companyDetachScans = company_site_wifi_.empty() ? cfg_.detach_confirm_scans :
+        cfg_.site_wifi_detach_confirm_scans;
+    const bool companyDetachConfirmed = wifiLatch(rawCo, &company_detach_streak_, &company_detach_since_ms_,
+        freshWifiScan && (company_site_wifi_.empty() || companySiteScanObserved), companyDetachScans,
+        company_site_wifi_.empty() ? cfg_.detach_confirm_ms : cfg_.site_wifi_detach_confirm_ms);
+    if (!company_site_wifi_.empty()) {
+        if (companyDetachConfirmed) {
+            company_site_wifi_detached_seen_ = true;
+        }
+        out.wifi_company_detach = company_site_wifi_detached_seen_;
+    } else {
+        out.wifi_company_detach = companyDetachConfirmed;
     }
 
     bool rawAttHome = false;
@@ -558,12 +608,17 @@ RadioDetachSnapshot RadioEvidence::Evaluate(int64_t tMs)
         const bool surge = company_site_wifi_.empty() && NStrongSurgeLocked(tMs, *curWifi);
         rawAttHome = AttachAgainstDwellLocked(home_, *curWifi, out.jaccard_home) || surge;
         rawAttCo = !company_site_wifi_.empty() ?
-            (company_site_wifi_detached_seen_ && out.company_site_wifi_matches >= 2 &&
-                out.company_site_wifi_coverage >= 0.50) :
+            (company_site_wifi_detached_seen_ && companySiteScanObserved &&
+                out.company_site_wifi_coverage >= cfg_.site_wifi_attach_recall) :
             (AttachAgainstDwellLocked(company_, *curWifi, out.jaccard_company) || surge);
     }
-    out.wifi_home_attach = latch(rawAttHome, &home_attach_streak_, &home_attach_since_ms_);
-    out.wifi_company_attach = latch(rawAttCo, &company_attach_streak_, &company_attach_since_ms_);
+    out.wifi_home_attach = wifiLatch(rawAttHome, &home_attach_streak_, &home_attach_since_ms_, freshWifiScan,
+        cfg_.detach_confirm_scans, cfg_.detach_confirm_ms);
+    const int companyAttachScans = company_site_wifi_.empty() ? cfg_.detach_confirm_scans :
+        cfg_.site_wifi_attach_confirm_scans;
+    out.wifi_company_attach = wifiLatch(rawAttCo, &company_attach_streak_, &company_attach_since_ms_,
+        freshWifiScan && (company_site_wifi_.empty() || companySiteScanObserved), companyAttachScans,
+        company_site_wifi_.empty() ? cfg_.detach_confirm_ms : cfg_.site_wifi_attach_confirm_ms);
     if (out.wifi_home_attach) {
         out.wifi_home_detach = false;
         home_detach_streak_ = 0;
@@ -575,36 +630,95 @@ RadioDetachSnapshot RadioEvidence::Evaluate(int64_t tMs)
         company_detach_since_ms_ = 0;
         company_site_wifi_detached_seen_ = false;
     }
+    if (curWifi != nullptr) {
+        last_wifi_evaluated_scan_ms_ = curWifi->t_ms;
+    }
+    if (!company_site_wifi_.empty()) {
+        // Keep raw recall in company_site_wifi_coverage for diagnostics and
+        // workplace readiness. HSMM receives only the confirmed hysteresis
+        // state, so one stale low scan cannot be counted on every engine tick.
+        out.jaccard_company = out.wifi_company_detach ? 0.0 : 1.0;
+    }
 
     std::string whyBle;
     double bleJac = 1.0;
-    const bool bleRaw = TemporalBleChurnLocked(tMs, &bleJac, &whyBle);
-    // BLE is environment-level (no soft dwell yet): apply to both sides; focus_side gates later.
-    out.ble_home_detach = latch(bleRaw, &ble_home_streak_, &ble_home_since_ms_);
-    out.ble_company_detach = latch(bleRaw, &ble_company_streak_, &ble_company_since_ms_);
+    const bool bleRaw = cfg_.ble_evidence_enabled && TemporalBleChurnLocked(tMs, &bleJac, &whyBle);
+    if (cfg_.ble_evidence_enabled) {
+        // BLE remains opt-in until stable beacon identities are available.
+        out.ble_home_detach = latch(bleRaw, &ble_home_streak_, &ble_home_since_ms_);
+        out.ble_company_detach = latch(bleRaw, &ble_company_streak_, &ble_company_since_ms_);
+    }
 
     const bool cellRaw = CellLeaveLocked(tMs);
-    if (cellRaw) {
-        ++cell_home_streak_;
-        ++cell_company_streak_;
-    } else {
-        cell_home_streak_ = 0;
-        cell_company_streak_ = 0;
+    const bool freshCell = !cellHistory_.empty() &&
+        cellHistory_.back().t_ms != last_cell_evaluated_sample_ms_;
+    if (freshCell) {
+        if (cellRaw) {
+            ++cell_home_streak_;
+            if (company_site_cells_.empty()) {
+                ++cell_company_streak_;
+            }
+        } else {
+            cell_home_streak_ = 0;
+            if (company_site_cells_.empty()) {
+                cell_company_streak_ = 0;
+            }
+        }
     }
     out.cell_leave_home = cell_home_streak_ >= cfg_.detach_confirm_scans;
-    out.cell_leave_company = cell_company_streak_ >= cfg_.detach_confirm_scans;
+    out.cell_leave_company = company_site_cells_.empty() &&
+        cell_company_streak_ >= cfg_.detach_confirm_scans;
     if (!cellHistory_.empty() && !company_site_cells_.empty()) {
         out.company_site_cell_match = company_site_cells_.count(cellHistory_.back().cell_id) != 0;
-        if (out.company_site_cell_match) {
-            out.cell_leave_company = false;
+        int valid = 0;
+        int matched = 0;
+        for (auto it = cellHistory_.rbegin(); it != cellHistory_.rend(); ++it) {
+            if (it->t_ms > tMs || tMs - it->t_ms > cfg_.site_cell_window_ms) {
+                continue;
+            }
+            if (it->cell_id == 0) {
+                continue;
+            }
+            ++valid;
+            if (company_site_cells_.count(it->cell_id) != 0) {
+                ++matched;
+            }
         }
+        if (valid > 0) {
+            out.company_site_cell_match_ratio = static_cast<double>(matched) / static_cast<double>(valid);
+        }
+        const bool observable = valid >= cfg_.site_cell_min_samples;
+        if (freshCell && observable) {
+            if (out.company_site_cell_match_ratio >= cfg_.site_cell_attach_match_ratio) {
+                company_site_cell_attached_seen_ = true;
+            }
+            const bool rawFloorDetach = company_site_cell_attached_seen_ &&
+                out.company_site_cell_match_ratio <= cfg_.site_cell_detach_match_ratio;
+            const bool rawFloorAttach = company_site_cell_detached_ &&
+                out.company_site_cell_match_ratio >= cfg_.site_cell_attach_match_ratio;
+            company_site_cell_detach_streak_ = rawFloorDetach ? company_site_cell_detach_streak_ + 1 : 0;
+            company_site_cell_attach_streak_ = rawFloorAttach ? company_site_cell_attach_streak_ + 1 : 0;
+            if (company_site_cell_detach_streak_ >= cfg_.site_cell_confirm_samples) {
+                company_site_cell_detached_ = true;
+                company_site_cell_attach_streak_ = 0;
+            }
+            if (company_site_cell_attach_streak_ >= cfg_.site_cell_confirm_samples) {
+                company_site_cell_detached_ = false;
+                company_site_cell_detach_streak_ = 0;
+                company_site_cell_attach_streak_ = 0;
+            }
+        }
+        out.cell_leave_company = company_site_cell_detached_;
+    }
+    if (!cellHistory_.empty()) {
+        last_cell_evaluated_sample_ms_ = cellHistory_.back().t_ms;
     }
 
     // Retarget stable cell: keep leave flags for this tick; quiet-adopt if prior never matured.
     if (!cellHistory_.empty()) {
         const int64_t cid = cellHistory_.back().cell_id;
         if (cid != 0 && cid != stable_cell_id_) {
-            if (out.cell_leave_home || out.cell_leave_company) {
+            if (out.cell_leave_home || (company_site_cells_.empty() && out.cell_leave_company)) {
                 stable_cell_id_ = cid;
                 stable_cell_since_ms_ = cellHistory_.back().t_ms;
                 cell_home_streak_ = 0;
@@ -679,7 +793,11 @@ std::string RadioEvidence::DebugJson(int64_t /*tMs*/) const
     oss << "{\"home_dwell_ready\":" << (home_.ready ? "true" : "false")
         << ",\"company_dwell_ready\":" << (company_.ready ? "true" : "false")
         << ",\"company_site_wifi_n\":" << company_site_wifi_.size()
+        << ",\"company_site_wifi_attached_seen\":" << (company_site_wifi_attached_seen_ ? "true" : "false")
+        << ",\"company_site_wifi_detached\":" << (company_site_wifi_detached_seen_ ? "true" : "false")
         << ",\"company_site_cell_n\":" << company_site_cells_.size()
+        << ",\"company_site_cell_attached_seen\":" << (company_site_cell_attached_seen_ ? "true" : "false")
+        << ",\"company_site_cell_detached\":" << (company_site_cell_detached_ ? "true" : "false")
         << ",\"home_from_persist\":" << (home_.from_persist ? "true" : "false")
         << ",\"company_from_persist\":" << (company_.from_persist ? "true" : "false")
         << ",\"home_dwell_n\":" << home_.soft_set.size() << ",\"company_dwell_n\":" << company_.soft_set.size()
@@ -1022,6 +1140,17 @@ bool RadioEvidence::ImportCompanySiteJson(const std::string &json)
         }
     }
     company_site_wifi_detached_seen_ = false;
+    company_site_wifi_attached_seen_ = false;
+    last_wifi_evaluated_scan_ms_ = -1;
+    company_detach_streak_ = 0;
+    company_detach_since_ms_ = 0;
+    company_attach_streak_ = 0;
+    company_attach_since_ms_ = 0;
+    company_site_cell_attached_seen_ = false;
+    company_site_cell_detached_ = false;
+    company_site_cell_detach_streak_ = 0;
+    company_site_cell_attach_streak_ = 0;
+    last_cell_evaluated_sample_ms_ = -1;
     return !company_site_wifi_.empty() || !company_site_cells_.empty();
 }
 

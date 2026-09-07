@@ -8,7 +8,7 @@
   "w_geo": 0.2,
   "w_wifi": 0.12,
   "w_cell": 0.08,
-  "w_ble": 0.02,
+  "w_ble": 0.0,
   "w_time": 0.2,
   "w_baro": 0.2,
   "baro_min_descent_m": 12.0,

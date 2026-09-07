@@ -1,4 +1,4 @@
-# 架构：基线实时环 + Jiuwen 策略个性化环
+# 架构：HSMM 实时环 + 受约束模板个性化环
 
 ## 1. 目标
 
@@ -6,7 +6,7 @@
 |------|------|
 | 实时场景 | 识别在家 / 离家中 / 在公司 / 离开公司 / 通勤 / 在外 |
 | 主动服务 | 仅在 `LEAVING_HOME` / `LEAVING_COMPANY` 窗口推送（如带钥匙） |
-| 个性化 | 低频用 Jiuwen Agent 更新 θ，稳态不调 LLM |
+| 个性化 | Agent 只组合受支持的时序原语；C++ 选强度并回放验收 |
 | 坐标 | 全链路 WGS84（见 `CRS_UNIFICATION.md`） |
 
 ## 2. 双环
@@ -27,7 +27,12 @@
                            ▼
 ┌─────────────────────────────────────────────────────────┐
 │ Jiuwen 个性化 Agent（事件/日终触发）                      │
-│ 证据发现 → 候选策略 → 语义历史反事实回放 → 提交/回滚      │
+│ 跨 episode 归因 → 组合模板结构（无数值）                  │
+└──────────────────────────┬──────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│ 确定性安全层                                              │
+│ DSL 校验 → LOW/MEDIUM/HIGH 全历史 HSMM 回放 → 硬门 → 提交 │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -87,6 +92,8 @@ lead   = t* − t_push
 | SA 工程 | `sa_service/` | Ability + dump(WGS84) + PDR/LeaveCar + ProactiveAgent |
 | 轻量 dump | `sa_cpp/` | 主机可编，不依赖 OHOS |
 | 实时场景 | `sa_cpp/` | HSMM + 产品 FSM，无 LLM |
-| 改参 Agent | `jiuwen_agent/` | 低频改 θ |
+| 模板 Agent | `jiuwen_agent/` | 低频归因并组合受支持的事件序列 |
+
+提交后的 `active_context_template.json` 在 `SceneEngine` 构造语义观测后、进入 HSMM 前应用。模板不能绕开 OUTSIDE、approaching、attached 等产品门控，也不能修改 HSMM 代码或任意参数。
 | 锚点 | `config/anchors.json` | 推断管线 |
 | Jiuwen 运行时 | 外部（如 bbpjiuwen-linux） | 仅宿主 |

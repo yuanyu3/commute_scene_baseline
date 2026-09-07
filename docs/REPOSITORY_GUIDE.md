@@ -9,7 +9,7 @@
 | `sa_cpp/` | 共享算法权威源，包含 `commute_sa` 头文件、实现和主机 smoke | 是 |
 | `sa_service/` | OHOS System Ability、传感器 provider、主动服务接入 | 是 |
 | `sa_service/services/{include,src}/commute_sa/` | 从 `sa_cpp` 同步的 OHOS vendored 副本 | 是，但不要直接修改 |
-| `jiuwen_agent/` | Agent prompt、配置和工具契约 | 是 |
+| `jiuwen_agent/` | 受约束模板 Agent 的 prompt、配置和工具契约 | 是 |
 | `examples/` | 可复现的主机流程与 LLM personalizer 示例 | 是 |
 | `hap_debug/` | 真机调试 HAP 与 host preview | 是 |
 | `config/`、`schemas/` | 默认参数、锚点模板和数据契约 | 是 |
@@ -54,7 +54,8 @@
 | HSMM 状态、观测与参数 | `HSMM_BASELINE.md` |
 | Wi-Fi / Cell / BLE 证据 | `RADIO_EVIDENCE.md` |
 | PDR 证据 | `PDR_EVIDENCE.md` |
-| Agent 调参与工具语义 | `AGENT_PERSONALIZATION.md`、`AGENT_SEMANTICS.md` |
+| 当前 Agent 模板个性化 | `CONTEXT_TEMPLATE_PERSONALIZATION.md` |
+| 旧直接改参流程（消融对照） | `AGENT_PERSONALIZATION.md`、`AGENT_SEMANTICS.md` |
 | 锚点和坐标 | `ANCHOR_INFERENCE.md`、`CRS_UNIFICATION.md` |
 | SA 数据采集 | `SA_COLLECTION.md` |
 

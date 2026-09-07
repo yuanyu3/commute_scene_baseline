@@ -1,5 +1,6 @@
 #include "commute_sa/leave_hsmm.h"
 
+#include <cmath>
 #include <iostream>
 
 int main()
@@ -94,6 +95,87 @@ int main()
     if (result.LeavingProbability() >= 0.55) {
         std::cerr << "FAIL: walking alone became a confident leave p=" << result.LeavingProbability() << "\n";
         return 1;
+    }
+
+    // Context templates add interaction evidence; they must not rewrite the
+    // identical atomic observation shared by all three filters.
+    LeaveHsmm neutralHsmm;
+    LeaveHsmm positiveHsmm;
+    LeaveHsmm negativeHsmm;
+    LeaveHsmm zeroSequenceHsmm;
+    LeaveObservation neutral = outbound;
+    neutral.near = false;
+    neutral.inside = true;
+    LeaveObservation positive = neutral;
+    positive.sequence_available = true;
+    positive.sequence_progress = 1.0;
+    positive.sequence_complete = 1.0;
+    positive.sequence_reliability = 0.4;
+    LeaveObservation negative = neutral;
+    negative.sequence_available = true;
+    negative.negative_pattern_match = 1.0;
+    negative.sequence_reliability = 0.4;
+    LeaveObservation zeroSequence = positive;
+    zeroSequence.sequence_reliability = 0.0;
+    int64_t sequenceT = tMs + 10000;
+    LeaveHsmmResult neutralResult;
+    LeaveHsmmResult positiveResult;
+    LeaveHsmmResult negativeResult;
+    LeaveHsmmResult zeroSequenceResult;
+    for (int i = 0; i < 12; ++i) {
+        sequenceT += 5000;
+        neutralResult = neutralHsmm.Step(neutral, sequenceT, config);
+        positiveResult = positiveHsmm.Step(positive, sequenceT, config);
+        negativeResult = negativeHsmm.Step(negative, sequenceT, config);
+        zeroSequenceResult = zeroSequenceHsmm.Step(zeroSequence, sequenceT, config);
+    }
+    std::cout << "sequence_effect neutral=" << neutralResult.LeavingProbability()
+              << " positive=" << positiveResult.LeavingProbability()
+              << " negative=" << negativeResult.LeavingProbability() << "\n";
+    if (positiveResult.LeavingProbability() <= neutralResult.LeavingProbability() ||
+        negativeResult.LeavingProbability() >= neutralResult.LeavingProbability()) {
+        std::cerr << "FAIL: independent sequence evidence direction is wrong neutral="
+                  << neutralResult.LeavingProbability() << " positive="
+                  << positiveResult.LeavingProbability() << " negative="
+                  << negativeResult.LeavingProbability() << "\n";
+        return 1;
+    }
+    if (std::abs(zeroSequenceResult.LeavingProbability() - neutralResult.LeavingProbability()) > 1e-12) {
+        std::cerr << "FAIL: zero-reliability sequence changed HSMM\n";
+        return 1;
+    }
+
+    LeaveHsmmConfig disabledConfig = config;
+    disabledConfig.reliability.fill(0.0);
+    LeaveHsmm disabledQuiet;
+    LeaveHsmm disabledStrong;
+    LeaveObservation strong = still;
+    strong.walking = 1.0;
+    strong.pdr_outbound = 1.0;
+    strong.geo_outbound = 1.0;
+    strong.wifi_detach = 1.0;
+    strong.attached = true;
+    strong.cell_detach = 1.0;
+    strong.ble_detach = 1.0;
+    strong.time_prior = 1.0;
+    strong.baro_available = true;
+    strong.baro_descending = 1.0;
+    strong.baro_lower_platform = 1.0;
+    int64_t disabledT = tMs + 10000;
+    auto quietResult = disabledQuiet.Step(still, disabledT, disabledConfig);
+    auto strongResult = disabledStrong.Step(strong, disabledT, disabledConfig);
+    for (int i = 0; i < 12; ++i) {
+        disabledT += 5000;
+        quietResult = disabledQuiet.Step(still, disabledT, disabledConfig);
+        strongResult = disabledStrong.Step(strong, disabledT, disabledConfig);
+    }
+    for (size_t state = 0; state < quietResult.probability.size(); ++state) {
+        if (std::abs(quietResult.probability[state] - strongResult.probability[state]) > 1e-12) {
+            std::cerr << "FAIL: zero-reliability observation changed HSMM state=" << state
+                      << " quiet=" << quietResult.probability[state]
+                      << " strong=" << strongResult.probability[state] << "\n";
+            return 1;
+        }
     }
 
     std::cout << "ok p_at=" << result.AtAnchorProbability() << " p_pre=" << result.PreLeaveProbability()

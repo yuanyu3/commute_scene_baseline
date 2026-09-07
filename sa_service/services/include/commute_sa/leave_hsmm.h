@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace commute_sa {
@@ -17,6 +18,13 @@ const char *LeavePhaseToString(LeavePhase phase);
 
 /** Semantic observation in [0, 1], produced from one sensor tick. */
 struct LeaveObservation {
+    // Runtime/replay context. LeaveHsmm ignores these fields; bounded context
+    // templates may use them to deterministically rebuild personalized evidence.
+    int64_t t_ms = 0;
+    std::string context_side;
+    double baro_descent_m = 0.0;
+    bool baro_stable_platform = false;
+    bool baro_stable_platform_known = false;
     double walking = 0.0;
     double pdr_outbound = 0.0;
     double geo_outbound = 0.0;
@@ -33,6 +41,16 @@ struct LeaveObservation {
     double baro_descending = 0.0;
     double baro_lower_platform = 0.0;
     bool baro_available = false;
+    /**
+     * Context-template observations are kept separate from atomic sensor
+     * semantics.  The template reports temporal structure; it never rewrites
+     * walking/PDR/radio/barometer values.
+     */
+    bool sequence_available = false;
+    double sequence_progress = 0.0;
+    double sequence_complete = 0.0;
+    double negative_pattern_match = 0.0;
+    double sequence_reliability = 0.0;
 };
 
 struct LeaveHsmmConfig {
@@ -43,6 +61,9 @@ struct LeaveHsmmConfig {
     double leaving_mean_s = 120.0;
     double leaving_max_s = 600.0;
     double max_gap_s = 300.0;
+    /** Duration/topology priors. Sensor observations never modify transitions. */
+    double at_anchor_exit_hazard_per_s = 0.0030;
+    double preleave_exit_to_leaving = 0.90;
     /** Reliability of walking, PDR, geo, Wi-Fi, Cell, BLE and time observations. */
     std::array<double, 9> reliability {{1.0, 1.0, 1.0, 0.8, 0.6, 0.4, 0.8, 0.8, 0.8}};
 };

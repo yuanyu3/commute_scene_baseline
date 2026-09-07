@@ -120,6 +120,8 @@
 
         "pdr": "net/path/straightness + outbound_hint",
 
+        "baro": "HSMM-consumed descent/lower-platform semantics from policy history",
+
         "mag": "ema pre/post delta"
 
       }
@@ -132,7 +134,7 @@
 
       "category": "action",
 
-      "description": "Return min/max/step for writable params",
+      "description": "Return code-enforced absolute min/max and per-call step for writable params",
 
       "input_schema": {},
 
@@ -150,7 +152,7 @@
 
       "input_schema": {
 
-        "param": "enter_leave|exit_leave|w_walk|w_pdr|w_geo|w_wifi|w_cell|w_ble|w_radio|w_time|w_baro|weekday_leave_home_hour|weekday_leave_company_hour|arm_delay_s|lead_min_s|lead_max_s",
+        "param": "enter_leave|exit_leave|w_walk|w_pdr|w_geo|w_wifi|w_cell|w_ble|w_radio|w_time|w_baro|weekday_leave_home_hour|weekday_leave_company_hour|arm_delay_s|hsmm_preleave_min_s|hsmm_preleave_mean_s|hsmm_preleave_max_s|hsmm_leaving_min_s|hsmm_leaving_mean_s|hsmm_leaving_max_s|lead_min_s|lead_max_s|baro_min_descent_m",
 
         "delta": "number (clipped to step)",
 
@@ -210,12 +212,165 @@
 
       "category": "action",
 
-      "description": "Accept current θ and clear trial snapshot",
+      "description": "Accept current theta only when the C++ history-replay commit guard passes",
 
       "input_schema": {},
 
       "output_schema": {"ok": "bool"}
 
+    },
+
+    {
+      "name": "analyze_personalization_rules",
+      "category": "diagnosis",
+      "description": "Deterministic ES-CRO error-signature analysis. Returns ranked causes and a semantic intervention plan; it does not change theta.",
+      "input_schema": {"limit": "int optional, default 30"},
+      "output_schema": {"ranked_causes": "array", "rule_plan": "object"}
+    },
+
+    {
+      "name": "run_constrained_theta_optimizer",
+      "category": "optimizer",
+      "description": "Convert semantic blocks/directions into bounded numeric candidates, replay the same HSMM, and stage the deterministic best eligible candidate. Numeric theta values are not accepted.",
+      "input_schema": {
+        "primary_block": "radio_reliability|motion_reliability|geo_reliability|baro_reliability|time_prior|preleave_duration|leaving_duration|trigger_threshold|arm_timing",
+        "primary_direction": "increase|decrease",
+        "secondary_block": "same enum, optional",
+        "secondary_direction": "increase|decrease, optional",
+        "objective": "balanced|false_push|missed_leave|lead, optional",
+        "max_candidates": "int 1..20, optional",
+        "min_improvement": "number, optional"
+      },
+      "output_schema": {"baseline": "metrics", "candidates": "array", "best_candidate_id": "int|null"}
+    },
+
+    {
+      "name": "run_rule_personalization",
+      "category": "optimizer",
+      "description": "Non-Agent baseline: deterministic rule diagnosis followed by the same candidate replay optimizer.",
+      "input_schema": {"limit": "int optional"},
+      "output_schema": {"baseline": "metrics", "candidates": "array", "best_candidate_id": "int|null"}
+    },
+
+    {
+      "name": "get_optimization_trial",
+      "category": "optimizer",
+      "description": "Inspect the currently staged candidate trial and commit-guard outcomes.",
+      "input_schema": {},
+      "output_schema": {"trial_active": "bool", "candidates": "array"}
+    },
+
+    {
+      "name": "commit_optimized_theta",
+      "category": "optimizer",
+      "description": "Commit only the deterministic best candidate that passed all code-level guards.",
+      "input_schema": {},
+      "output_schema": {"ok": "bool", "committed_candidate_id": "int"}
+    },
+
+    {
+      "name": "discard_optimization_trial",
+      "category": "optimizer",
+      "description": "Discard staged candidates without changing live theta.",
+      "input_schema": {},
+      "output_schema": {"ok": "bool", "discarded": "bool"}
+    },
+
+    {
+      "name": "get_personalization_profile",
+      "category": "memory",
+      "description": "Return deterministic cross-episode sensor applicability and validated Agent-proposed context memory.",
+      "input_schema": {"limit": "int optional"},
+      "output_schema": {"derived_profile": "object", "validated_context_memory": "array"}
+    },
+
+    {
+      "name": "propose_context_profile_update",
+      "category": "memory",
+      "description": "Propose an online-computable context memory. Code accepts only with support>=3, positive>=1, confidence>=0.65 and contradictions<=50%.",
+      "input_schema": {
+        "context_name": "string",
+        "context_signature": "string",
+        "support_count": "int",
+        "positive_count": "int",
+        "contradiction_count": "int",
+        "confidence": "number 0..1"
+      },
+      "output_schema": {"accepted": "bool", "gate": "SHADOW_ONLY|VALIDATED_MEMORY"}
+    },
+
+    {
+      "name": "get_context_template_catalog",
+      "category": "template",
+      "description": "Return the only applicability, event, effect and parameter-family primitives available to Agent composition.",
+      "input_schema": {},
+      "output_schema": {"events": "array", "applicability": "array", "effects": "object", "parameter_families": "object"}
+    },
+
+    {
+      "name": "generate_context_template",
+      "category": "template",
+      "description": "Validate Agent structure, emit independent sequence observations without rewriting atomic sensors, estimate requested parameter families in C++, and replay LOW/MEDIUM/HIGH sequence reliabilities on all historical HSMM episodes.",
+      "input_schema": {
+        "template_name": "string",
+        "side": "home|company",
+        "anchor_id": "string",
+        "applicability": "always|baro_ready",
+        "positive_sequence": "comma-separated catalog events",
+        "negative_pattern": "comma-separated catalog events, optional",
+        "parameter_families": "vertical_threshold, optional; departure_time disabled; Agent supplies no values",
+        "rationale": "string"
+      },
+      "output_schema": {"best_candidate_id": "int|null", "baseline": "object", "candidates": "array"}
+    },
+
+    {
+      "name": "get_context_template_trial",
+      "category": "template",
+      "description": "Inspect the in-process replay trial before commit.",
+      "input_schema": {},
+      "output_schema": {"trial_active": "bool", "best_candidate_id": "int|null"}
+    },
+
+    {
+      "name": "commit_context_template",
+      "category": "template",
+      "description": "Persist the C++-selected eligible candidate; refuses trials without a safe candidate.",
+      "input_schema": {},
+      "output_schema": {"ok": "bool", "committed_candidate_id": "int", "path": "string"}
+    },
+
+    {
+      "name": "discard_context_template",
+      "category": "template",
+      "description": "Discard the current trial without changing the active baseline.",
+      "input_schema": {},
+      "output_schema": {"ok": "bool", "discarded": "bool"}
+    },
+
+    {
+      "name": "get_active_context_template",
+      "category": "template",
+      "description": "Read the replay-approved profile currently consumed by SceneEngine.",
+      "input_schema": {},
+      "output_schema": {"active": "bool", "template": "object, optional"}
+    },
+
+    {
+      "name": "submit_agent_analysis",
+      "category": "diagnosis",
+      "description": "Validate and persist the Agent's structured hypothesis and semantic intervention audit.",
+      "input_schema": {
+        "context_name": "string",
+        "primary_cause": "string",
+        "supporting_evidence": "string",
+        "contradicting_evidence": "string",
+        "intervention_block": "context_template for current path; optional when abstain",
+        "direction": "compose for context_template; optional when abstain",
+        "confidence": "number 0..1",
+        "abstain": "bool"
+      },
+      "output_schema": {"validated": "bool", "audit_id": "string"}
     },
 
     {

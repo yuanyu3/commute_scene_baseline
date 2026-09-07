@@ -94,6 +94,20 @@ int main()
         return 1;
     }
 
+    const std::string guardBegin = commute_sa::BeginThetaTrialAction("{}");
+    const std::string guardedCommit = commute_sa::CommitThetaTrialAction("{}");
+    std::cout << "guard_begin=" << guardBegin << "\nguarded_commit=" << guardedCommit << "\n";
+    if (guardBegin.find("\"ok\":true") == std::string::npos ||
+        guardedCommit.find("\"ok\":false") == std::string::npos ||
+        guardedCommit.find("score improvement") == std::string::npos) {
+        std::cerr << "FAIL theta commit guard\n";
+        return 1;
+    }
+    if (commute_sa::RevertThetaTrialAction("{}").find("\"ok\":true") == std::string::npos) {
+        std::cerr << "FAIL guarded trial cleanup\n";
+        return 1;
+    }
+
     const std::string audit = commute_sa::WriteAuditAction("{\"message\":\"trial smoke ok\"}");
     if (audit.find("\"ok\":true") == std::string::npos) {
         std::cerr << "FAIL audit\n";

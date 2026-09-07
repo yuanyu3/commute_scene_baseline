@@ -1,5 +1,7 @@
 #include "commute_sa/scene_engine.h"
 
+#include "commute_sa/context_template.h"
+
 #include <algorithm>
 #include <cmath>
 #include <ctime>
@@ -120,7 +122,7 @@ Relation SceneEngine::CompanyRelTo(const TickFeatures &feat, double *distOut, bo
     const double dist = distOut != nullptr ? *distOut : 0.0;
     const double vicinity = std::max(theta_.company_source_vicinity_m, anchors_.company.r_out_m);
     const bool sticky = scene_ == Scene::kAtCompany || scene_ == Scene::kLeavingCompany;
-    const bool near = sticky || feat.wifi_company_attach || dist <= vicinity || geoRel == Relation::kInside ||
+    const bool near = sticky || (theta_.w_wifi > 0.0 && feat.wifi_company_attach) || dist <= vicinity || geoRel == Relation::kInside ||
         geoRel == Relation::kNear;
     if (nearCompany != nullptr) {
         *nearCompany = near;
@@ -214,19 +216,28 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
     ObservationResult out;
     int hits = 0;
 
-    const double sWalk = feat.walking ? 1.0 : 0.0;
-    if (sWalk >= theta_.thr_walk) {
+    const bool useWalk = theta_.w_walk > 0.0;
+    const bool usePdr = theta_.w_pdr > 0.0;
+    const bool useGeo = theta_.w_geo > 0.0;
+    const bool useWifi = theta_.w_wifi > 0.0;
+    const bool useCell = theta_.w_cell > 0.0;
+    const bool useBle = theta_.w_ble > 0.0;
+    const bool useTime = theta_.w_time > 0.0;
+    const bool useBaro = theta_.w_baro > 0.0;
+
+    const double sWalk = useWalk && feat.walking ? 1.0 : 0.0;
+    if (useWalk && sWalk >= theta_.thr_walk) {
         ++hits;
     }
 
     const double pdrEff = approaching ? 0.0 : pdrNetOut;
-    const double sPdr = Clip01(pdrEff / std::max(15.0, rIn * 0.3));
-    if (sPdr >= theta_.thr_pdr) {
+    const double sPdr = usePdr ? Clip01(pdrEff / std::max(15.0, rIn * 0.3)) : 0.0;
+    if (usePdr && sPdr >= theta_.thr_pdr) {
         ++hits;
     }
 
     double sGeo = 0.0;
-    if (!gpsDistUnreliable) {
+    if (useGeo && !gpsDistUnreliable) {
         if (hasDist && (rel == Relation::kInside || rel == Relation::kNear)) {
             if (prevDist.has_value() && distM > *prevDist + 3.0) {
                 sGeo = Clip01(distM / std::max(rOut, 1.0));
@@ -237,43 +248,45 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
         } else if (rel == Relation::kOutside && !approaching) {
             sGeo = 0.8;
         }
-    } else if (rel == Relation::kOutside && !approaching) {
+    } else if (useGeo && rel == Relation::kOutside && !approaching) {
         // source_type 2→1 (or GNSS while near company) is the precise gate-leave.
         sGeo = 1.0;
     }
-    if (sGeo >= theta_.thr_geo) {
+    if (useGeo && sGeo >= theta_.thr_geo) {
         ++hits;
     }
 
-    // Continuous WiFi leave score from Jaccard; attach / suppress → 0.
+    // Continuous WiFi leave score with a neutral band. Similarity at/below
+    // thrJ is full leave evidence; similarity at/above the attach side of the
+    // hysteresis band is zero evidence.
     double sWifi = 0.0;
-    if (!(wifiAttach || approaching || radioSuppressed)) {
+    if (useWifi && !(wifiAttach || approaching || radioSuppressed)) {
         const double thrJ = std::max(1e-3, std::min(0.99, theta_.thr_wifi_jaccard));
+        const double attachJ = std::min(1.0, thrJ + 0.25);
         if (wifiJaccard <= thrJ) {
             sWifi = 1.0;
         } else {
-            sWifi = Clip01((1.0 - wifiJaccard) / (1.0 - thrJ));
+            sWifi = Clip01((attachJ - wifiJaccard) / std::max(1e-3, attachJ - thrJ));
         }
         if (sWifi < 1e-6 && wifiDetach) {
             sWifi = 1.0;
         }
     }
-    if (sWifi >= theta_.thr_wifi) {
+    if (useWifi && sWifi >= theta_.thr_wifi) {
         ++hits;
     }
 
-    const double sCell =
-        (radioSuppressed || approaching || wifiAttach) ? 0.0 : (cellLeave ? 1.0 : 0.0);
-    if (sCell >= theta_.thr_cell) {
+    const double sCell = !useCell || radioSuppressed || approaching || wifiAttach ? 0.0 : (cellLeave ? 1.0 : 0.0);
+    if (useCell && sCell >= theta_.thr_cell) {
         ++hits;
     }
-    const double sBle = (radioSuppressed || approaching) ? 0.0 : (bleDetach ? 1.0 : 0.0);
-    if (sBle >= theta_.thr_ble) {
+    const double sBle = !useBle || radioSuppressed || approaching ? 0.0 : (bleDetach ? 1.0 : 0.0);
+    if (useBle && sBle >= theta_.thr_ble) {
         ++hits;
     }
 
-    const double sTime = TimePrior(feat.t_ms, centerHour, theta_.leave_window_min);
-    if (sTime >= theta_.thr_time) {
+    const double sTime = useTime ? TimePrior(feat.t_ms, centerHour, theta_.leave_window_min) : 0.0;
+    if (useTime && sTime >= theta_.thr_time) {
         ++hits;
     }
 
@@ -283,6 +296,7 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
     }
 
     out.observation.walking = sWalk;
+    out.observation.t_ms = feat.t_ms;
     out.observation.pdr_outbound = sPdr;
     out.observation.geo_outbound = sGeo;
     out.observation.wifi_detach = sWifi;
@@ -295,7 +309,10 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
     out.observation.outside = rel == Relation::kOutside;
     out.observation.approaching = approaching;
     out.observation.attached = wifiAttach;
-    const bool baroReady = feat.baro_available && feat.baro_baseline_ready;
+    const bool baroReady = useBaro && feat.baro_available && feat.baro_baseline_ready;
+    out.observation.baro_descent_m = feat.baro_descent_m;
+    out.observation.baro_stable_platform = feat.baro_stable_platform;
+    out.observation.baro_stable_platform_known = baroReady;
     out.observation.baro_descending = baroReady ? feat.baro_descending : 0.0;
     out.observation.baro_lower_platform = baroReady && feat.baro_lower_platform ? 1.0 : 0.0;
     out.observation.baro_available = baroReady;
@@ -309,6 +326,8 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         lastWalkStopMs_ = feat.t_ms;
     }
     wasWalking_ = feat.walking;
+    const bool wifiHomeAttach = theta_.w_wifi > 0.0 && feat.wifi_home_attach;
+    const bool wifiCompanyAttach = theta_.w_wifi > 0.0 && feat.wifi_company_attach;
     double dHome = 0.0;
     double dCo = 0.0;
     bool nearCompany = false;
@@ -347,7 +366,7 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         return approaching;
     };
     const bool approachHome = updateApproach(hRel, hasHome, dHome, prevRelHome_, prevDistHome_, &approachHomeStreak_,
-        feat.wifi_home_attach, &returnFromOutsideHome_);
+        wifiHomeAttach, &returnFromOutsideHome_);
     bool approachCo = false;
     if (companySourceGate) {
         approachCompanyStreak_ = 0;
@@ -355,7 +374,7 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
             approachCo = true;
             returnFromOutsideCompany_ = true;
         }
-        if (feat.wifi_company_attach) {
+        if (wifiCompanyAttach) {
             approachCo = true;
         }
         if (companyGateLeave) {
@@ -363,7 +382,7 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         }
     } else {
         approachCo = updateApproach(cRel, hasCo, dCo, prevRelCompany_, prevDistCompany_, &approachCompanyStreak_,
-            feat.wifi_company_attach, &returnFromOutsideCompany_);
+            wifiCompanyAttach, &returnFromOutsideCompany_);
     }
 
     auto noteApproachEdge = [&](bool approaching, bool *wasApproach, bool *returnFromOutside,
@@ -380,14 +399,37 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const bool radioSupCo =
         noteApproachEdge(approachCo, &wasApproachCompany_, &returnFromOutsideCompany_, &radioSuppressCompanyUntil_);
 
-    const auto sh = BuildLeaveObservation(feat, hRel, hasHome, dHome, anchors_.home.r_in_m, anchors_.home.r_out_m,
+    auto sh = BuildLeaveObservation(feat, hRel, hasHome, dHome, anchors_.home.r_in_m, anchors_.home.r_out_m,
         feat.pdr_net_out_home_m, feat.wifi_home_detach, feat.cell_leave_home, feat.ble_home_detach,
-        feat.wifi_jaccard_home, feat.wifi_home_attach, theta_.weekday_leave_home_hour, prevDistHome_, approachHome,
+        feat.wifi_jaccard_home, wifiHomeAttach, theta_.weekday_leave_home_hour, prevDistHome_, approachHome,
         radioSupHome);
-    const auto sc = BuildLeaveObservation(feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
+    auto sc = BuildLeaveObservation(feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
         feat.pdr_net_out_company_m, feat.wifi_company_detach, feat.cell_leave_company, feat.ble_company_detach,
-        feat.wifi_jaccard_company, feat.wifi_company_attach, theta_.weekday_leave_company_hour, prevDistCompany_,
+        feat.wifi_jaccard_company, wifiCompanyAttach, theta_.weekday_leave_company_hour, prevDistCompany_,
         approachCo, radioSupCo, companySourceGate);
+    ApplyActiveContextTemplateObservation("home", anchors_.home.id, feat.t_ms, &sh.observation);
+    ApplyActiveContextTemplateObservation("company", anchors_.company.id, feat.t_ms, &sc.observation);
+    // A zero weight means the channel is unavailable, including values added
+    // by a context template. Structural relation/inside/outside facts remain.
+    auto applyChannelMask = [&](LeaveObservation *obs) {
+        if (theta_.w_walk <= 0.0) obs->walking = 0.0;
+        if (theta_.w_pdr <= 0.0) obs->pdr_outbound = 0.0;
+        if (theta_.w_geo <= 0.0) obs->geo_outbound = 0.0;
+        if (theta_.w_wifi <= 0.0) {
+            obs->wifi_detach = 0.0;
+            obs->attached = false;
+        }
+        if (theta_.w_cell <= 0.0) obs->cell_detach = 0.0;
+        if (theta_.w_ble <= 0.0) obs->ble_detach = 0.0;
+        if (theta_.w_time <= 0.0) obs->time_prior = 0.0;
+        if (theta_.w_baro <= 0.0) {
+            obs->baro_descending = 0.0;
+            obs->baro_lower_platform = 0.0;
+            obs->baro_available = false;
+        }
+    };
+    applyChannelMask(&sh.observation);
+    applyChannelMask(&sc.observation);
     const LeaveHsmmConfig hsmmConfig = HsmmConfig();
     const auto hsmmHome = home_hsmm_.Step(sh.observation, feat.t_ms, hsmmConfig);
     const auto hsmmCompany = company_hsmm_.Step(sc.observation, feat.t_ms, hsmmConfig);
@@ -464,7 +506,7 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
 
         if (hRel == Relation::kOutside) {
             pushBlock = "OUTSIDE";
-        } else if (approachHome || feat.wifi_home_attach) {
+        } else if (approachHome || wifiHomeAttach) {
             pushBlock = "APPROACHING";
         } else if (leaveHomePushed_) {
             pushBlock = "ALREADY_PUSHED";
@@ -487,7 +529,7 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
 
         if (cRel == Relation::kOutside) {
             pushBlock = "OUTSIDE";
-        } else if (approachCo || feat.wifi_company_attach) {
+        } else if (approachCo || wifiCompanyAttach) {
             pushBlock = "APPROACHING";
         } else if (leaveCompanyPushed_) {
             pushBlock = "ALREADY_PUSHED";
@@ -550,17 +592,17 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
 
     // Hard ban: never push when already outside the gate or approaching.
     if (shouldService && intent == "DEPARTURE_NOTIFICATION" &&
-        (hRel == Relation::kOutside || approachHome || feat.wifi_home_attach)) {
+        (hRel == Relation::kOutside || approachHome || wifiHomeAttach)) {
         shouldService = false;
         intent = "NONE";
-        pushBlock = (approachHome || feat.wifi_home_attach) ? "APPROACHING" : "OUTSIDE";
+        pushBlock = (approachHome || wifiHomeAttach) ? "APPROACHING" : "OUTSIDE";
         leaveHomePushed_ = false;
     }
     if (shouldService && intent == "LEAVE_COMPANY_NOTIFICATION" &&
-        (cRel == Relation::kOutside || approachCo || feat.wifi_company_attach)) {
+        (cRel == Relation::kOutside || approachCo || wifiCompanyAttach)) {
         shouldService = false;
         intent = "NONE";
-        pushBlock = (approachCo || feat.wifi_company_attach) ? "APPROACHING" : "OUTSIDE";
+        pushBlock = (approachCo || wifiCompanyAttach) ? "APPROACHING" : "OUTSIDE";
         leaveCompanyPushed_ = false;
     }
 

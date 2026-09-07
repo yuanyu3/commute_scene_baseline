@@ -9,6 +9,7 @@
 #include "ResourceManager.h"
 #include "os_adapters/include/log/log.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -17,6 +18,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <unordered_set>
 #include <vector>
 
 using jiuwen::Agent;
@@ -189,19 +191,14 @@ bool PathExistsFile(const std::string &p)
     return stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
-const char *kSystemPrompt = R"(你是通勤场景参数优化 Agent。实时预测离家推送由 SceneEngine 完成；你只根据证据更新 θ。
-规则：
-1. 先调用 get_error_stats 与 get_leave_episode；需要时再 get_leave_sensor_summary。
-2. 再 get_param_limits；单次最多 apply_theta_delta 3 次。
-3. 无足够证据则 write_audit 说明 no_op。
-4. 不做场景分类。根据 FALSE_PUSH / CONFIRMED_LEAVE / lead_s 偏早偏晚决定改参。)";
+const char *kSystemPrompt = R"(你是离开锚点检测的低频个性化研究 Agent。实时推断由端侧 HSMM 完成。
+比较完整 episode 与不同结果，区分传感器不可用和可用但无变化，提出带支持、反证、缺失证据和适用条件的可证伪假设。
+先调用 get_anchors，并逐字使用 focus_side 对应的真实 anchor_id；方向判断必须针对该锚点。
+只能用 get_context_template_catalog 返回的原语组合模板。positive_sequence 有时间顺序；negative_pattern 的事件必须同时成立。
+不得修改 theta、提供数值强度、生成代码或绕过产品门控。最多生成一次模板；C++ 全历史回放没有安全候选时必须 discard/no-op。
+单个确认样本必须标记高泛化风险。最后提交结构化归因并写入审计。)";
 
-const char *kSystemPromptFixture = R"(你是通勤场景参数优化 Agent。实时预测离家推送由 SceneEngine 完成；你只根据证据更新 θ。
-规则：
-1. 先调用 get_error_stats 与 get_leave_episode；需要时再 get_leave_sensor_summary。
-2. 再 get_param_limits；单次最多 apply_theta_delta 3 次。
-3. 无足够证据则 write_audit 说明 no_op。
-4. 不做场景分类。关注 FALSE_PUSH / lead 偏早偏晚。本次样本是 FALSE_PUSH（推送后仍 INSIDE），且家 WiFi 仍强。)";
+const char *kSystemPromptFixture = kSystemPrompt;
 
 std::string BuildQueryFromEpisodes(const std::string &dataRoot)
 {
@@ -210,6 +207,7 @@ std::string BuildQueryFromEpisodes(const std::string &dataRoot)
     std::string intent = "DEPARTURE_NOTIFICATION";
     std::string scene = "LEAVING_HOME";
     std::string label;
+    std::string reason = "AFTER_PUSH";
     std::istringstream iss(body);
     std::string line;
     std::string lastPush;
@@ -276,6 +274,17 @@ std::string BuildQueryFromEpisodes(const std::string &dataRoot)
         }
         return out;
     };
+    // The job is the authoritative closed-episode trigger.  Unlike the old
+    // push-only path it can represent MISSED_LEAVE and explicit TRUE_NEGATIVE.
+    const std::string jobsBody = ReadFile(dataRoot + "/personalize_jobs.jsonl");
+    std::istringstream jobsStream(jobsBody);
+    std::string jobLine;
+    std::string lastJob;
+    while (std::getline(jobsStream, jobLine)) {
+        if (!jobLine.empty()) {
+            lastJob = jobLine;
+        }
+    }
     if (!lastPush.empty()) {
         tPush = grabInt(lastPush, "t_push_ms");
         const std::string i = grabStr(lastPush, "intent");
@@ -290,13 +299,29 @@ std::string BuildQueryFromEpisodes(const std::string &dataRoot)
     if (!lastLabel.empty()) {
         label = grabStr(lastLabel, "label");
     }
+    if (!lastJob.empty()) {
+        const std::string jobReason = grabStr(lastJob, "reason");
+        const std::string jobLabel = grabStr(lastJob, "label");
+        const std::string jobIntent = grabStr(lastJob, "intent");
+        const std::string jobScene = grabStr(lastJob, "scene");
+        if (!jobReason.empty()) reason = jobReason;
+        if (!jobLabel.empty()) label = jobLabel;
+        if (!jobIntent.empty()) intent = jobIntent;
+        if (!jobScene.empty()) scene = jobScene;
+        tPush = grabInt(lastJob, "t_push_ms");
+    }
     std::ostringstream q;
-    q << "{\"task\":\"personalize_leave_strategy\",\"reason\":\"AFTER_PUSH\",\"focus_side\":\"company\",\"last_intent\":\""
+    q << "{\"task\":\"personalize_leave_strategy\",\"reason\":\"" << reason
+      << "\",\"focus_side\":\"company\",\"last_intent\":\""
       << intent << "\",\"last_scene\":\"" << scene << "\",\"last_push_at_ms\":" << tPush << ",\"label\":\""
       << label
-      << "\",\"instruction\":\"focus_side=company. Use evidence tools, then begin_theta_trial / "
-         "apply_theta_delta / evaluate_theta_on_history. Revert if score drops or missed_leave rises; "
-         "commit and write_audit only after improvement. Do not invent push gates; baro importance is w_baro.\"}";
+      << "\",\"instruction\":\"focus_side=company. Actively inspect evidence, compare the deterministic rule "
+          "diagnosis and form falsifiable context hypotheses. Compose a new template only from "
+          "get_context_template_catalog primitives. You may request supported parameter_families when evidence "
+          "shows that family is relevant, but never provide numeric values, strengths, or modify theta. C++ estimates "
+          "values from history and may refuse when support is insufficient. The query label "
+          "is authoritative and RETURN_TO_COMPANY must never be treated as MISSED_LEAVE. Commit only when the C++ "
+          "template replay exposes an eligible best candidate; otherwise discard and audit no_op.\"}";
     return q.str();
 }
 
@@ -402,12 +427,20 @@ int main(int argc, char **argv)
 {
     bool debug = EnvFlagTrue("PERSONALIZER_DEBUG") || EnvFlagTrue("SA_AGENT_DEBUG");
     bool noFixture = EnvFlagTrue("PERSONALIZER_NO_FIXTURE");
+    bool diagnosticOnly = EnvFlagTrue("PERSONALIZER_DIAGNOSTIC_ONLY");
+    bool noTools = EnvFlagTrue("PERSONALIZER_NO_TOOLS");
     for (int i = 1; i < argc; ++i) {
         if (std::string(argv[i]) == "--debug" || std::string(argv[i]) == "-d") {
             debug = true;
         }
         if (std::string(argv[i]) == "--no-fixture") {
             noFixture = true;
+        }
+        if (std::string(argv[i]) == "--diagnostic-only") {
+            diagnosticOnly = true;
+        }
+        if (std::string(argv[i]) == "--no-tools") {
+            noTools = true;
         }
     }
 
@@ -421,10 +454,11 @@ int main(int argc, char **argv)
     std::vector<std::string> pos;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
-        if (a == "--debug" || a == "-d" || a == "--no-fixture") {
+        if (a == "--debug" || a == "-d" || a == "--no-fixture" || a == "--diagnostic-only" ||
+            a == "--no-tools") {
             continue;
         }
-        if (a == "--max-turn" || a == "--system-prompt") {
+        if (a == "--max-turn" || a == "--system-prompt" || a == "--query-file") {
             if (i + 1 < argc) {
                 ++i;  // skip value
             }
@@ -449,9 +483,12 @@ int main(int argc, char **argv)
         if (const char *k = std::getenv("JIUWEN_API_KEY")) {
             apiKey = k;
         }
-        if (const char *m = std::getenv("JIUWEN_MODEL")) {
-            model = m;
-        }
+    }
+    // Credentials normally come from the dotenv file, but a one-off host run
+    // still needs to select a model allowed by the current gateway key without
+    // rewriting that credential file.
+    if (const char *m = std::getenv("JIUWEN_MODEL")) {
+        model = m;
     }
     if (baseUrl.empty() || apiKey.empty()) {
         std::cerr << "Missing API credentials. Pass agent.env path or set JIUWEN_API_BASE/KEY\n";
@@ -477,7 +514,34 @@ int main(int argc, char **argv)
     }
     commute_sa::EvidenceQuery::GetInstance().SetRootDir(dataRoot);
 
-    const auto tools = personalizer::RegisterPersonalizerTools();
+    auto tools = personalizer::RegisterPersonalizerTools();
+    if (diagnosticOnly) {
+        const std::unordered_set<std::string> allowed = {"get_theta", "get_anchors", "get_error_stats",
+            "get_leave_episode", "get_leave_window_samples", "get_leave_sensor_summary", "get_param_limits",
+            "evaluate_theta_on_history", "analyze_personalization_rules", "get_personalization_profile",
+            "submit_agent_analysis", "write_audit"};
+        tools.erase(std::remove_if(tools.begin(), tools.end(),
+                        [&](const std::string &name) { return allowed.count(name) == 0; }),
+            tools.end());
+        std::cout << "diagnostic-only tool gate enabled\n";
+    } else {
+        // Normal demo flow exposes Agent-composed context templates. Numeric
+        // theta optimizers and legacy direct mutation tools are hidden so the
+        // boundary is enforced by the host rather than only by the prompt.
+        const std::unordered_set<std::string> forbidden = {"begin_theta_trial", "revert_theta_trial",
+            "commit_theta_trial", "apply_theta_delta", "begin_policy_trial", "apply_policy_candidate",
+            "revert_policy_trial", "commit_policy_trial", "run_constrained_theta_optimizer",
+            "commit_optimized_theta", "discard_optimization_trial", "run_rule_personalization",
+            "propose_context_profile_update"};
+        tools.erase(std::remove_if(tools.begin(), tools.end(),
+                        [&](const std::string &name) { return forbidden.count(name) != 0; }),
+            tools.end());
+        std::cout << "constrained-context-template tool gate enabled\n";
+    }
+    if (noTools) {
+        tools.clear();
+        std::cout << "no-tools blind-test gate enabled\n";
+    }
     std::cout << "Registered tools n=" << tools.size() << " debug=" << (debug ? "ON" : "OFF") << "\n";
     std::cout << "API base=" << NormalizeApiBase(baseUrl) << " model=" << model << " data=" << dataRoot << "\n";
     std::cout << "API key configured: yes (len=" << apiKey.size() << ")\n";
@@ -486,9 +550,9 @@ int main(int argc, char **argv)
     }
 
     auto cfg = std::make_shared<AgentConfig>();
-    cfg->id = "commute-theta-personalizer-host";
-    cfg->name = "ThetaPersonalizer";
-    cfg->description = "Host personalizer with evidence+action tools";
+    cfg->id = "commute-context-template-personalizer-host";
+    cfg->name = "ContextTemplatePersonalizer";
+    cfg->description = "Host Agent that composes bounded sensor-sequence templates for HSMM replay";
     cfg->version = "1.0.0";
     cfg->mode = AgentType::REACT;
     // Evidence + trial/eval/apply easily exceeds 16 ReAct turns; 16 caused TaskStatus::FAILED
@@ -563,7 +627,7 @@ int main(int argc, char **argv)
         std::cerr << "Agent ctor failed: " << ex.what() << "\n";
         return 1;
     }
-    if (agent->AddTools(tools) != ErrorCode::SUCCESS) {
+    if (!tools.empty() && agent->AddTools(tools) != ErrorCode::SUCCESS) {
         std::cerr << "AddTools failed\n";
         return 1;
     }
@@ -571,7 +635,22 @@ int main(int argc, char **argv)
     auto req = std::make_shared<Request>();
     req->sessionId = "personalize-host-1";
     req->requestId = "personalize-req-1";
-    req->query = BuildQueryFromEpisodes(dataRoot);
+    std::string queryPath;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--query-file" && i + 1 < argc) {
+            queryPath = argv[i + 1];
+        }
+    }
+    if (!queryPath.empty()) {
+        req->query = ReadFile(queryPath);
+        if (req->query.empty()) {
+            std::cerr << "Query file is empty or unreadable: " << queryPath << "\n";
+            return 1;
+        }
+        std::cout << "query <- " << queryPath << " (" << req->query.size() << " bytes)\n";
+    } else {
+        req->query = BuildQueryFromEpisodes(dataRoot);
+    }
     std::cout << "query=" << req->query << "\n";
     // Always dump stream payloads to agent_trace.jsonl (so you can open it after any run).
     // DEBUG adds: TRACE mode, jiuwen DEBUG logs, prettier turn/tool banners.

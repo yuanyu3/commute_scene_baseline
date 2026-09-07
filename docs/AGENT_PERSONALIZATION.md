@@ -1,5 +1,7 @@
 # Jiuwen 策略个性化 Agent
 
+> 旧方案/消融对照：本文描述 Agent 直接改 θ 的实验链路。当前普通宿主隐藏这些写工具，生产方向见 [CONTEXT_TEMPLATE_PERSONALIZATION.md](CONTEXT_TEMPLATE_PERSONALIZATION.md)。
+
 ## 定位
 
 - **不做**每 tick 场景推理（由基线完成）。

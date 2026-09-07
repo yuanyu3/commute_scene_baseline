@@ -5,7 +5,7 @@ For each session in time order:
   1) Replay with the *current* theta (starts from DEFAULT; updated after each Agent commit)
   2) Borrow baro within near-triplet groups when own baro is missing/thin
   3) Refresh product workspace so policy_history / leave_episodes include all sessions so far
-  4) If this session had a company push → AFTER_PUSH Agent (eval history = all prior+current)
+  4) If this session closed with a company truth label → Agent (eval history = all prior+current)
   5) Carry updated theta into the next session
 
 maxTurn defaults to 80 (host); pass --max-turn to raise further if needed.
@@ -137,12 +137,30 @@ def find_label_for_push(session_out: Path, t_push_ms: Any) -> Optional[str]:
     return None
 
 
+def find_company_labels(session_out: Path) -> list[dict]:
+    eps = session_out / "leave_episodes.jsonl"
+    if not eps.is_file():
+        return []
+    labels: list[dict] = []
+    for ln in eps.read_text(encoding="utf-8").splitlines():
+        if not ln.strip():
+            continue
+        obj = json.loads(ln)
+        if obj.get("type") != "label":
+            continue
+        side = obj.get("side")
+        if side == "company" or (side is None and obj.get("anchor_relation") is not None):
+            labels.append(obj)
+    return labels
+
+
 def replay_one(
     raw: Path,
     out: Path,
     tick_s: float,
     baro_dir: Optional[Path],
     theta_path: Path,
+    truth: dict[str, Any],
 ) -> int:
     cmd = [
         sys.executable,
@@ -164,6 +182,11 @@ def replay_one(
         "--theta",
         str(theta_path),
     ]
+    truth_mode = str(truth.get("truth", "auto"))
+    cmd.extend(["--episode-truth", truth_mode])
+    truth_event_ms = int(truth.get("t_star_ms") or 0)
+    if truth_event_ms > 0:
+        cmd.extend(["--truth-event-ms", str(truth_event_ms)])
     if baro_dir is not None and baro_dir.resolve() != raw.resolve():
         cmd.extend(["--baro-dir", str(baro_dir)])
     print("\n======== replay", raw.name, "========", flush=True)
@@ -214,16 +237,23 @@ def stage_workspace(
     last_push = None
     if trigger_session is not None:
         pushes = find_company_pushes(trigger_session)
-        if pushes:
-            last_push = pushes[-1]
+        labels_now = find_company_labels(trigger_session)
+        if labels_now:
+            latest_label = labels_now[-1]
+            label_name = latest_label.get("label")
+            last_push = pushes[-1] if pushes else {}
+            reason = "MISSED_LEAVE" if label_name == "MISSED_LEAVE" else "EPISODE_CLOSED"
+            if label_name in ("CONFIRMED_LEAVE", "FALSE_PUSH"):
+                reason = "AFTER_PUSH"
             jobs.append(
                 {
-                    "reason": "AFTER_PUSH",
+                    "reason": reason,
                     "intent": last_push.get("intent"),
                     "scene": last_push.get("scene"),
-                    "t_push_ms": last_push.get("t_push_ms"),
+                    "t_push_ms": latest_label.get("t_push_ms") or 0,
+                    "t_label_ms": latest_label.get("t_label_ms"),
                     "focus_side": "company",
-                    "label": find_label_for_push(trigger_session, last_push.get("t_push_ms")),
+                    "label": label_name,
                     "trigger_session": trigger_session.name,
                 }
             )
@@ -264,6 +294,38 @@ def stage_workspace(
     return summary
 
 
+def load_truth_manifest(path: str) -> dict[str, dict[str, Any]]:
+    if not path.strip():
+        return {}
+    obj = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(obj, dict):
+        raise ValueError("truth manifest must be a JSON object keyed by session folder")
+    result: dict[str, dict[str, Any]] = {}
+    for session, value in obj.items():
+        if isinstance(value, str):
+            value = {"truth": value}
+        if not isinstance(value, dict) or value.get("truth", "auto") not in {
+            "auto", "leave", "not_leave", "unknown"
+        }:
+            raise ValueError(f"invalid truth manifest entry for {session}")
+        result[str(session)] = dict(value)
+    return result
+
+
+def evaluate_history(binary: str, out_root: Path) -> Optional[dict]:
+    if not binary.strip():
+        return None
+    cmd = [binary, str(out_root), "evaluate", '{"limit":30}']
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    if proc.returncode != 0:
+        return {"ok": False, "error": proc.stderr.strip() or f"evaluator rc={proc.returncode}"}
+    lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+    try:
+        return json.loads(lines[-1]) if lines else {"ok": False, "error": "empty evaluator output"}
+    except json.JSONDecodeError as exc:
+        return {"ok": False, "error": f"invalid evaluator output: {exc}"}
+
+
 def append_text(path: Path, text: str, header: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as fh:
@@ -274,7 +336,14 @@ def append_text(path: Path, text: str, header: str = "") -> None:
         fh.write(text)
 
 
-def run_agent(out_root: Path, env_file: Path, max_turn: int, system_prompt: str = "") -> int:
+def run_agent(
+    out_root: Path,
+    env_file: Path,
+    max_turn: int,
+    agent_model: str = "",
+    system_prompt: str = "",
+    diagnostic_only: bool = False,
+) -> int:
     out_posix = to_posix(out_root)
     env_posix = to_posix(env_file)
     root_posix = to_posix(ROOT)
@@ -284,13 +353,16 @@ def run_agent(out_root: Path, env_file: Path, max_turn: int, system_prompt: str 
         prompt_posix = to_posix(Path(system_prompt))
         prompt_export = f"PERSONALIZER_SYSTEM_PROMPT={prompt_posix} "
         prompt_arg = f" --system-prompt {prompt_posix}"
+    diagnostic_arg = " --diagnostic-only" if diagnostic_only else ""
+    model_export = f"JIUWEN_MODEL={agent_model} " if agent_model.strip() else ""
     bash_cmd = (
         f"cd {root_posix} && "
         f"JIUWEN_ROOT=/mnt/d/bbpjiuwen "
+        f"{model_export}"
         f"{prompt_export}"
         f"PERSONALIZER_MAX_TURN={max_turn} "
         f"bash examples/personalizer_llm/run.sh {env_posix} {out_posix} "
-        f"--no-fixture --debug --max-turn {max_turn}{prompt_arg}"
+        f"--no-fixture --max-turn {max_turn}{prompt_arg}{diagnostic_arg}"
     )
     if Path("/mnt/d/commute_scene_baseline").is_dir() and os.name != "nt":
         print("running agent in-place:", bash_cmd, flush=True)
@@ -309,7 +381,17 @@ def main() -> int:
     ap.add_argument("--session-out-prefix", default="real_0812_seq_")
     ap.add_argument("--env-file", default=str(ROOT / "sa_service" / "etc" / "agent.env"))
     ap.add_argument("--max-turn", type=int, default=80, help="Jiuwen ReAct maxTurn (raise if exhausted)")
+    ap.add_argument(
+        "--agent-model",
+        default="",
+        help="optional JIUWEN_MODEL override when agent.env does not declare a gateway-allowed model",
+    )
     ap.add_argument("--skip-agent", action="store_true")
+    ap.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help="expose evidence/evaluation/audit tools only; Agent cannot mutate theta or policy",
+    )
     ap.add_argument(
         "--system-prompt",
         default="",
@@ -343,7 +425,26 @@ def main() -> int:
         help="comma-separated session folder names or HHMM prefixes to include "
         "(e.g. 20260812_105415,20260812_110128 or 1054,1101)",
     )
+    ap.add_argument(
+        "--truth-manifest",
+        default="",
+        help=(
+            "optional JSON keyed by session with truth=auto|leave|not_leave|unknown and optional t_star_ms; "
+            "TRUE_NEGATIVE is emitted only for explicit not_leave"
+        ),
+    )
+    ap.add_argument(
+        "--offline-tools-binary",
+        default="",
+        help="optional commute_offline_tools path used to snapshot cumulative pre/post-update HSMM metrics",
+    )
     args = ap.parse_args()
+
+    try:
+        truth_manifest = load_truth_manifest(args.truth_manifest)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"ERROR: invalid --truth-manifest: {exc}", file=sys.stderr)
+        return 1
 
     data_root = resolve_data_root(args.data_root_win, args.data_root_wsl)
     sessions = list_sessions(data_root)
@@ -412,8 +513,11 @@ def main() -> int:
     seq_log = out_root / "SEQ_LOG.jsonl"
     audit_all = out_root / "audit_all.jsonl"
     params_all = out_root / "param_changes_all.jsonl"
+    jobs_all = out_root / "personalize_jobs_all.jsonl"
+    online_metrics = out_root / "online_metrics.jsonl"
+    post_update_metrics = out_root / "post_update_metrics.jsonl"
     if not args.resume_from:
-        for p in (seq_log, audit_all, params_all):
+        for p in (seq_log, audit_all, params_all, jobs_all, online_metrics, post_update_metrics):
             p.write_text("", encoding="utf-8")
 
     current_theta = dict(DEFAULT_THETA)
@@ -442,8 +546,8 @@ def main() -> int:
         for raw in sessions:
             out = ROOT / "output" / f"{args.session_out_prefix}{raw.name}"
             if raw.name == resume:
-                skipping = False
-            if skipping and out.is_dir():
+                break
+            if out.is_dir():
                 completed.append(out)
 
     env_file = Path(args.env_file)
@@ -460,7 +564,9 @@ def main() -> int:
 
         out = ROOT / "output" / f"{args.session_out_prefix}{raw.name}"
         write_theta(theta_seed, current_theta)
-        rc = replay_one(raw, out, args.tick_s, baro_for.get(raw.name), theta_seed)
+        theta_before = dict(current_theta)
+        truth = truth_manifest.get(raw.name, {"truth": "auto"})
+        rc = replay_one(raw, out, args.tick_s, baro_for.get(raw.name), theta_seed, truth)
         if rc != 0:
             failed.append(raw.name)
             print("FAILED replay", raw.name, "rc", rc, flush=True)
@@ -472,7 +578,17 @@ def main() -> int:
 
         completed.append(out)
         pushes = find_company_pushes(out)
-        summary = stage_workspace(completed, out_root, current_theta, out if pushes else None)
+        labels_now = find_company_labels(out)
+        summary = stage_workspace(completed, out_root, current_theta, out if labels_now else None)
+        pre_eval = evaluate_history(args.offline_tools_binary, out_root)
+        for job in summary.get("jobs", []):
+            append_text(jobs_all, json.dumps(job, ensure_ascii=False) + "\n")
+        snap = out_root / "snapshots"
+        snap.mkdir(exist_ok=True)
+        write_theta(snap / f"theta_before_{raw.name}.json", theta_before)
+        (snap / f"labels_{raw.name}.json").write_text(
+            json.dumps(labels_now, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         print(
             f"staged n={summary['n_sessions']} pushes_cum={summary['n_pushes']} "
             f"labels={summary['label_counts']} hist_obs={summary['policy_history_obs_lines']} "
@@ -484,22 +600,59 @@ def main() -> int:
             "session": raw.name,
             "event": "replay_ok",
             "n_pushes_session": len(pushes),
+            "labels_session": [item.get("label") for item in labels_now],
+            "truth_mode": truth.get("truth", "auto"),
             "theta_enter_leave": current_theta.get("enter_leave"),
             "theta_w_wifi": current_theta.get("w_wifi"),
             "cumulative": summary,
         }
         append_text(seq_log, json.dumps(step, ensure_ascii=False) + "\n")
+        append_text(
+            online_metrics,
+            json.dumps(
+                {
+                    "session": raw.name,
+                    "phase": "pre_update",
+                    "truth_mode": truth.get("truth", "auto"),
+                    "labels": [item.get("label") for item in labels_now],
+                    "n_pushes": len(pushes),
+                    "theta": theta_before,
+                    "cumulative_replay": pre_eval,
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
 
-        if not pushes or args.skip_agent:
+        if not labels_now or args.skip_agent:
+            write_theta(snap / f"theta_after_{raw.name}.json", current_theta)
+            append_text(
+                post_update_metrics,
+                json.dumps(
+                    {
+                        "session": raw.name,
+                        "phase": "post_update",
+                        "agent_run": False,
+                        "reason": "no_closed_label" if not labels_now else "agent_skipped",
+                        "theta": current_theta,
+                        "cumulative_replay": pre_eval,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+            )
             continue
 
         print(
-            f"\n======== agent AFTER_PUSH on {raw.name} "
+            f"\n======== agent AFTER_EPISODE on {raw.name} "
+            f"labels={[item.get('label') for item in labels_now]} "
             f"(history sessions={len(completed)}) ========",
             flush=True,
         )
         agent_runs += 1
-        arc = run_agent(out_root, env_file, args.max_turn, args.system_prompt)
+        arc = run_agent(
+            out_root, env_file, args.max_turn, args.agent_model, args.system_prompt, args.diagnostic_only
+        )
         print("agent rc", arc, flush=True)
 
         # Persist trails
@@ -519,9 +672,8 @@ def main() -> int:
         if th_path.is_file():
             current_theta = load_theta(th_path)
             write_theta(theta_seed, current_theta)
+        post_eval = evaluate_history(args.offline_tools_binary, out_root)
         # Snapshot after this agent step
-        snap = out_root / "snapshots"
-        snap.mkdir(exist_ok=True)
         shutil.copy2(th_path, snap / f"theta_after_{raw.name}.json")
         if audit.is_file():
             shutil.copy2(audit, snap / f"audit_{raw.name}.jsonl")
@@ -545,6 +697,23 @@ def main() -> int:
             )
             + "\n",
         )
+        append_text(
+            post_update_metrics,
+            json.dumps(
+                {
+                    "session": raw.name,
+                    "phase": "post_update",
+                    "agent_run": True,
+                    "agent_rc": arc,
+                    "theta_before": theta_before,
+                    "theta_after": current_theta,
+                    "changed": theta_before != current_theta,
+                    "cumulative_replay": post_eval,
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
 
         if arc != 0:
             print("WARN: agent non-zero; continuing with current theta", flush=True)
@@ -554,10 +723,29 @@ def main() -> int:
         stage_workspace(completed, out_root, current_theta, None)
         write_theta(out_root / "theta.json", current_theta)
 
+    logical_agent_sessions = set()
+    agent_job_records = 0
+    if jobs_all.is_file():
+        for line in jobs_all.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            try:
+                job = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            agent_job_records += 1
+            trigger_session = job.get("trigger_session") or job.get("session")
+            if trigger_session:
+                logical_agent_sessions.add(str(trigger_session))
+
     final = {
         "n_sessions_ok": len(completed),
         "failed": failed,
-        "agent_runs": agent_runs,
+        "agent_runs_this_invocation": agent_runs,
+        "agent_runs_total_logical": len(logical_agent_sessions),
+        "agent_job_records": agent_job_records,
+        "agent_retry_records": max(0, agent_job_records - len(logical_agent_sessions)),
         "borrow_map": borrow_map,
         "final_theta": {
             k: current_theta.get(k)
@@ -572,6 +760,12 @@ def main() -> int:
                 "w_ble",
                 "w_time",
                 "w_baro",
+                "hsmm_preleave_min_s",
+                "hsmm_preleave_mean_s",
+                "hsmm_preleave_max_s",
+                "hsmm_leaving_min_s",
+                "hsmm_leaving_mean_s",
+                "hsmm_leaving_max_s",
             )
         },
     }

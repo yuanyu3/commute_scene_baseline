@@ -76,14 +76,9 @@ double LeaveHsmm::ExitProbability(LeavePhase phase, int ageS, int dtS, const Lea
 {
     const double dt = static_cast<double>(dtS);
     if (phase == LeavePhase::kAtAnchor) {
-        // Time is only a prior. Physical motion is required by the emission model before PRE_LEAVE can dominate.
-        const double outbound = std::max(observation.pdr_outbound, observation.geo_outbound);
-        double hazardPerS = 0.00005 + 0.0015 * observation.time_prior + 0.004 * observation.walking +
-            0.002 * outbound;
-        if (observation.approaching || observation.attached) {
-            hazardPerS *= 0.05;
-        }
-        return Clip01(1.0 - std::exp(-dt * hazardPerS));
+        // Keep a small observation-independent candidate flow into PRE_LEAVE.
+        // Atomic sensors are consumed once, by EmissionLikelihood().
+        return Clip01(1.0 - std::exp(-dt * std::max(0.0, config.at_anchor_exit_hazard_per_s)));
     }
 
     if (phase == LeavePhase::kPreLeave) {
@@ -98,7 +93,7 @@ double LeaveHsmm::ExitProbability(LeavePhase phase, int ageS, int dtS, const Lea
     }
 
     if (phase == LeavePhase::kLeaving) {
-        if (observation.outside || observation.approaching || observation.attached) {
+        if (observation.outside) {
             return 0.95;
         }
         if (ageS < static_cast<int>(config.leaving_min_s)) {
@@ -111,8 +106,9 @@ double LeaveHsmm::ExitProbability(LeavePhase phase, int ageS, int dtS, const Lea
         return Clip01(1.0 - std::exp(-dt / scale));
     }
 
-    // OUTSIDE only exits when there is positive return-to-anchor evidence.
-    if (observation.inside || observation.attached || observation.approaching) {
+    // OUTSIDE only exits on a structural relation change. Attach/approach are
+    // emission and product-gate evidence, not a second transition use.
+    if (observation.inside) {
         return 0.95;
     }
     return 0.0;
@@ -143,13 +139,10 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
         if (observation.relation_known) {
             double relationExpected = 0.25;
             if (observation.inside) {
-                const bool strongOutbound = observation.walking >= 0.5 &&
-                    (observation.wifi_detach + observation.pdr_outbound + observation.geo_outbound) >= 0.8;
-                // Predictive leave happens while still INSIDE (company source_type=2).
-                // Strong motion/radio may override the default "desk dwell" prior.
-                const std::array<double, kPhaseCount> p = strongOutbound
-                    ? std::array<double, kPhaseCount>{{0.28, 0.42, 0.68, 0.02}}
-                    : std::array<double, kPhaseCount>{{0.88, 0.62, 0.24, 0.02}};
+                // INSIDE is a structural observation: it strongly rejects
+                // OUTSIDE but still permits predictive LEAVING before the gate.
+                // It must not inspect atomic sensors again.
+                const std::array<double, kPhaseCount> p {{0.65, 0.65, 0.65, 0.02}};
                 relationExpected = p[state];
             } else if (observation.near) {
                 const std::array<double, kPhaseCount> p {{0.18, 0.48, 0.72, 0.12}};
@@ -165,6 +158,17 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
             const std::array<double, kPhaseCount> p {{0.92, 0.30, 0.02, 0.08}};
             value += 2.5 * std::log(p[state]);
         }
+        if (observation.sequence_available) {
+            // These are interaction terms: they encode temporal order that is
+            // absent from the atomic per-tick observations.  Zero is neutral.
+            const std::array<double, kPhaseCount> progressLlr {{-0.35, 0.65, 0.25, -0.30}};
+            const std::array<double, kPhaseCount> completeLlr {{-1.00, 0.15, 1.20, -0.35}};
+            const std::array<double, kPhaseCount> negativeLlr {{0.80, 0.25, -1.00, -0.25}};
+            const double reliability = Clip01(observation.sequence_reliability);
+            value += 2.0 * reliability * Clip01(observation.sequence_progress) * progressLlr[state];
+            value += 2.0 * reliability * Clip01(observation.sequence_complete) * completeLlr[state];
+            value += 2.0 * reliability * Clip01(observation.negative_pattern_match) * negativeLlr[state];
+        }
         logLikelihood[state] = value;
     }
 
@@ -179,14 +183,30 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
 LeaveHsmmResult LeaveHsmm::Step(
     const LeaveObservation &observation, int64_t tMs, const LeaveHsmmConfig &config)
 {
+    LeaveObservation effective = observation;
+    if (config.reliability[0] <= 0.0) effective.walking = 0.0;
+    if (config.reliability[1] <= 0.0) effective.pdr_outbound = 0.0;
+    if (config.reliability[2] <= 0.0) effective.geo_outbound = 0.0;
+    if (config.reliability[3] <= 0.0) {
+        effective.wifi_detach = 0.0;
+        effective.attached = false;
+    }
+    if (config.reliability[4] <= 0.0) effective.cell_detach = 0.0;
+    if (config.reliability[5] <= 0.0) effective.ble_detach = 0.0;
+    if (config.reliability[6] <= 0.0) effective.time_prior = 0.0;
+    if (config.reliability[7] <= 0.0 && config.reliability[8] <= 0.0) {
+        effective.baro_descending = 0.0;
+        effective.baro_lower_platform = 0.0;
+        effective.baro_available = false;
+    }
     if (!initialized_) {
-        Initialize(observation, tMs);
+        Initialize(effective, tMs);
         return Summarize();
     }
 
     const double rawDtS = static_cast<double>(tMs - last_t_ms_) / 1000.0;
     if (rawDtS <= 0.0 || rawDtS > config.max_gap_s) {
-        Initialize(observation, tMs);
+        Initialize(effective, tMs);
         return Summarize();
     }
     const int dtS = std::max(1, std::min(60, static_cast<int>(std::lround(rawDtS))));
@@ -205,20 +225,18 @@ LeaveHsmmResult LeaveHsmm::Step(
                 continue;
             }
             const int nextAge = std::min(kMaxTrackedAgeS, age + dtS);
-            const double exitP = ExitProbability(phase, nextAge, dtS, observation, config);
+            const double exitP = ExitProbability(phase, nextAge, dtS, effective, config);
             predicted[state][nextAge] += sourceMass * (1.0 - exitP);
             const double exiting = sourceMass * exitP;
 
             if (phase == LeavePhase::kAtAnchor) {
                 predicted[PhaseIndex(LeavePhase::kPreLeave)][0] += exiting;
             } else if (phase == LeavePhase::kPreLeave) {
-                const double outbound = std::max(observation.pdr_outbound, observation.geo_outbound);
-                const double leaveShare = Clip01(0.20 + 0.45 * outbound + 0.20 * observation.wifi_detach +
-                    0.10 * observation.time_prior);
+                const double leaveShare = Clip01(config.preleave_exit_to_leaving);
                 predicted[PhaseIndex(LeavePhase::kLeaving)][0] += exiting * leaveShare;
                 predicted[PhaseIndex(LeavePhase::kAtAnchor)][0] += exiting * (1.0 - leaveShare);
             } else if (phase == LeavePhase::kLeaving) {
-                const double outsideShare = observation.outside ? 0.99 : 0.02;
+                const double outsideShare = effective.outside ? 0.99 : 0.02;
                 predicted[PhaseIndex(LeavePhase::kOutside)][0] += exiting * outsideShare;
                 predicted[PhaseIndex(LeavePhase::kPreLeave)][0] += exiting * (1.0 - outsideShare);
             } else {
@@ -227,7 +245,7 @@ LeaveHsmmResult LeaveHsmm::Step(
         }
     }
 
-    const auto likelihood = EmissionLikelihood(observation, config);
+    const auto likelihood = EmissionLikelihood(effective, config);
     double total = 0.0;
     for (int state = 0; state < kPhaseCount; ++state) {
         for (double &value : predicted[state]) {
@@ -237,7 +255,7 @@ LeaveHsmmResult LeaveHsmm::Step(
     }
 
     if (total <= kProbabilityFloor || !std::isfinite(total)) {
-        Initialize(observation, tMs);
+        Initialize(effective, tMs);
         return Summarize();
     }
     for (auto &stateMass : predicted) {

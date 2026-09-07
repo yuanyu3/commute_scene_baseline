@@ -180,12 +180,14 @@ bool EpisodeHasBaroLowerPlatform(const HsmmEpisode &ep)
     return false;
 }
 
-std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Theta &theta)
+std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Theta &theta,
+    const ObservationAdapter &adapter = {})
 {
     int n = 0;
     int nFalse = 0;
     int nConfirmed = 0;
     int nMissedLabel = 0;
+    int nTrueNegative = 0;
     int falseAvoided = 0;
     int falseKept = 0;
     int softFalseAvoided = 0;
@@ -198,6 +200,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     int leadEarly = 0;
     double leadAbsErrSum = 0.0;
     int leadErrN = 0;
+    std::vector<std::string> episodeResults;
 
     const LeaveHsmmConfig cfg = HsmmConfigFromTheta(theta);
     for (const auto &ep : episodes) {
@@ -210,29 +213,47 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         ++n;
         LeaveHsmm hsmm;
         bool wouldPush = false;
+        int64_t pushAtMs = 0;
         double leadAtPush = -1.0;
         int64_t walkStartedMs = 0;
+        bool episodeStart = true;
         for (const auto &tick : ep.ticks) {
-            if (tick.obs.walking >= 0.5) {
+            LeaveObservation observation = tick.obs;
+            // Always rebuild template evidence from atomic observations. A
+            // historical row may have been recorded under another template.
+            observation.sequence_available = false;
+            observation.sequence_progress = 0.0;
+            observation.sequence_complete = 0.0;
+            observation.negative_pattern_match = 0.0;
+            observation.sequence_reliability = 0.0;
+            if (adapter) {
+                adapter(observation, episodeStart);
+            }
+            episodeStart = false;
+            if (observation.walking >= 0.5) {
                 if (walkStartedMs <= 0) {
                     walkStartedMs = tick.t_ms;
                 }
             } else {
                 walkStartedMs = 0;
             }
-            const LeaveHsmmResult result = hsmm.Step(tick.obs, tick.t_ms, cfg);
+            const LeaveHsmmResult result = hsmm.Step(observation, tick.t_ms, cfg);
             if (!wouldPush &&
-                WouldHsmmPush(result, tick.obs, theta.enter_leave, walkStartedMs, tick.t_ms, theta.arm_delay_s)) {
+                WouldHsmmPush(result, observation, theta.enter_leave, walkStartedMs, tick.t_ms, theta.arm_delay_s)) {
                 wouldPush = true;
+                pushAtMs = tick.t_ms;
                 leadAtPush = (ep.outcome_ms > tick.t_ms)
                     ? static_cast<double>(ep.outcome_ms - tick.t_ms) / 1000.0
                     : 0.0;
             }
         }
-        if (ep.label == "FALSE_PUSH") {
+        const bool isSoft = ep.label == "FALSE_PUSH" && EpisodeHasBaroLowerPlatform(ep);
+        if (ep.label == "FALSE_PUSH" || ep.label == "TRUE_NEGATIVE") {
+            if (ep.label == "TRUE_NEGATIVE") {
+                ++nTrueNegative;
+            }
             ++nFalse;
-            const bool softOk = EpisodeHasBaroLowerPlatform(ep);
-            if (softOk) {
+            if (isSoft) {
                 // Lobby/1F (baro_lower_platform): same positive target as outdoor confirm —
                 // must keep push; failing to push counts as missed_leave.
                 if (wouldPush) {
@@ -273,6 +294,12 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                 ++missed;
             }
         }
+        std::ostringstream episodeRow;
+        episodeRow << "{\"outcome_t_ms\":" << ep.outcome_ms << ",\"side\":\"" << Esc(ep.side)
+            << "\",\"label\":\"" << Esc(ep.label) << "\",\"soft_lower_platform\":"
+            << (isSoft ? "true" : "false") << ",\"would_push\":" << (wouldPush ? "true" : "false")
+            << ",\"push_t_ms\":" << pushAtMs << ",\"lead_s\":" << leadAtPush << '}';
+        episodeResults.push_back(episodeRow.str());
     }
 
     // soft_false_* = FALSE_PUSH with baro_lower_platform: scored as positives (same as confirmed).
@@ -291,9 +318,10 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
            "Product bans (OUTSIDE/approaching/attach) stay in C++. Filtered by focus_side. "
            "FALSE_PUSH with obs_baro_lower_platform counted as soft_false_* and scored as positives "
            "(kept=+1.5 like confirmed; avoided folds into missed_leave=-3). "
-           "Hard FALSE_PUSH (no baro_lower_platform) stays in false_kept/false_avoided.\""
+            "Hard FALSE_PUSH and explicit TRUE_NEGATIVE stay in false_kept/false_avoided.\""
         << ",\"n_episodes\":" << n << ",\"n_false_push\":" << nFalse << ",\"n_confirmed_leave\":" << nConfirmed
         << ",\"n_missed_leave_label\":" << nMissedLabel
+        << ",\"n_true_negative\":" << nTrueNegative
         << ",\"false_avoided\":" << falseAvoided << ",\"false_kept\":" << falseKept
         << ",\"soft_false_avoided\":" << softFalseAvoided << ",\"soft_false_kept\":" << softFalseKept
         << ",\"confirmed_kept\":" << confirmedKept << ",\"missed_leave\":" << missed
@@ -305,6 +333,12 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         << ",\"w_geo\":" << theta.w_geo << ",\"w_wifi\":" << theta.w_wifi << ",\"w_cell\":" << theta.w_cell
         << ",\"w_ble\":" << theta.w_ble << ",\"w_time\":" << theta.w_time << ",\"w_baro\":" << theta.w_baro
         << ",\"arm_delay_s\":" << theta.arm_delay_s << "}"
+        << ",\"episode_results\":[";
+    for (size_t i = 0; i < episodeResults.size(); ++i) {
+        if (i) oss << ',';
+        oss << episodeResults[i];
+    }
+    oss << ']'
         << ",\"better_guidance\":\"Prefer higher score. If missed_leave rises, revert the last change. "
            "Positives: CONFIRMED_LEAVE and soft_false (FALSE_PUSH with baro_lower_platform / lobby-1F). "
            "soft_false_kept is rewarded; soft_false_avoided counts as missed. "
@@ -334,6 +368,7 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
         if (!ExtractInt64(line, "t_ms", &tick.t_ms)) {
             continue;
         }
+        tick.obs.t_ms = tick.t_ms;
         ExtractNumber(line, "obs_walking", &tick.obs.walking);
         ExtractNumber(line, "obs_pdr_outbound", &tick.obs.pdr_outbound);
         ExtractNumber(line, "obs_geo_outbound", &tick.obs.geo_outbound);
@@ -343,6 +378,20 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
         ExtractNumber(line, "obs_time_prior", &tick.obs.time_prior);
         ExtractNumber(line, "obs_baro_descending", &tick.obs.baro_descending);
         ExtractNumber(line, "obs_baro_lower_platform", &tick.obs.baro_lower_platform);
+        ExtractBool(line, "obs_sequence_available", &tick.obs.sequence_available);
+        ExtractNumber(line, "obs_sequence_progress", &tick.obs.sequence_progress);
+        ExtractNumber(line, "obs_sequence_complete", &tick.obs.sequence_complete);
+        ExtractNumber(line, "obs_negative_pattern_match", &tick.obs.negative_pattern_match);
+        ExtractNumber(line, "obs_sequence_reliability", &tick.obs.sequence_reliability);
+        ExtractNumber(line, "baro_descent_m", &tick.obs.baro_descent_m);
+        tick.obs.baro_stable_platform_known = ExtractBool(
+            line, "baro_stable_platform", &tick.obs.baro_stable_platform);
+        // Old history did not persist stability separately. A recorded lower
+        // platform is still sufficient proof that stability was true.
+        if (!tick.obs.baro_stable_platform_known && tick.obs.baro_lower_platform >= 0.5) {
+            tick.obs.baro_stable_platform = true;
+            tick.obs.baro_stable_platform_known = true;
+        }
         ExtractBool(line, "obs_baro_available", &tick.obs.baro_available);
         ExtractBool(line, "obs_relation_known", &tick.obs.relation_known);
         ExtractBool(line, "obs_inside", &tick.obs.inside);
@@ -354,6 +403,7 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
 
         std::string side = "company";
         ExtractString(line, "side", &side);
+        tick.obs.context_side = side;
         std::string label;
         ExtractString(line, "label", &label);
         int64_t outcomeMs = tick.t_ms;
@@ -399,6 +449,39 @@ struct Episode {
 std::mutex gTrialMu;
 bool gTrialActive = false;
 Theta gTrialSnapshot {};
+
+struct TrialGuardMetrics {
+    bool ok = false;
+    double score = -1.0e100;
+    int false_kept = 0;
+    int soft_false_kept = 0;
+    int confirmed_kept = 0;
+    int missed_leave = 0;
+};
+
+TrialGuardMetrics gTrialBaselineMetrics {};
+
+TrialGuardMetrics ParseTrialGuardMetrics(const std::string &json)
+{
+    TrialGuardMetrics m;
+    bool ok = false;
+    ExtractBool(json, "ok", &ok);
+    m.ok = ok;
+    double v = 0.0;
+    if (ExtractNumber(json, "score", &v)) m.score = v;
+    if (ExtractNumber(json, "false_kept", &v)) m.false_kept = static_cast<int>(v);
+    if (ExtractNumber(json, "soft_false_kept", &v)) m.soft_false_kept = static_cast<int>(v);
+    if (ExtractNumber(json, "confirmed_kept", &v)) m.confirmed_kept = static_cast<int>(v);
+    if (ExtractNumber(json, "missed_leave", &v)) m.missed_leave = static_cast<int>(v);
+    return m;
+}
+
+std::string EvalRootDir()
+{
+    return ProductStore::GetInstance().RootDir().empty()
+        ? std::string("/data/service/el1/public/commuteagentservice")
+        : ProductStore::GetInstance().RootDir();
+}
 
 Theta LoadLiveTheta()
 {
@@ -605,6 +688,13 @@ bool BeginThetaTrial(std::string *err)
         return false;
     }
     gTrialSnapshot = LoadLiveTheta();
+    gTrialBaselineMetrics = ParseTrialGuardMetrics(EvaluateThetaOnHistoryJson(EvalRootDir(), gTrialSnapshot, 0, 30));
+    if (!gTrialBaselineMetrics.ok) {
+        if (err) {
+            *err = "baseline history replay unavailable; refusing unsafe trial";
+        }
+        return false;
+    }
     gTrialActive = true;
     return true;
 }
@@ -622,6 +712,7 @@ bool RevertThetaTrial(std::string *err)
         return false;
     }
     gTrialActive = false;
+    gTrialBaselineMetrics = TrialGuardMetrics {};
     return true;
 }
 
@@ -634,8 +725,53 @@ bool CommitThetaTrial(std::string *err)
         }
         return false;
     }
+    const Theta candidateTheta = LoadLiveTheta();
+    const TrialGuardMetrics candidate =
+        ParseTrialGuardMetrics(EvaluateThetaOnHistoryJson(EvalRootDir(), candidateTheta, 0, 30));
+    if (!candidate.ok) {
+        if (err) {
+            *err = "candidate replay unavailable; revert required";
+        }
+        return false;
+    }
+    if (candidate.score < gTrialBaselineMetrics.score + 0.25) {
+        if (err) {
+            *err = "commit guard: score improvement below 0.25";
+        }
+        return false;
+    }
+    if (candidate.missed_leave > gTrialBaselineMetrics.missed_leave) {
+        if (err) {
+            *err = "commit guard: missed_leave increased";
+        }
+        return false;
+    }
+    if (candidate.false_kept > gTrialBaselineMetrics.false_kept) {
+        if (err) {
+            *err = "commit guard: hard false push increased";
+        }
+        return false;
+    }
+    if (candidate.confirmed_kept < gTrialBaselineMetrics.confirmed_kept ||
+        candidate.soft_false_kept < gTrialBaselineMetrics.soft_false_kept) {
+        if (err) {
+            *err = "commit guard: confirmed/lower-platform positives decreased";
+        }
+        return false;
+    }
     gTrialActive = false;
+    gTrialBaselineMetrics = TrialGuardMetrics {};
     return true;
+}
+
+std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, const Theta &theta,
+    const ObservationAdapter &adapter, int64_t sinceMs, int maxEpisodes)
+{
+    std::vector<HsmmEpisode> hsmmEpisodes;
+    if (!LoadHsmmEpisodes(rootDir, sinceMs, maxEpisodes, &hsmmEpisodes)) {
+        return "{\"ok\":false,\"error\":\"policy_history.jsonl with HSMM observations required for context template replay\"}";
+    }
+    return ScoreHsmmReplay(hsmmEpisodes, theta, adapter);
 }
 
 bool HasActiveThetaTrial()

@@ -18,6 +18,8 @@ add_library(commute_sa
     src/baro_evidence.cpp
     src/anchor_reestimate.cpp
     src/personalization.cpp
+    src/personalization_optimizer.cpp
+    src/context_template.cpp
     src/personalization_policy.cpp
     src/product_store.cpp
     src/evidence_query.cpp
@@ -59,6 +61,9 @@ if(COMMUTE_SA_BUILD_SMOKE)
 
     add_executable(commute_action_smoke tests/smoke_action_ops.cpp)
     target_link_libraries(commute_action_smoke PRIVATE commute_sa)
+
+    add_executable(commute_personalization_optimizer_smoke tests/smoke_personalization_optimizer.cpp)
+    target_link_libraries(commute_personalization_optimizer_smoke PRIVATE commute_sa)
 
     add_executable(commute_offline_tools tests/offline_tools_harness.cpp)
     target_link_libraries(commute_offline_tools PRIVATE commute_sa)

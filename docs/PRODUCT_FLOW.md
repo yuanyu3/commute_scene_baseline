@@ -3,8 +3,8 @@
 ```text
 1) 采集        Ability 硬件 dump（WGS84）+ 离开窗口稀疏样本
 2) 标准化判定  每 tick → SceneEngine（无 LLM）→ 预测推送（仍在家 + ETA≤lead_max）
-3) 个性化      PersonalizationController 触发时 → Agent 生成候选策略/参数
-4) 验证部署    语义历史反事实回放 → policy.json 原子提交或回滚
+3) 个性化      PersonalizationController 触发时 → Agent 生成模板结构（无数值）
+4) 验证部署    全历史 HSMM 回放 → active_context_template.json 提交或 no-op
 ```
 
 推送约束：`OUTSIDE` 不发「带钥匙」；同一离开 episode 只推一次；首次 `OUTSIDE` 记 `t*`/`lead_s` 并立刻 `CONFIRMED_LEAVE` 改参；若约 20min 内从未 `OUTSIDE` 则 `FALSE_PUSH` 再改参。

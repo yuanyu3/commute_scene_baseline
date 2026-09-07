@@ -140,6 +140,7 @@ private:
         bool baro_available = false;
         bool baro_baseline_ready = false;
         double baro_descent_m = 0.0;
+        bool baro_stable_platform = false;
         bool baro_lower_platform = false;
         LeaveObservation hsmm_obs;
     };
