@@ -41,6 +41,7 @@ class LeaveObservation:
     sequence_available: bool = False
     sequence_progress: float = 0.0
     sequence_complete: float = 0.0
+    sequence_ready: float = -1.0
     negative_pattern_match: float = 0.0
     sequence_reliability: float = 0.0
 
@@ -187,8 +188,11 @@ class LeaveHsmm:
                 complete_llr = [-1.00, 0.15, 1.20, -0.35]
                 negative_llr = [0.80, 0.25, -1.00, -0.25]
                 seq_reliability = _clip01(obs.sequence_reliability)
-                value += 2.0 * seq_reliability * _clip01(obs.sequence_progress) * progress_llr[state]
-                value += 2.0 * seq_reliability * _clip01(obs.sequence_complete) * complete_llr[state]
+                if obs.sequence_ready >= 0.0:
+                    value += 2.0 * seq_reliability * _clip01(obs.sequence_ready) * complete_llr[state]
+                else:
+                    value += 2.0 * seq_reliability * _clip01(obs.sequence_progress) * progress_llr[state]
+                    value += 2.0 * seq_reliability * _clip01(obs.sequence_complete) * complete_llr[state]
                 value += 2.0 * seq_reliability * _clip01(obs.negative_pattern_match) * negative_llr[state]
             if obs.risk_available:
                 risk_expected = [

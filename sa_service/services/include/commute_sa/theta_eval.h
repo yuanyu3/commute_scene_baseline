@@ -22,10 +22,13 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
  * Replay history after a deterministic context adapter transforms each HSMM
  * observation. episodeStart is true for the first tick of every episode, so a
  * bounded template interpreter may reset its sequence state.
+ * Optional prefix trace exposes causal posteriors/gates. cutoffMs truncates
+ * inference only; partial replay scores are diagnostic, not fit objectives.
  */
 using ObservationAdapter = std::function<void(LeaveObservation &observation, bool episodeStart)>;
 std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, const Theta &theta,
-    const ObservationAdapter &adapter, int64_t sinceMs = 0, int maxEpisodes = 30);
+    const ObservationAdapter &adapter, int64_t sinceMs = 0, int maxEpisodes = 30,
+    bool includePrefixTrace = false, int64_t cutoffMs = 0);
 
 /** Snapshot / restore live θ for agent trial loops (in-memory + file persist on revert). */
 bool BeginThetaTrial(std::string *err = nullptr);

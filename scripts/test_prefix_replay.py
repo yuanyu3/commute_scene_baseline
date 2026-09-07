@@ -1,0 +1,47 @@
+"""Synthetic regressions against the real C++ replay CLI (no personal data)."""
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+binary = str(Path(sys.argv[1]).resolve())
+with tempfile.TemporaryDirectory(prefix='commute-prefix-') as directory:
+    root = Path(directory)
+    (root / 'theta.json').write_text(json.dumps({'enter_leave': 0.58, 'arm_delay_s': 0,
+        'lead_min_s': 90, 'lead_max_s': 180, 'focus_side': 'company'}))
+    (root / 'active_context_template.json').write_text(json.dumps({
+        'schema_version': 4, 'template_name': 'synthetic', 'side': 'company',
+        'anchor_id': 'synthetic', 'applicability': 'always',
+        'positive_sequence': 'wifi_detach,pdr_outbound,geo_outbound',
+        'ready_prefix_length': 2, 'strength': 0.4}))
+
+    def replay(outcome, label='CONFIRMED_LEAVE', cutoff=0):
+        rows = []
+        for i in range(60):
+            rows.append({'t_ms': 1000000 + i * 5000, 'outcome_t_ms': outcome,
+                'side': 'company', 'label': label, 'obs_walking': 1,
+                'obs_pdr_outbound': 1, 'obs_wifi_detach': 1, 'obs_geo_outbound': 1,
+                'obs_inside': True, 'obs_relation_known': True,
+                'obs_baro_lower_platform': 1, 'obs_baro_available': True})
+        (root / 'policy_history.jsonl').write_text('\n'.join(json.dumps(r) for r in rows))
+        params = {'include_prefix_trace': True, 'cutoff_t_ms': cutoff}
+        result = subprocess.run([binary, directory, 'template_evaluate_frozen', json.dumps(params)],
+                                check=True, capture_output=True, text=True)
+        return json.loads(result.stdout)['frozen']
+
+    initial = replay(1400000)
+    push = initial['episode_results'][0]['push_t_ms']
+    assert push > 0
+    late = replay(push + 20000)
+    earlier = replay(push + 75000)
+    assert abs(earlier['score'] - late['score'] - 55 / 60) < 1e-4
+    soft = replay(push + 75000, 'FALSE_PUSH')
+    assert soft['mean_lead_s'] == 75 and soft['late_seconds'] == 15
+    # Changing outcome time and label must not affect inference.
+    assert soft['episode_results'][0]['prefix_trace'] == initial['episode_results'][0]['prefix_trace']
+    partial = replay(1400000, cutoff=push)
+    assert partial['partial_replay']
+    assert partial['episode_results'][0]['prefix_trace'] == [
+        t for t in initial['episode_results'][0]['prefix_trace'] if t['t_ms'] <= push]
+    print('PASS: continuous timing, soft-positive timing, label/time independence, prefix causality')

@@ -26,6 +26,8 @@ namespace {
 struct Metrics {
     bool ok = false;
     double score = -1.0e100;
+    double mean_lead_s = -1.0;
+    double late_seconds = 0.0;
     int n_episodes = 0;
     int n_false_push = 0;
     int n_confirmed_leave = 0;
@@ -39,6 +41,7 @@ struct Metrics {
 };
 
 struct TemplateSpec {
+    int ready_prefix_length = 0; // 0: legacy fusion; fitted only by bounded replay.
     std::string template_name;
     std::string side = "company";
     std::string anchor_id = "company_001";
@@ -58,6 +61,7 @@ struct TemplateSpec {
 };
 
 struct Candidate {
+    TemplateSpec spec;
     int id = 0;
     std::string strength_name;
     double strength = 0.0;
@@ -70,6 +74,7 @@ struct Trial {
     bool active = false;
     TemplateSpec spec;
     Metrics baseline;
+    Metrics incumbent;
     std::vector<Candidate> candidates;
     int best_index = -1;
 };
@@ -402,6 +407,7 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
     obs->sequence_available = true;
     obs->sequence_progress = 0.0;
     obs->sequence_complete = 0.0;
+    obs->sequence_ready = spec.ready_prefix_length > 0 ? 0.0 : -1.0;
     obs->negative_pattern_match = 0.0;
     obs->sequence_reliability = Clip01(strength);
     if (spec.personalized_time && obs->t_ms > 0) {
@@ -420,6 +426,9 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         const double progress = static_cast<double>(*sequenceIndex) /
             static_cast<double>(spec.positive_sequence.size());
         obs->sequence_progress = Clip01(progress);
+        if (spec.ready_prefix_length > 0) {
+            obs->sequence_ready = *sequenceIndex >= static_cast<size_t>(spec.ready_prefix_length) ? 1.0 : 0.0;
+        }
         if (*sequenceIndex >= spec.positive_sequence.size()) {
             obs->sequence_complete = 1.0;
         }
@@ -468,6 +477,11 @@ void LoadActiveTemplateLocked()
     ExtractNumber(json, "time_center_hour", &spec.time_center_hour);
     ExtractNumber(json, "time_window_min", &spec.time_window_min);
     double count = 0.0;
+    if (ExtractNumber(json, "ready_prefix_length", &count)) {
+        if (!std::isfinite(count) || count < 0 || count > spec.positive_sequence.size() ||
+            count != std::floor(count)) return;
+        spec.ready_prefix_length = static_cast<int>(count);
+    }
     if (ExtractNumber(json, "time_sample_count", &count)) spec.time_sample_count = static_cast<int>(count);
     ExtractBool(json, "personalized_vertical_threshold", &spec.personalized_vertical_threshold);
     ExtractNumber(json, "baro_min_descent_m", &spec.baro_min_descent_m);
@@ -496,6 +510,8 @@ Metrics ParseMetrics(const std::string &json)
 {
     Metrics metrics;
     ExtractBool(json, "ok", &metrics.ok);
+    ExtractNumber(json, "mean_lead_s", &metrics.mean_lead_s);
+    ExtractNumber(json, "late_seconds", &metrics.late_seconds);
     double value = 0.0;
     auto integer = [&](const char *key, int *target) {
         if (ExtractNumber(json, key, &value)) *target = static_cast<int>(value);
@@ -517,7 +533,9 @@ Metrics ParseMetrics(const std::string &json)
 std::string MetricsJson(const Metrics &m)
 {
     std::ostringstream out;
-    out << "{\"score\":" << m.score << ",\"n_episodes\":" << m.n_episodes
+    out << "{\"score_version\":2,\"mean_lead_s\":" << m.mean_lead_s
+        << ",\"late_seconds\":" << m.late_seconds
+        << ",\"score\":" << m.score << ",\"n_episodes\":" << m.n_episodes
         << ",\"n_false_push\":" << m.n_false_push << ",\"n_confirmed_leave\":" << m.n_confirmed_leave
         << ",\"n_missed_leave_label\":" << m.n_missed_leave_label << ",\"false_kept\":" << m.false_kept
         << ",\"false_avoided\":" << m.false_avoided << ",\"soft_false_kept\":" << m.soft_false_kept
@@ -544,29 +562,37 @@ bool Eligible(const Metrics &base, const Metrics &candidate, std::string *why)
 ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
 {
     size_t sequenceIndex = 0;
-    return [spec, strength, sequenceIndex](LeaveObservation &obs, bool episodeStart) mutable {
-        if (episodeStart) sequenceIndex = 0;
+    int64_t lastMatchMs = 0;
+    return [spec, strength, sequenceIndex, lastMatchMs](LeaveObservation &obs, bool episodeStart) mutable {
+        if (episodeStart) { sequenceIndex = 0; lastMatchMs = 0; }
         obs.sequence_available = false;
         obs.sequence_progress = 0.0;
         obs.sequence_complete = 0.0;
+        obs.sequence_ready = -1.0;
         obs.negative_pattern_match = 0.0;
         obs.sequence_reliability = 0.0;
         if (!obs.context_side.empty() && obs.context_side != spec.side) return;
         if (spec.applicability == "baro_ready" && !obs.baro_available) return;
-        ApplySpec(spec, strength, &obs, &sequenceIndex);
+        if (lastMatchMs > 0 && (obs.t_ms < lastMatchMs || obs.t_ms - lastMatchMs > 600000)) {
+            sequenceIndex = 0;
+            lastMatchMs = 0;
+        }
+        if (ApplySpec(spec, strength, &obs, &sequenceIndex)) lastMatchMs = obs.t_ms;
+        if (obs.outside || obs.approaching || obs.attached) { sequenceIndex = 0; lastMatchMs = 0; }
     };
 }
 
 std::string SpecJson(const TemplateSpec &spec, const std::string &strengthName = "", double strength = 0.0)
 {
     std::ostringstream out;
-    out << "{\"schema_version\":3,\"template_name\":\"" << Esc(spec.template_name)
+    out << "{\"schema_version\":4,\"ready_prefix_length\":" << spec.ready_prefix_length
+        << ",\"template_name\":\"" << Esc(spec.template_name)
         << "\",\"side\":\"" << Esc(spec.side) << "\",\"anchor_id\":\"" << Esc(spec.anchor_id)
         << "\",\"applicability\":\"" << Esc(spec.applicability)
         << "\",\"positive_sequence\":\"" << Esc(JoinCsv(spec.positive_sequence))
         << "\",\"negative_pattern\":\"" << Esc(JoinCsv(spec.negative_pattern))
         << "\",\"parameter_families\":\"" << Esc(JoinCsv(spec.parameter_families))
-        << "\",\"positive_effect\":\"emit_sequence_progress_and_completion\","
+        << "\",\"positive_effect\":\"emit_progress_completion_and_optional_prefix_readiness\","
            "\"negative_effect\":\"emit_negative_pattern_match\"";
     out << ",\"personalized_time\":" << (spec.personalized_time ? "true" : "false")
         << ",\"time_center_hour\":" << spec.time_center_hour
@@ -588,6 +614,7 @@ std::string TrialJson(const Trial &trial)
     std::ostringstream out;
     out << "{\"ok\":true,\"trial_active\":" << (trial.active ? "true" : "false")
         << ",\"generated_template\":" << SpecJson(trial.spec) << ",\"baseline\":" << MetricsJson(trial.baseline)
+        << ",\"incumbent\":" << MetricsJson(trial.incumbent)
         << ",\"best_candidate_id\":";
     if (trial.best_index >= 0) out << trial.candidates[trial.best_index].id; else out << "null";
     out << ",\"candidates\":[";
@@ -597,7 +624,8 @@ std::string TrialJson(const Trial &trial)
         out << "{\"id\":" << candidate.id << ",\"strength_level\":\"" << candidate.strength_name
             << "\",\"strength\":" << candidate.strength << ",\"eligible\":"
             << (candidate.eligible ? "true" : "false") << ",\"rejection\":\"" << Esc(candidate.rejection)
-            << "\",\"metrics\":" << MetricsJson(candidate.metrics) << '}';
+            << "\",\"template\":" << SpecJson(candidate.spec, candidate.strength_name, candidate.strength)
+            << ",\"metrics\":" << MetricsJson(candidate.metrics) << '}';
     }
     out << "],\"commit_guard\":{\"score_must_improve\":true,\"hard_false_must_not_increase\":true,"
            "\"confirmed_and_lower_platform_positives_must_not_decrease\":true,\"missed_must_not_increase\":true}}";
@@ -608,17 +636,18 @@ std::string TrialJson(const Trial &trial)
 
 std::string GetContextTemplateCatalogAction(const std::string &)
 {
-    return "{\"ok\":true,\"schema_version\":3,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
+    return "{\"ok\":true,\"schema_version\":4,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
            "\"applicability\":[\"always\",\"baro_ready\"],"
            "\"events\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\","
            "\"ble_detach\",\"baro_descending\",\"lower_platform\",\"outside\",\"approaching\","
            "\"attached\",\"no_baro_descent\",\"no_geo_outbound\"],"
-           "\"effects\":{\"positive_sequence\":\"emit independent sequence_progress/sequence_complete observations\","
+           "\"effects\":{\"positive_sequence\":\"emit progress/completion and replay-calibrated prefix readiness; readiness replaces, never adds to, legacy positive evidence\","
            "\"negative_pattern\":\"emit an independent negative_pattern_match observation\","
            "\"strength\":\"emit sequence_reliability selected by deterministic replay\"},"
            "\"parameter_families\":{\"vertical_threshold\":\"anchor-scoped stable descent threshold; needs 3 validated lower-platform episodes\"},"
            "\"disabled_parameter_families\":{\"departure_time\":\"disabled while collection timestamps are not representative of normal behavior\"},"
-           "\"strengths\":\"LOW|MEDIUM|HIGH selected by deterministic replay\"}";
+           "\"ready_prefix_length\":\"C++ evaluates legacy mode and each causal prefix; agent supplies sequence only\","
+           "\"strengths\":\"LOW|MEDIUM|HIGH selected by deterministic replay with continuous lead score and no false/missed regression\"}";
 }
 
 std::string GenerateContextTemplateAction(const std::string &paramsJson)
@@ -678,23 +707,52 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     trial.active = true;
     trial.spec = spec;
     trial.baseline = baseline;
+    // Replacing an existing template must not regress it merely because the
+    // candidate beats an unpersonalized baseline.
+    TemplateSpec incumbentSpec;
+    double incumbentStrength = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(gTemplateMutex);
+        if (!gActiveLoaded) LoadActiveTemplateLocked();
+        if (gActivePresent && gActiveSpec.side == spec.side && gActiveSpec.anchor_id == spec.anchor_id) {
+            incumbentSpec = gActiveSpec;
+            incumbentStrength = gActiveStrength;
+        }
+    }
+    if (incumbentStrength > 0.0) {
+        trial.incumbent = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
+            RootDir(), theta, BuildAdapter(incumbentSpec, incumbentStrength), 0, 100));
+    }
     const std::vector<std::pair<std::string, double>> levels = {{"LOW", 0.20}, {"MEDIUM", 0.40}, {"HIGH", 0.60}};
     double bestScore = -1.0e100;
     int nextId = 1;
-    for (const auto &level : levels) {
+    for (int prefix = 0; prefix <= static_cast<int>(spec.positive_sequence.size()); ++prefix) {
+      for (const auto &level : levels) {
         Candidate candidate;
+        candidate.spec = spec;
+        candidate.spec.ready_prefix_length = prefix;
         candidate.id = nextId++;
         candidate.strength_name = level.first;
         candidate.strength = level.second;
         candidate.metrics = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(spec, candidate.strength), 0, 100));
+            RootDir(), theta, BuildAdapter(candidate.spec, candidate.strength), 0, 100));
         candidate.eligible = Eligible(baseline, candidate.metrics, &candidate.rejection);
+        if (candidate.eligible && prefix > 0 && baseline.false_avoided + baseline.false_kept == 0) {
+            candidate.eligible = false;
+            candidate.rejection = "prefix_requires_hard_negative_history";
+        }
+        if (candidate.eligible && trial.incumbent.ok &&
+            !Eligible(trial.incumbent, candidate.metrics, &candidate.rejection)) {
+            candidate.eligible = false;
+            candidate.rejection = "incumbent_" + candidate.rejection;
+        }
         const double regularized = candidate.metrics.score - 0.1 * candidate.strength;
         if (candidate.eligible && regularized > bestScore) {
             bestScore = regularized;
             trial.best_index = static_cast<int>(trial.candidates.size());
         }
         trial.candidates.push_back(candidate);
+      }
     }
     std::lock_guard<std::mutex> lock(gTemplateMutex);
     gTrial = std::move(trial);
@@ -716,7 +774,7 @@ std::string CommitContextTemplateAction(const std::string &)
         return "{\"ok\":false,\"error\":\"no eligible context template candidate\"}";
     }
     const Candidate &candidate = gTrial.candidates[gTrial.best_index];
-    const std::string profile = SpecJson(gTrial.spec, candidate.strength_name, candidate.strength);
+    const std::string profile = SpecJson(candidate.spec, candidate.strength_name, candidate.strength);
     std::ofstream active(RootDir() + "/active_context_template.json", std::ios::out | std::ios::trunc);
     std::ofstream history(RootDir() + "/context_templates.jsonl", std::ios::out | std::ios::app);
     if (!active.is_open() || !history.is_open()) {
@@ -754,7 +812,7 @@ std::string GetActiveContextTemplateAction(const std::string &)
     return "{\"ok\":true,\"active\":true,\"template\":" + json + '}';
 }
 
-std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &)
+std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &args)
 {
     TemplateSpec spec;
     double strength = 0.0;
@@ -769,8 +827,14 @@ std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &)
     }
     const Theta theta = CurrentTheta();
     const std::string baseline = EvaluateThetaOnHistoryJson(RootDir(), theta, 0, 1000);
+    bool trace = false;
+    double cutoff = 0;
+    ExtractBool(args, "include_prefix_trace", &trace);
+    ExtractNumber(args, "cutoff_t_ms", &cutoff);
+    if (!std::isfinite(cutoff) || cutoff < 0 || cutoff > 9007199254740991.0)
+        return "{\"ok\":false,\"error\":\"invalid cutoff_t_ms\"}";
     const std::string frozen = EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), theta, BuildAdapter(spec, strength), 0, 1000);
+        RootDir(), theta, BuildAdapter(spec, strength), 0, 1000, trace, static_cast<int64_t>(cutoff));
     return "{\"ok\":true,\"mode\":\"frozen_template_no_tuning\",\"template\":" +
         SpecJson(spec, "FROZEN", strength) + ",\"baseline\":" + baseline + ",\"frozen\":" + frozen + '}';
 }
@@ -789,11 +853,13 @@ bool ApplyActiveContextTemplateObservation(const std::string &side, const std::s
     // A stale partial sequence must not leak into a later departure episode.
     if (gActiveLastMatchMs > 0 && (tMs < gActiveLastMatchMs || tMs - gActiveLastMatchMs > 600000)) {
         gActiveSequenceIndex = 0;
+        gActiveLastMatchMs = 0;
     }
     const bool advanced = ApplySpec(gActiveSpec, gActiveStrength, observation, &gActiveSequenceIndex);
     if (advanced) gActiveLastMatchMs = tMs;
     if (observation->outside || observation->approaching || observation->attached) {
         gActiveSequenceIndex = 0;
+        gActiveLastMatchMs = 0;
     }
     return true;
 }

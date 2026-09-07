@@ -181,7 +181,7 @@ bool EpisodeHasBaroLowerPlatform(const HsmmEpisode &ep)
 }
 
 std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Theta &theta,
-    const ObservationAdapter &adapter = {})
+    const ObservationAdapter &adapter = {}, bool includePrefixTrace = false, int64_t cutoffMs = 0)
 {
     int n = 0;
     int nFalse = 0;
@@ -199,6 +199,9 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     int leadLate = 0;
     int leadEarly = 0;
     double leadAbsErrSum = 0.0;
+    double leadUtility = 0.0;
+    double lateSeconds = 0.0;
+    double leadSum = 0.0;
     int leadErrN = 0;
     std::vector<std::string> episodeResults;
 
@@ -217,13 +220,17 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         double leadAtPush = -1.0;
         int64_t walkStartedMs = 0;
         bool episodeStart = true;
+        std::ostringstream trace;
+        bool firstTrace = true;
         for (const auto &tick : ep.ticks) {
+            if (cutoffMs > 0 && tick.t_ms > cutoffMs) break;
             LeaveObservation observation = tick.obs;
             // Always rebuild template evidence from atomic observations. A
             // historical row may have been recorded under another template.
             observation.sequence_available = false;
             observation.sequence_progress = 0.0;
             observation.sequence_complete = 0.0;
+            observation.sequence_ready = -1.0;
             observation.negative_pattern_match = 0.0;
             observation.sequence_reliability = 0.0;
             if (adapter) {
@@ -238,6 +245,26 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                 walkStartedMs = 0;
             }
             const LeaveHsmmResult result = hsmm.Step(observation, tick.t_ms, cfg);
+            if (includePrefixTrace) {
+                if (!firstTrace) trace << ',';
+                firstTrace = false;
+                trace << "{\"t_ms\":" << tick.t_ms << ",\"probabilities\":[";
+                for (size_t i = 0; i < result.probability.size(); ++i) {
+                    if (i) trace << ',';
+                    trace << result.probability[i];
+                }
+                trace << "],\"sequence_progress\":" << observation.sequence_progress
+                    << ",\"sequence_complete\":" << observation.sequence_complete
+                    << ",\"sequence_ready\":" << observation.sequence_ready
+                    << ",\"negative_match\":" << observation.negative_pattern_match
+                    << ",\"threshold_pass\":" << (result.LeavingProbability() >= theta.enter_leave ? "true" : "false")
+                    << ",\"product_gate_pass\":" << (!observation.outside && !observation.approaching &&
+                        !observation.attached && (observation.inside || observation.near) ? "true" : "false")
+                    << ",\"arm_gate_pass\":" << (walkStartedMs <= 0 ||
+                        tick.t_ms - walkStartedMs >= theta.arm_delay_s * 1000 ? "true" : "false")
+                    << ",\"eligible_push\":" << (WouldHsmmPush(result, observation, theta.enter_leave,
+                        walkStartedMs, tick.t_ms, theta.arm_delay_s) ? "true" : "false") << '}';
+            }
             if (!wouldPush &&
                 WouldHsmmPush(result, observation, theta.enter_leave, walkStartedMs, tick.t_ms, theta.arm_delay_s)) {
                 wouldPush = true;
@@ -248,6 +275,19 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             }
         }
         const bool isSoft = ep.label == "FALSE_PUSH" && EpisodeHasBaroLowerPlatform(ep);
+        // Outcome labels/time are used only for scoring, never by the prefix filter.
+        if (wouldPush && (isSoft || ep.label == "CONFIRMED_LEAVE" || ep.label == "MISSED_LEAVE")) {
+            const double late = std::max(0.0, theta.lead_min_s - leadAtPush);
+            const double early = std::max(0.0, leadAtPush - theta.lead_max_s);
+            leadUtility += 1.0 - (late + early) / 60.0;
+            lateSeconds += late;
+            leadSum += leadAtPush;
+            leadAbsErrSum += std::fabs(leadAtPush - 0.5 * (theta.lead_min_s + theta.lead_max_s));
+            ++leadErrN;
+            if (late > 0) ++leadLate;
+            else if (early > 0) ++leadEarly;
+            else ++leadOk;
+        }
         if (ep.label == "FALSE_PUSH" || ep.label == "TRUE_NEGATIVE") {
             if (ep.label == "TRUE_NEGATIVE") {
                 ++nTrueNegative;
@@ -271,18 +311,6 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             ++nConfirmed;
             if (wouldPush) {
                 ++confirmedKept;
-                if (leadAtPush >= 0.0) {
-                    const double mid = 0.5 * (theta.lead_min_s + theta.lead_max_s);
-                    leadAbsErrSum += std::fabs(leadAtPush - mid);
-                    ++leadErrN;
-                    if (leadAtPush < theta.lead_min_s) {
-                        ++leadLate;
-                    } else if (leadAtPush > theta.lead_max_s) {
-                        ++leadEarly;
-                    } else {
-                        ++leadOk;
-                    }
-                }
             } else {
                 ++missed;
             }
@@ -298,7 +326,9 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         episodeRow << "{\"outcome_t_ms\":" << ep.outcome_ms << ",\"side\":\"" << Esc(ep.side)
             << "\",\"label\":\"" << Esc(ep.label) << "\",\"soft_lower_platform\":"
             << (isSoft ? "true" : "false") << ",\"would_push\":" << (wouldPush ? "true" : "false")
-            << ",\"push_t_ms\":" << pushAtMs << ",\"lead_s\":" << leadAtPush << '}';
+            << ",\"push_t_ms\":" << pushAtMs << ",\"lead_s\":" << leadAtPush;
+        if (includePrefixTrace) episodeRow << ",\"prefix_trace\":[" << trace.str() << ']';
+        episodeRow << '}';
         episodeResults.push_back(episodeRow.str());
     }
 
@@ -306,12 +336,16 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     // soft_false_avoided already folded into missed. Hard FALSE_PUSH only in false_*.
     const double scoreValue = 2.0 * static_cast<double>(falseAvoided) - 2.0 * static_cast<double>(falseKept) +
         1.5 * static_cast<double>(confirmedKept + softFalseKept) - 3.0 * static_cast<double>(missed) +
-        1.5 * static_cast<double>(recovered) + 1.0 * static_cast<double>(leadOk) -
-        0.5 * static_cast<double>(leadLate) - 0.5 * static_cast<double>(leadEarly);
+        1.5 * static_cast<double>(recovered) + leadUtility;
     const double leadMae = (leadErrN > 0) ? (leadAbsErrSum / static_cast<double>(leadErrN)) : -1.0;
 
     std::ostringstream oss;
     oss << "{\"ok\":true,\"method\":\"hsmm_window_replay\""
+        << ",\"score_version\":2,\"lead_utility\":" << leadUtility
+        << ",\"late_seconds\":" << lateSeconds
+        << ",\"mean_lead_s\":" << (leadErrN ? leadSum / leadErrN : -1.0)
+        << ",\"prefix_cutoff_ms\":" << cutoffMs
+        << ",\"partial_replay\":" << (cutoffMs > 0 ? "true" : "false")
         << ",\"focus_side\":\"" << Esc(theta.focus_side) << "\""
         << ",\"notes\":\"Replay LeaveHsmm on stored leave-window observations. Evaluates w_*, enter_leave, and "
            "arm_delay_s. Counterfactual lead_s = t_star - first eligible push tick. "
@@ -765,13 +799,13 @@ bool CommitThetaTrial(std::string *err)
 }
 
 std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, const Theta &theta,
-    const ObservationAdapter &adapter, int64_t sinceMs, int maxEpisodes)
+    const ObservationAdapter &adapter, int64_t sinceMs, int maxEpisodes, bool includePrefixTrace, int64_t cutoffMs)
 {
     std::vector<HsmmEpisode> hsmmEpisodes;
     if (!LoadHsmmEpisodes(rootDir, sinceMs, maxEpisodes, &hsmmEpisodes)) {
         return "{\"ok\":false,\"error\":\"policy_history.jsonl with HSMM observations required for context template replay\"}";
     }
-    return ScoreHsmmReplay(hsmmEpisodes, theta, adapter);
+    return ScoreHsmmReplay(hsmmEpisodes, theta, adapter, includePrefixTrace, cutoffMs);
 }
 
 bool HasActiveThetaTrial()

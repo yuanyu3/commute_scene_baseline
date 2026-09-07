@@ -337,6 +337,7 @@ void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::
             << ",\"obs_sequence_available\":" << (row.hsmm_obs.sequence_available ? "true" : "false")
             << ",\"obs_sequence_progress\":" << row.hsmm_obs.sequence_progress
             << ",\"obs_sequence_complete\":" << row.hsmm_obs.sequence_complete
+            << ",\"obs_sequence_ready\":" << row.hsmm_obs.sequence_ready
             << ",\"obs_negative_pattern_match\":" << row.hsmm_obs.negative_pattern_match
             << ",\"obs_sequence_reliability\":" << row.hsmm_obs.sequence_reliability
             << ",\"obs_relation_known\":" << (row.hsmm_obs.relation_known ? "true" : "false")

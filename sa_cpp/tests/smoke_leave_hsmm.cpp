@@ -145,6 +145,26 @@ int main()
         return 1;
     }
 
+    // Full completion must not double-count calibrated prefix readiness.
+    LeaveHsmm prefixFilter, completeFilter;
+    LeaveObservation prefixObs = positive;
+    prefixObs.sequence_ready = 1.0;
+    prefixObs.sequence_progress = 0.33;
+    prefixObs.sequence_complete = 0.0;
+    LeaveObservation completeObs = prefixObs;
+    completeObs.sequence_progress = 1.0;
+    completeObs.sequence_complete = 1.0;
+    for (int i = 0; i < 20; ++i) {
+        const auto a = prefixFilter.Step(prefixObs, sequenceT + i * 5000, config);
+        const auto b = completeFilter.Step(completeObs, sequenceT + i * 5000, config);
+        for (size_t s = 0; s < 4; ++s) {
+            if (std::abs(a.probability[s] - b.probability[s]) > 1e-12) {
+                std::cerr << "FAIL: prefix/completion evidence double counted\n";
+                return 1;
+            }
+        }
+    }
+
     LeaveHsmmConfig disabledConfig = config;
     disabledConfig.reliability.fill(0.0);
     LeaveHsmm disabledQuiet;

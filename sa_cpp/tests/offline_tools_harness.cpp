@@ -46,7 +46,7 @@ int main(int argc, char **argv)
 {
     // Dataset mode used by ablation scripts:
     //   commute_offline_tools <root> <evaluate|rules|rule_optimize|agent_optimize|profile|
-    //     template_catalog|template_generate|template_trial|template_commit|template_discard|template_active|
+    //     template_catalog|template_generate|template_fit|template_trial|template_commit|template_discard|template_active|
     //     template_evaluate_frozen> [json]
     if (argc >= 3) {
         const std::string dataRoot = argv[1];
@@ -71,6 +71,10 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetContextTemplateCatalogAction(params) << "\n";
         } else if (command == "template_generate") {
             std::cout << commute_sa::GenerateContextTemplateAction(params) << "\n";
+        } else if (command == "template_fit") {
+            const auto trial = commute_sa::GenerateContextTemplateAction(params);
+            std::cout << "{\"trial\":" << trial << ",\"commit\":"
+                      << commute_sa::CommitContextTemplateAction("{}") << "}\n";
         } else if (command == "template_trial") {
             std::cout << commute_sa::GetContextTemplateTrialAction(params) << "\n";
         } else if (command == "template_commit") {
@@ -249,6 +253,28 @@ int main(int argc, char **argv)
         std::abs(seq3.sequence_complete - 1.0) > 1.0e-9 ||
         std::abs(seq3.sequence_reliability - 0.2) > 1.0e-9 || std::abs(seq3.geo_outbound - 1.0) > 1.0e-9) {
         std::cerr << "FAIL positive sequence did not emit independent completion evidence\n";
+        ++fails;
+    }
+
+    Section("GENERIC_PREFIX_READINESS");
+    WriteFile(root + "/active_context_template.json",
+        "{\"schema_version\":4,\"template_name\":\"generic_prefix\",\"side\":\"company\","
+        "\"anchor_id\":\"co\",\"applicability\":\"always\","
+        "\"positive_sequence\":\"wifi_detach,pdr_outbound,geo_outbound\","
+        "\"ready_prefix_length\":2,\"strength\":0.4}");
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    commute_sa::LeaveObservation firstPrefix;
+    firstPrefix.wifi_detach = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1800000000000, &firstPrefix);
+    commute_sa::LeaveObservation readyPrefix;
+    readyPrefix.pdr_outbound = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1800000005000, &readyPrefix);
+    commute_sa::LeaveObservation expiredPrefix;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1800000610000, &expiredPrefix);
+    if (firstPrefix.sequence_ready != 0.0 || readyPrefix.sequence_ready != 1.0 ||
+        readyPrefix.sequence_complete != 0.0 || expiredPrefix.sequence_ready != 0.0 ||
+        readyPrefix.pdr_outbound != 1.0) {
+        std::cerr << "FAIL generic prefix readiness/expiry/raw observation preservation\n";
         ++fails;
     }
 

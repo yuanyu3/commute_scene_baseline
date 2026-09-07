@@ -52,6 +52,7 @@
 | 端侧 tick 与落盘 | `ON_DEVICE_TICK.md` |
 | C++ 实时算法 | `CPP_BASELINE.md` |
 | HSMM 状态、观测与参数 | `HSMM_BASELINE.md` |
+| 前缀就绪、连续提前量评分与冻结回放 | [PREFIX_REPLAY_LEAD_CALIBRATION.md](PREFIX_REPLAY_LEAD_CALIBRATION.md) |
 | Wi-Fi / Cell / BLE 证据 | `RADIO_EVIDENCE.md` |
 | PDR 证据 | `PDR_EVIDENCE.md` |
 | 当前 Agent 模板个性化 | `CONTEXT_TEMPLATE_PERSONALIZATION.md` |

@@ -49,6 +49,8 @@ struct LeaveObservation {
     bool sequence_available = false;
     double sequence_progress = 0.0;
     double sequence_complete = 0.0;
+    // -1 preserves legacy progress/completion fusion; [0,1] is calibrated prefix readiness.
+    double sequence_ready = -1.0;
     double negative_pattern_match = 0.0;
     double sequence_reliability = 0.0;
 };
