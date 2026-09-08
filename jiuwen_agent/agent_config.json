@@ -28,9 +28,13 @@
 
       "get_leave_window_samples",
 
-      "get_leave_sensor_summary"
+      "get_leave_sensor_summary",
 
-      ,"diagnose_context_template"
+      "get_episode_semantic_timeline",
+
+      "get_episode_dynamic_diagnostics",
+
+      "diagnose_context_template"
 
     ],
 

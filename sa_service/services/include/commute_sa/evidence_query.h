@@ -49,6 +49,19 @@ public:
     std::string GetLeaveSensorSummaryJson(const std::string &paramsJson) const;
 
     /**
+     * Aligned, bounded semantic timeline from policy_history.jsonl.
+     * params: {"episode_id":"...","side":"company","outcome_t_ms":0,
+     *          "bin_s":10,"start_ms":0,"end_ms":0,"max_bins":120}
+     */
+    std::string GetEpisodeSemanticTimelineJson(const std::string &paramsJson) const;
+
+    /**
+     * Deterministic duration/order/recovery diagnostics for one semantic episode.
+     * Uses the same identity params as GetEpisodeSemanticTimelineJson.
+     */
+    std::string GetEpisodeDynamicDiagnosticsJson(const std::string &paramsJson) const;
+
+    /**
      * Debug-only raw CSV windows (not registered for the Agent).
      * params: {"t_center_ms":0,"before_s":600,"after_s":1200,"session_dir":"","limit":200}
      */

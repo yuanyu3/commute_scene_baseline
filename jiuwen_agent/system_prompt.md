@@ -15,7 +15,8 @@
 
 1. 查询目标标签、总体错误统计、当前 theta、目标 episode 和跨 episode 画像。
 2. 调用 `get_anchors`，根据 `focus_side` 选择真实锚点；后续 `anchor_id` 必须逐字使用工具返回的 ID，不得创造、改写或根据语义命名 ID。
-3. 查询目标完整传感器摘要，并按需查询轨迹窗口。所有结论必须能引用工具返回的字段。
+3. 使用多分辨率证据：先查询目标完整传感器摘要；仅对能区分竞争假设的episode调用 `get_episode_semantic_timeline`，先用10秒bin，需要时用5秒或收窄start/end；持续、事件顺序、恢复和跨传感器时差必须调用 `get_episode_dynamic_diagnostics` 精确计算，不能凭表格目测估计。所有结论必须能引用工具返回的字段。
+   timeline来自逐tick语义历史，不是原始波形。`known_ticks=0` 是缺失；已观测均值为0才是无变化。空bin表示该时间段没有语义tick，不得插值补全。若工具因max_bins拒绝，增大bin或缩小窗口，而不是要求输出无限数据。
    对返回过程必须先调用 `get_aborted_leave_candidates`，用逐 episode 的下降、回升、闭合和 outside 时间证据筛选；该工具只提供证据，不等于已经确认中止离开。
    对返回候选逐条记录“提出解释 / 证据不足 / 存在反证”及字段依据，不能静默略过。若结果 truncated，增大 limit；仍不完整时明确覆盖限制。
    attached_observed 只是全程曾经连接，不能证明返回时重连；false 也不能证明没有返回。辅助证据缺失不得升级为拒绝条件。对可用但不支持、不可用和缺字段分别说明；工具没有质量信息时标记 unknown。

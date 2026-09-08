@@ -66,6 +66,14 @@ std::string GetSensorSummary(const std::string &p)
 {
     return commute_sa::EvidenceQuery::GetInstance().GetLeaveSensorSummaryJson(p);
 }
+std::string GetSemanticTimeline(const std::string &p)
+{
+    return commute_sa::EvidenceQuery::GetInstance().GetEpisodeSemanticTimelineJson(p);
+}
+std::string GetDynamicDiagnostics(const std::string &p)
+{
+    return commute_sa::EvidenceQuery::GetInstance().GetEpisodeDynamicDiagnosticsJson(p);
+}
 std::string ApplyDelta(const std::string &p)
 {
     return commute_sa::ApplyThetaDeltaAction(p);
@@ -150,6 +158,20 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"before_s", "optional", "integer", false}, {"after_s", "optional", "integer", false},
             {"session_dir", "optional", "string", false}},
         &GetSensorSummary);
+    Reg("get_episode_semantic_timeline",
+        "Bounded 5-60 second aligned semantic timeline; distinguishes missing from observed zero",
+        {{"episode_id", "exact episode identifier", "string", true},
+            {"side", "company|home", "string", false}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
+            {"bin_s", "5..60 seconds, default 10", "integer", false},
+            {"start_ms", "optional inclusive window start", "integer", false},
+            {"end_ms", "optional inclusive window end", "integer", false},
+            {"max_bins", "1..120, default 120", "integer", false}}, &GetSemanticTimeline);
+    Reg("get_episode_dynamic_diagnostics",
+        "Exact semantic event intervals, vertical recovery descriptors and cross-sensor lags for one episode",
+        {{"episode_id", "exact episode identifier", "string", true},
+            {"side", "company|home", "string", false}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
+            {"start_ms", "optional inclusive window start", "integer", false},
+            {"end_ms", "optional inclusive window end", "integer", false}}, &GetDynamicDiagnostics);
     Reg("get_param_limits", "Param min/max/step", {}, &GetLimits);
     Reg("evaluate_theta_on_history", "Replay LeaveHsmm on stored leave-window obs (can evaluate w_*)",
         {{"since_ms", "optional", "integer", false}, {"limit", "optional", "integer", false}}, &EvalHistory);
@@ -254,7 +276,8 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("commit_policy_trial", "Activate candidate and clear trial", {}, &CommitPolicy);
 
     return {"get_theta", "get_anchors", "get_error_stats", "get_leave_episode", "get_leave_window_samples",
-        "get_leave_sensor_summary", "get_param_limits", "evaluate_theta_on_history", "begin_theta_trial",
+        "get_leave_sensor_summary", "get_episode_semantic_timeline", "get_episode_dynamic_diagnostics",
+        "get_param_limits", "evaluate_theta_on_history", "begin_theta_trial",
         "revert_theta_trial", "commit_theta_trial", "apply_theta_delta", "write_audit", "request_anchor_reestimate",
         "analyze_personalization_rules", "run_constrained_theta_optimizer", "run_rule_personalization",
         "get_optimization_trial", "commit_optimized_theta", "discard_optimization_trial",

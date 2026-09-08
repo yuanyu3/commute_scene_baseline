@@ -519,7 +519,8 @@ int main(int argc, char **argv)
     auto tools = personalizer::RegisterPersonalizerTools();
     if (diagnosticOnly) {
         const std::unordered_set<std::string> allowed = {"get_theta", "get_anchors", "get_error_stats",
-            "get_leave_episode", "get_leave_window_samples", "get_leave_sensor_summary", "get_param_limits",
+            "get_leave_episode", "get_leave_window_samples", "get_leave_sensor_summary",
+            "get_episode_semantic_timeline", "get_episode_dynamic_diagnostics", "get_param_limits",
             "evaluate_theta_on_history", "analyze_personalization_rules", "get_personalization_profile",
             "submit_agent_analysis", "write_audit", "get_active_context_template", "diagnose_context_template"};
         tools.erase(std::remove_if(tools.begin(), tools.end(),

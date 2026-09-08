@@ -70,6 +70,10 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetPersonalizationProfileAction(params) << "\n";
         } else if (command == "template_catalog") {
             std::cout << commute_sa::GetContextTemplateCatalogAction(params) << "\n";
+        } else if (command == "semantic_timeline") {
+            std::cout << commute_sa::EvidenceQuery::GetInstance().GetEpisodeSemanticTimelineJson(params) << "\n";
+        } else if (command == "dynamic_diagnostics") {
+            std::cout << commute_sa::EvidenceQuery::GetInstance().GetEpisodeDynamicDiagnosticsJson(params) << "\n";
         } else if (command == "aborted_candidates") {
             std::cout << commute_sa::GetAbortedLeaveCandidatesAction(params) << "\n";
         } else if (command == "propose_aborted") {
@@ -238,6 +242,27 @@ int main(int argc, char **argv)
         eq.GetLeaveSensorSummaryJson("{\"t_push_ms\":1700000000000,\"before_s\":600,\"after_s\":1200}"));
     expectOk("get_leave_sensor_summary",
         eq.GetLeaveSensorSummaryJson("{\"t_push_ms\":1700000000000,\"before_s\":600,\"after_s\":1200}"));
+    const std::string semanticTimeline = eq.GetEpisodeSemanticTimelineJson(
+        "{\"episode_id\":\"abort_0\",\"side\":\"company\",\"bin_s\":10}");
+    Call("get_episode_semantic_timeline", semanticTimeline);
+    if (semanticTimeline.find("\"quality\":\"OBSERVED\"") == std::string::npos ||
+        semanticTimeline.find("\"vertical_closure\"") == std::string::npos ||
+        semanticTimeline.find("\"known_ticks\":1") == std::string::npos) {
+        std::cerr << "FAIL semantic timeline lost aligned signal detail\n"; ++fails;
+    }
+    const std::string dynamics = eq.GetEpisodeDynamicDiagnosticsJson(
+        "{\"episode_id\":\"abort_0\",\"side\":\"company\"}");
+    Call("get_episode_dynamic_diagnostics", dynamics);
+    if (dynamics.find("\"ordered_return\":true") == std::string::npos ||
+        dynamics.find("\"first_ascending_after_descent_ms\":1800345620000") == std::string::npos ||
+        dynamics.find("\"first_closure_after_ascent_ms\":1800345630000") == std::string::npos) {
+        std::cerr << "FAIL dynamic diagnostics lost ordered return\n"; ++fails;
+    }
+    const std::string boundedTimeline = eq.GetEpisodeSemanticTimelineJson(
+        "{\"episode_id\":\"abort_0\",\"side\":\"company\",\"bin_s\":5,\"max_bins\":1}");
+    if (boundedTimeline.find("exceeds max_bins") == std::string::npos) {
+        std::cerr << "FAIL semantic timeline ignored output budget\n"; ++fails;
+    }
 
     Section("ACTION");
     Call("get_param_limits", std::string("{\"ok\":true,\"param_limits\":") + commute_sa::GetParamLimitsJson() + "}");
