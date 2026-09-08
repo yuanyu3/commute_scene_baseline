@@ -66,6 +66,14 @@ std::string GetSensorSummary(const std::string &p)
 {
     return commute_sa::EvidenceQuery::GetInstance().GetLeaveSensorSummaryJson(p);
 }
+std::string GetSemanticTimeline(const std::string &p)
+{
+    return commute_sa::EvidenceQuery::GetInstance().GetEpisodeSemanticTimelineJson(p);
+}
+std::string GetDynamicDiagnostics(const std::string &p)
+{
+    return commute_sa::EvidenceQuery::GetInstance().GetEpisodeDynamicDiagnosticsJson(p);
+}
 std::string ApplyDelta(const std::string &p)
 {
     return commute_sa::ApplyThetaDeltaAction(p);
@@ -111,6 +119,14 @@ std::string GetProfile(const std::string &p) { return commute_sa::GetPersonaliza
 std::string ProposeProfile(const std::string &p) { return commute_sa::ProposeContextProfileUpdateAction(p); }
 std::string SubmitAnalysis(const std::string &p) { return commute_sa::SubmitAgentAnalysisAction(p); }
 std::string GetTemplateCatalog(const std::string &p) { return commute_sa::GetContextTemplateCatalogAction(p); }
+std::string GetAbortedCandidates(const std::string &p)
+{
+    return commute_sa::GetAbortedLeaveCandidatesAction(p);
+}
+std::string ProposeAbortedLeave(const std::string &p)
+{
+    return commute_sa::ProposeAbortedLeaveInterpretationAction(p);
+}
 std::string GenerateTemplate(const std::string &p) { return commute_sa::GenerateContextTemplateAction(p); }
 std::string GetTemplateTrial(const std::string &p) { return commute_sa::GetContextTemplateTrialAction(p); }
 std::string CommitTemplate(const std::string &p) { return commute_sa::CommitContextTemplateAction(p); }
@@ -142,6 +158,20 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"before_s", "optional", "integer", false}, {"after_s", "optional", "integer", false},
             {"session_dir", "optional", "string", false}},
         &GetSensorSummary);
+    Reg("get_episode_semantic_timeline",
+        "Bounded 5-60 second aligned semantic timeline; distinguishes missing from observed zero",
+        {{"episode_id", "exact episode identifier", "string", true},
+            {"side", "company|home", "string", false}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
+            {"bin_s", "5..60 seconds, default 10", "integer", false},
+            {"start_ms", "optional inclusive window start", "integer", false},
+            {"end_ms", "optional inclusive window end", "integer", false},
+            {"max_bins", "1..120, default 120", "integer", false}}, &GetSemanticTimeline);
+    Reg("get_episode_dynamic_diagnostics",
+        "Exact semantic event intervals, vertical recovery descriptors and cross-sensor lags for one episode",
+        {{"episode_id", "exact episode identifier", "string", true},
+            {"side", "company|home", "string", false}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
+            {"start_ms", "optional inclusive window start", "integer", false},
+            {"end_ms", "optional inclusive window end", "integer", false}}, &GetDynamicDiagnostics);
     Reg("get_param_limits", "Param min/max/step", {}, &GetLimits);
     Reg("evaluate_theta_on_history", "Replay LeaveHsmm on stored leave-window obs (can evaluate w_*)",
         {{"since_ms", "optional", "integer", false}, {"limit", "optional", "integer", false}}, &EvalHistory);
@@ -194,6 +224,21 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("get_context_template_catalog",
         "Return bounded event/effect primitives that the Agent may compose into a new context template", {},
         &GetTemplateCatalog);
+    Reg("get_aborted_leave_candidates",
+        "Return read-only per-episode descent, ascent, closure, outside and support-event timing",
+        {{"side", "company|home", "string", false}, {"limit", "1..100", "integer", false}},
+        &GetAbortedCandidates);
+    Reg("propose_aborted_leave_interpretation",
+        "Propose a FALSE_PUSH as ABORTED_LEAVE; C++ requires a confirmed shared prefix, ascent, vertical closure and no outside",
+        {{"side", "company|home", "string", true}, {"episode_id", "exact episode id", "string", true},
+            {"confidence", "0.5..1", "number", true}, {"rationale", "evidence-grounded inference", "string", true}},
+        &ProposeAbortedLeave);
+    Reg("diagnose_context_template",
+        "Read-only active-template ablation on the same history: compare per-episode push timing, prefix readiness, completion and gates. Not physical causal proof; never tunes or commits.",
+        {{"ablation", "disable positive|negative|both sequence terms or cancel_path", "string", true},
+            {"path_index", "zero-based alternative path to remove for cancel_path ablation", "integer", false},
+            {"limit", "1..100 episodes, default 20", "integer", false}},
+        &commute_sa::DiagnoseContextTemplateOnHistoryAction);
     Reg("generate_context_template",
         "Validate an Agent-composed event sequence, deterministically estimate requested parameter families, replay strengths, and stage the best safe template",
         {{"template_name", "new stable identifier", "string", true},
@@ -201,6 +246,8 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"anchor_id", "context anchor identifier", "string", true},
             {"applicability", "always|baro_ready", "string", true},
             {"positive_sequence", "comma-separated supported events in temporal order", "string", true},
+            {"cancel_sequence", "optional ordered return events after the positive prefix starts", "string", false},
+            {"cancel_paths", "optional alternatives: comma-ordered events, pipe-separated paths; see catalog; excludes cancel_sequence", "string", false},
             {"negative_pattern", "comma-separated events that jointly suppress nonspecific leave evidence", "string", false},
             {"parameter_families", "optional vertical_threshold; departure_time is disabled; C++ estimates values", "string", false},
             {"rationale", "evidence-grounded explanation", "string", true}},
@@ -229,12 +276,14 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("commit_policy_trial", "Activate candidate and clear trial", {}, &CommitPolicy);
 
     return {"get_theta", "get_anchors", "get_error_stats", "get_leave_episode", "get_leave_window_samples",
-        "get_leave_sensor_summary", "get_param_limits", "evaluate_theta_on_history", "begin_theta_trial",
+        "get_leave_sensor_summary", "get_episode_semantic_timeline", "get_episode_dynamic_diagnostics",
+        "get_param_limits", "evaluate_theta_on_history", "begin_theta_trial",
         "revert_theta_trial", "commit_theta_trial", "apply_theta_delta", "write_audit", "request_anchor_reestimate",
         "analyze_personalization_rules", "run_constrained_theta_optimizer", "run_rule_personalization",
         "get_optimization_trial", "commit_optimized_theta", "discard_optimization_trial",
         "get_personalization_profile", "propose_context_profile_update", "submit_agent_analysis",
-        "get_context_template_catalog", "generate_context_template", "get_context_template_trial",
+        "get_context_template_catalog", "get_aborted_leave_candidates",
+        "propose_aborted_leave_interpretation", "diagnose_context_template", "generate_context_template", "get_context_template_trial",
         "commit_context_template", "discard_context_template", "get_active_context_template",
         "get_personalization_policy", "get_policy_catalog", "begin_policy_trial", "apply_policy_candidate",
         "evaluate_policy_on_history", "revert_policy_trial", "commit_policy_trial"};

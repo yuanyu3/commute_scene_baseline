@@ -127,7 +127,9 @@ class TickFeatures:
     baro_baseline_ready: bool = False
     baro_stable_platform: bool = False
     baro_descending: float = 0.0
+    baro_ascending: float = 0.0
     baro_lower_platform: bool = False
+    vertical_closure: bool = False
     baro_mode: str = "OFF"
 
 
@@ -646,6 +648,8 @@ class SceneEngine:
                 attached=attached,
                 baro_descending=feat.baro_descending if baro_ready else 0.0,
                 baro_lower_platform=1.0 if baro_ready and feat.baro_lower_platform else 0.0,
+                baro_ascending=feat.baro_ascending if baro_ready else 0.0,
+                vertical_closure=1.0 if baro_ready and feat.vertical_closure else 0.0,
                 baro_available=baro_ready,
             )
 

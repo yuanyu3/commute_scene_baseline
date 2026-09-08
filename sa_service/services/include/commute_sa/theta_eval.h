@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace commute_sa {
 
@@ -22,10 +23,27 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
  * Replay history after a deterministic context adapter transforms each HSMM
  * observation. episodeStart is true for the first tick of every episode, so a
  * bounded template interpreter may reset its sequence state.
+ * Optional prefix trace exposes causal posteriors/gates. cutoffMs truncates
+ * inference only; partial replay scores are diagnostic, not fit objectives.
  */
 using ObservationAdapter = std::function<void(LeaveObservation &observation, bool episodeStart)>;
+struct ReplayEpisodeSummary {
+    std::string key;
+    bool positive = false;
+    bool hard_negative = false;
+    bool pushed = false;
+    int64_t push_ms = 0;
+    double lead_s = -1.0;
+    bool aborted = false;
+    int64_t cancel_ms = 0;
+};
+// Reject per-episode regressions; aggregate counts can hide swaps between episodes.
+bool CheckReplayEpisodeSafety(const std::vector<ReplayEpisodeSummary> &baseline,
+    const std::vector<ReplayEpisodeSummary> &candidate, std::string *reason);
 std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, const Theta &theta,
-    const ObservationAdapter &adapter, int64_t sinceMs = 0, int maxEpisodes = 30);
+    const ObservationAdapter &adapter, int64_t sinceMs = 0, int maxEpisodes = 30,
+    bool includePrefixTrace = false, int64_t cutoffMs = 0,
+    std::vector<ReplayEpisodeSummary> *summaries = nullptr);
 
 /** Snapshot / restore live θ for agent trial loops (in-memory + file persist on revert). */
 bool BeginThetaTrial(std::string *err = nullptr);

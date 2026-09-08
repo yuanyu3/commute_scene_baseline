@@ -67,6 +67,16 @@ std::string CallGetLeaveSensorSummary(const std::string &params)
     return commute_sa::EvidenceQuery::GetInstance().GetLeaveSensorSummaryJson(params);
 }
 
+std::string CallGetSemanticTimeline(const std::string &params)
+{
+    return commute_sa::EvidenceQuery::GetInstance().GetEpisodeSemanticTimelineJson(params);
+}
+
+std::string CallGetDynamicDiagnostics(const std::string &params)
+{
+    return commute_sa::EvidenceQuery::GetInstance().GetEpisodeDynamicDiagnosticsJson(params);
+}
+
 ErrorCode RegisterOne(const char *name, const char *desc,
     const std::vector<std::tuple<std::string, std::string, std::string, bool>> &params,
     EvidenceToolBase::Handler handler)
@@ -88,6 +98,8 @@ const std::vector<std::string> &EvidenceToolNames()
         "get_leave_episode",
         "get_leave_window_samples",
         "get_leave_sensor_summary",
+        "get_episode_semantic_timeline",
+        "get_episode_dynamic_diagnostics",
     };
     return kNames;
 }
@@ -120,6 +132,19 @@ std::vector<std::string> RegisterEvidenceTools()
             {"after_s", "Seconds after center (default 1200)", "integer", false},
             {"session_dir", "Ability dump session path; omit → latest", "string", false}},
         &CallGetLeaveSensorSummary);
+    RegisterOne("get_episode_semantic_timeline",
+        "Bounded aligned semantic timeline; missing values remain distinct from observed zero",
+        {{"episode_id", "Exact episode identifier", "string", true},
+            {"side", "company|home", "string", false}, {"outcome_t_ms", "Required if id ambiguous", "integer", false},
+            {"bin_s", "5..60 seconds", "integer", false}, {"start_ms", "Optional window start", "integer", false},
+            {"end_ms", "Optional window end", "integer", false}, {"max_bins", "1..120", "integer", false}},
+        &CallGetSemanticTimeline);
+    RegisterOne("get_episode_dynamic_diagnostics",
+        "Semantic event intervals, vertical recovery descriptors and cross-sensor lags",
+        {{"episode_id", "Exact episode identifier", "string", true},
+            {"side", "company|home", "string", false}, {"outcome_t_ms", "Required if id ambiguous", "integer", false},
+            {"start_ms", "Optional window start", "integer", false}, {"end_ms", "Optional window end", "integer", false}},
+        &CallGetDynamicDiagnostics);
 
     return EvidenceToolNames();
 }

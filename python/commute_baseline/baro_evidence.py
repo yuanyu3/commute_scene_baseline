@@ -15,8 +15,10 @@ class BaroSnapshot:
     pressure_hpa: Optional[float] = None
     descent_m: float = 0.0
     descending: float = 0.0
+    ascending: float = 0.0
     lower_platform: bool = False
     stable_platform: bool = False
+    vertical_closure: bool = False
 
 
 class BaroEvidence:
@@ -26,6 +28,7 @@ class BaroEvidence:
         self.samples: Deque[Tuple[datetime, float]] = deque()
         self.baseline_hpa: Optional[float] = None
         self.prev_pressure: Optional[float] = None
+        self.max_descent_m = 0.0
 
     def observe(self, t: datetime, pressure_hpa: float) -> None:
         if not 850.0 <= pressure_hpa <= 1100.0:
@@ -46,10 +49,22 @@ class BaroEvidence:
         stable = len(recent) >= 5 and max(p for _, p in recent) - min(p for _, p in recent) <= self.stable_span_hpa
         if self.baseline_hpa is None and workplace_ready and stable:
             self.baseline_hpa = pressure
+            self.max_descent_m = 0.0
         descent = 0.0 if self.baseline_hpa is None else self._descent_m(self.baseline_hpa, pressure)
+        self.max_descent_m = max(self.max_descent_m, descent)
         descending = 0.0
+        ascending = 0.0
         if self.prev_pressure is not None:
             descending = max(0.0, min(1.0, (pressure - self.prev_pressure) / 0.18))
+            ascending = max(0.0, min(1.0, (self.prev_pressure - pressure) / 0.18))
+        vertical_closure = (
+            self.baseline_hpa is not None
+            and stable
+            and self.max_descent_m >= max(4.0, min_descent_m)
+            and descent <= 3.0
+        )
+        if vertical_closure:
+            self.max_descent_m = 0.0
         self.prev_pressure = pressure
         return BaroSnapshot(
             available=True,
@@ -57,6 +72,8 @@ class BaroEvidence:
             pressure_hpa=pressure,
             descent_m=descent,
             descending=descending,
+            ascending=ascending,
             stable_platform=stable,
             lower_platform=stable and descent >= min_descent_m,
+            vertical_closure=vertical_closure,
         )

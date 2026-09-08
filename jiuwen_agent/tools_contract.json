@@ -130,6 +130,34 @@
 
     {
 
+      "name": "get_episode_semantic_timeline",
+
+      "category": "evidence",
+
+      "description": "Bounded multi-resolution timeline from stored semantic ticks. Use after overview to inspect slopes, persistence and synchronization; it is not raw sensor data.",
+
+      "input_schema": {"episode_id": "required", "side": "company|home", "outcome_t_ms": "required if id ambiguous", "bin_s": "5..60", "start_ms": "optional", "end_ms": "optional", "max_bins": "1..120"},
+
+      "output_schema": {"bins": "aligned bins with sample count, missing/observed quality, barometer coverage and signal mean/peak"}
+
+    },
+
+    {
+
+      "name": "get_episode_dynamic_diagnostics",
+
+      "category": "evidence",
+
+      "description": "Deterministic event intervals, vertical change/recovery descriptors and cross-sensor lags for one episode.",
+
+      "input_schema": {"episode_id": "required", "side": "company|home", "outcome_t_ms": "required if id ambiguous", "start_ms": "optional", "end_ms": "optional"},
+
+      "output_schema": {"coverage": "stored semantic coverage", "vertical_dynamics": "order, monotonicity and durations", "cross_sensor_lags_s": "event timing differences", "event_intervals": "start/end/observed span/estimated duration/support/peak"}
+
+    },
+
+    {
+
       "name": "get_param_limits",
 
       "category": "action",
@@ -308,6 +336,34 @@
     },
 
     {
+      "name": "get_aborted_leave_candidates",
+      "kind": "read_only",
+      "description": "Return per-episode material descent, lower-platform, ascent, vertical-closure, outside and support-event timing. This is evidence rather than a label.",
+      "input_schema": {"side": "company|home", "limit": "1..100"}
+    },
+    {
+      "name": "propose_aborted_leave_interpretation",
+      "category": "template",
+      "description": "Propose that an original FALSE_PUSH is an ABORTED_LEAVE. C++ validates material descent, a shared prefix found in confirmed history, later ascent and vertical closure, and absence of outside before appending a non-destructive interpretation.",
+      "input_schema": {
+        "side": "home|company",
+        "episode_id": "exact string from history",
+        "outcome_t_ms": "optional exact integer; required only when episode_id is ambiguous",
+        "confidence": "0.5..1",
+        "rationale": "evidence-grounded inference"
+      },
+      "output_schema": {"ok": "bool", "episode_type": "ABORTED_LEAVE", "abort_t_ms": "int"}
+    },
+
+    {
+      "name": "diagnose_context_template",
+      "category": "evidence",
+      "description": "Read-only sequence-term intervention on an active template. Compare matched episode rows; no fit or commit and no physical causal guarantee.",
+      "input_schema": {"ablation": "positive|negative|both|cancel_path", "path_index": "required zero-based index for cancel_path", "limit": "optional integer 1..100, default 20"},
+      "output_schema": {"read_only": "bool", "template": "object", "active": "replay object", "ablated": "replay object"}
+    },
+
+    {
       "name": "generate_context_template",
       "category": "template",
       "description": "Validate Agent structure, emit independent sequence observations without rewriting atomic sensors, estimate requested parameter families in C++, and replay LOW/MEDIUM/HIGH sequence reliabilities on all historical HSMM episodes.",
@@ -317,6 +373,8 @@
         "anchor_id": "string",
         "applicability": "always|baro_ready",
         "positive_sequence": "comma-separated catalog events",
+        "cancel_sequence": "comma-separated ordered return events, optional; requires >=2 ABORTED_LEAVE episodes",
+        "cancel_paths": "optional alternative ordered paths separated by |; each path uses comma-separated catalog events; mutually exclusive with cancel_sequence; requires >=2 ABORTED_LEAVE episodes",
         "negative_pattern": "comma-separated catalog events, optional",
         "parameter_families": "vertical_threshold, optional; departure_time disabled; Agent supplies no values",
         "rationale": "string"

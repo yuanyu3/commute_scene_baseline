@@ -2082,18 +2082,16 @@ constexpr const char *kSaContextEngineDatabaseDir = "/data/service/el2/9903/data
 constexpr const char *kThetaPersonalizerSystemPrompt = R"delimiter(
  你是离家检测的低频个性化研究 Agent。实时场景由端侧 HSMM + SceneEngine 确定；你不参与逐 tick 推断，也不直接写数值参数。
 
- 先查看总体错误、当前 theta、目标 episode 和 get_personalization_profile；根据疑点主动查询传感器摘要和对照 episode。调用 analyze_personalization_rules，
- 把固定规则结果当作对照意见。提出最多三个可证伪假设，每个假设同时记录支持证据、反证、缺失证据和置信度；识别可由端侧
- 观测确定的上下文差异，例如定位来源、气压适用性、无线重新附着、PDR外向与回撤。
+ 先查看总体错误、当前 theta、真实 anchor、目标完整 episode 和跨 episode 画像，再按疑点查询传感器摘要。提出最多三个可证伪假设，
+ 每个假设记录支持证据、反证、缺失证据和置信度。区分传感器不可用、可用但无变化、已形成离开前缀后行为反转三种情况。
 
- 证据充分时，用 run_constrained_theta_optimizer 指定语义参数块、increase/decrease方向和实验目标。不得提供具体 theta 数值。
- 阅读候选结果后最多改写一次计划，总候选预算不超过20。只有工具返回通过硬门的 best_candidate_id 时才调用
- submit_agent_analysis 固化假设。只有工具返回通过硬门的 best_candidate_id 时才调用 commit_optimized_theta，否则
- discard_optimization_trial 并记录 no_op。上下文满足支持门槛时可 propose_context_profile_update 保存长期记忆，但画像不能绕过回放。
+ 对原始 FALSE_PUSH，只有完整历史显示它与确认离开共享前缀、随后气压回升并回到起始高度、且未 outside 时，才可提议
+ propose_aborted_leave_interpretation；这仍是行为推断，不是主观意图事实。至少两个 ABORTED_LEAVE 支持时，才可把有序返回过程写入
+ cancel_sequence。调用 get_context_template_catalog 后，只能组合白名单 positive_sequence、cancel_sequence 和 negative_pattern；不得提供
+ 数值强度、阈值或参数变化。C++ 负责参数估计、前缀/强度枚举和全历史回放。
 
- 正常流程不得调用 apply_theta_delta、begin_theta_trial 或 commit_theta_trial；这些工具只为旧版对照实验保留。禁止把单个传感器
- 当作充分条件，禁止编造证据，证据冲突或样本不足时必须允许不修改。最后 write_audit 记录上下文、多个假设、支持与反证、
- 实验计划、泛化风险、提交决定和仍需收集的数据。
+ 每次任务最多生成一次模板。只有 best_candidate_id 非空且所有硬门通过时才提交，否则丢弃或 no_op。禁止把单个传感器当作充分条件，
+ 禁止编造证据。最后 submit_agent_analysis 和 write_audit 记录假设、解释变更、回放结果、泛化风险和仍需收集的数据。
 )delimiter";
 } // namespace
 #endif

@@ -1245,6 +1245,318 @@ void LoadPdrFromSegments(const std::string &sessionDir, int64_t t0, int64_t t1, 
 
 }  // namespace
 
+namespace {
+
+struct SemanticHistoryRow {
+    int64_t t = 0;
+    int64_t outcome = 0;
+    std::string episode;
+    std::string side;
+    std::string label;
+    double descent = 0.0;
+    bool baroAvailable = false;
+    std::map<std::string, double> value;
+    std::map<std::string, bool> flag;
+    std::map<std::string, double> model;
+};
+
+const std::vector<std::string> &TimelineValues()
+{
+    static const std::vector<std::string> fields {
+        "walking", "pdr_outbound", "geo_outbound", "wifi_detach", "cell_detach",
+        "ble_detach", "time_prior", "baro_descending", "baro_lower_platform",
+        "baro_ascending", "vertical_closure"
+    };
+    return fields;
+}
+
+const std::vector<std::string> &TimelineFlags()
+{
+    static const std::vector<std::string> fields {
+        "inside", "near", "outside", "approaching", "attached"
+    };
+    return fields;
+}
+
+bool LoadSemanticEpisode(const std::string &root, const std::string &params,
+    std::vector<SemanticHistoryRow> *rows, std::string *error)
+{
+    std::string wantedEpisode;
+    std::string wantedSide = "company";
+    int64_t wantedOutcome = 0;
+    int64_t startMs = 0;
+    int64_t endMs = 0;
+    if (!ExtractString(params, "episode_id", &wantedEpisode) || wantedEpisode.empty()) {
+        *error = "episode_id required";
+        return false;
+    }
+    ExtractString(params, "side", &wantedSide);
+    ExtractInt64(params, "outcome_t_ms", &wantedOutcome);
+    ExtractInt64(params, "start_ms", &startMs);
+    ExtractInt64(params, "end_ms", &endMs);
+    if ((wantedSide != "company" && wantedSide != "home") || startMs < 0 || endMs < 0 ||
+        (startMs && endMs && startMs > endMs)) {
+        *error = "side must be company|home and start_ms must not exceed end_ms";
+        return false;
+    }
+    std::ifstream in(root + "/policy_history.jsonl");
+    if (!in.is_open()) {
+        *error = "policy_history.jsonl missing";
+        return false;
+    }
+    std::set<int64_t> outcomes;
+    std::string line;
+    while (std::getline(in, line)) {
+        SemanticHistoryRow row;
+        if (!ExtractString(line, "episode_id", &row.episode) || row.episode != wantedEpisode ||
+            !ExtractString(line, "side", &row.side) || row.side != wantedSide ||
+            !ExtractInt64(line, "outcome_t_ms", &row.outcome) ||
+            !ExtractInt64(line, "t_ms", &row.t)) continue;
+        outcomes.insert(row.outcome);
+        if (wantedOutcome > 0 && row.outcome != wantedOutcome) continue;
+        if (startMs > 0 && row.t < startMs) continue;
+        if (endMs > 0 && row.t > endMs) continue;
+        ExtractString(line, "label", &row.label);
+        ExtractNumber(line, "baro_descent_m", &row.descent);
+        ExtractBool(line, "obs_baro_available", &row.baroAvailable);
+        for (const auto &field : TimelineValues()) {
+            double value = 0.0;
+            if (ExtractNumber(line, ("obs_" + field).c_str(), &value)) row.value[field] = value;
+        }
+        for (const auto &field : TimelineFlags()) {
+            bool value = false;
+            if (ExtractBool(line, ("obs_" + field).c_str(), &value)) row.flag[field] = value;
+        }
+        const char *modelFields[] = {"preleave_probability", "leaving_probability", "hits", "lead_s", "pdr_net_out_m"};
+        for (const char *field : modelFields) {
+            double value = 0.0;
+            if (ExtractNumber(line, field, &value)) row.model[field] = value;
+        }
+        rows->push_back(std::move(row));
+    }
+    if (wantedOutcome <= 0 && outcomes.size() > 1) {
+        *error = "episode_id is ambiguous; provide outcome_t_ms";
+        rows->clear();
+        return false;
+    }
+    if (rows->empty()) {
+        *error = "matching semantic episode not found in requested window";
+        return false;
+    }
+    std::sort(rows->begin(), rows->end(),
+        [](const SemanticHistoryRow &a, const SemanticHistoryRow &b) { return a.t < b.t; });
+    for (size_t i = 1; i < rows->size(); ++i) {
+        if ((*rows)[i - 1].t == (*rows)[i].t) {
+            *error = "duplicate timestamp in episode history";
+            rows->clear();
+            return false;
+        }
+    }
+    return true;
+}
+
+double EventValue(const SemanticHistoryRow &row, const std::string &event, bool *known)
+{
+    const auto v = row.value.find(event);
+    if (v != row.value.end()) { *known = true; return v->second; }
+    const auto f = row.flag.find(event);
+    if (f != row.flag.end()) { *known = true; return f->second ? 1.0 : 0.0; }
+    *known = false;
+    return 0.0;
+}
+
+int64_t MedianTickMs(const std::vector<SemanticHistoryRow> &rows)
+{
+    std::vector<int64_t> gaps;
+    for (size_t i = 1; i < rows.size(); ++i) if (rows[i].t > rows[i - 1].t) gaps.push_back(rows[i].t - rows[i - 1].t);
+    if (gaps.empty()) return 5000;
+    std::sort(gaps.begin(), gaps.end());
+    return gaps[gaps.size() / 2];
+}
+
+std::string EventIntervalsJson(const std::vector<SemanticHistoryRow> &rows,
+    const std::string &event, int64_t mergeGapMs, int64_t tickMs)
+{
+    std::ostringstream out;
+    out << '[';
+    bool open = false;
+    int64_t start = 0, last = 0;
+    int ticks = 0, count = 0;
+    double peak = 0.0;
+    auto emit = [&]() {
+        if (!open) return;
+        if (count++) out << ',';
+        out << "{\"start_ms\":" << start << ",\"end_ms\":" << last
+            << ",\"observed_span_s\":" << (last - start) / 1000.0
+            << ",\"estimated_duration_s\":" << (last - start + tickMs) / 1000.0
+            << ",\"support_ticks\":" << ticks << ",\"peak\":" << peak << '}';
+        open = false; ticks = 0; peak = 0.0;
+    };
+    for (const auto &row : rows) {
+        bool known = false;
+        const double value = EventValue(row, event, &known);
+        if (!known || value < 0.5) { emit(); continue; }
+        if (open && row.t - last > mergeGapMs) emit();
+        if (!open) { open = true; start = row.t; }
+        last = row.t; ++ticks; peak = std::max(peak, value);
+    }
+    emit();
+    out << ']';
+    return out.str();
+}
+
+int64_t FirstEventMs(const std::vector<SemanticHistoryRow> &rows, const std::string &event, int64_t after = 0)
+{
+    for (const auto &row : rows) {
+        bool known = false;
+        if (row.t > after && EventValue(row, event, &known) >= 0.5 && known) return row.t;
+    }
+    return 0;
+}
+
+}  // namespace
+
+std::string EvidenceQuery::GetEpisodeSemanticTimelineJson(const std::string &paramsJson) const
+{
+    std::vector<SemanticHistoryRow> rows;
+    std::string error;
+    if (!LoadSemanticEpisode(ResolveRoot(), paramsJson, &rows, &error))
+        return "{\"ok\":false,\"error\":\"" + Esc(error) + "\"}";
+    int64_t binS = 10, maxBins = 120;
+    ExtractInt64(paramsJson, "bin_s", &binS);
+    ExtractInt64(paramsJson, "max_bins", &maxBins);
+    if (binS < 5 || binS > 60 || maxBins < 1 || maxBins > 120)
+        return "{\"ok\":false,\"error\":\"bin_s must be 5..60 and max_bins 1..120\"}";
+    const int64_t binMs = binS * 1000;
+    const int64_t origin = rows.front().t;
+    const size_t bins = static_cast<size_t>((rows.back().t - origin) / binMs + 1);
+    if (bins > static_cast<size_t>(maxBins)) {
+        std::ostringstream rejected;
+        rejected << "{\"ok\":false,\"error\":\"requested timeline exceeds max_bins; increase bin_s or narrow start_ms/end_ms\","
+                 << "\"required_bins\":" << bins << ",\"max_bins\":" << maxBins << '}';
+        return rejected.str();
+    }
+    std::ostringstream out;
+    out << "{\"ok\":true,\"schema_version\":1,\"episode_id\":\"" << Esc(rows.front().episode)
+        << "\",\"side\":\"" << Esc(rows.front().side) << "\",\"label\":\"" << Esc(rows.front().label)
+        << "\",\"outcome_t_ms\":" << rows.front().outcome << ",\"record_start_ms\":" << rows.front().t
+        << ",\"record_end_ms\":" << rows.back().t << ",\"bin_s\":" << binS
+        << ",\"source\":\"policy_history semantic observations; not raw sensor samples\",\"bins\":[";
+    for (size_t b = 0; b < bins; ++b) {
+        if (b) out << ',';
+        const int64_t lo = origin + static_cast<int64_t>(b) * binMs;
+        const int64_t hi = lo + binMs;
+        std::vector<const SemanticHistoryRow *> samples;
+        for (const auto &row : rows) if (row.t >= lo && (row.t < hi || (b + 1 == bins && row.t <= hi))) samples.push_back(&row);
+        out << "{\"start_ms\":" << lo << ",\"end_ms\":" << std::min(hi, rows.back().t)
+            << ",\"sample_count\":" << samples.size();
+        if (samples.empty()) { out << ",\"quality\":\"MISSING\"}"; continue; }
+        int baroN = 0;
+        double maxDescent = 0.0, meanDescent = 0.0;
+        for (const auto *row : samples) if (row->baroAvailable) {
+            ++baroN; maxDescent = std::max(maxDescent, row->descent); meanDescent += row->descent;
+        }
+        out << ",\"quality\":\"OBSERVED\",\"baro\":{\"available_ticks\":" << baroN
+            << ",\"coverage\":" << static_cast<double>(baroN) / samples.size();
+        if (baroN) out << ",\"descent_mean_m\":" << meanDescent / baroN << ",\"descent_max_m\":" << maxDescent;
+        else out << ",\"descent_mean_m\":null,\"descent_max_m\":null";
+        out << "},\"model_context\":{";
+        const char *modelFields[] = {"preleave_probability", "leaving_probability", "hits", "lead_s", "pdr_net_out_m"};
+        for (size_t i = 0; i < sizeof(modelFields) / sizeof(modelFields[0]); ++i) {
+            if (i) out << ',';
+            double sum = 0.0, peak = -1.0e100; int n = 0;
+            for (const auto *row : samples) {
+                auto found = row->model.find(modelFields[i]);
+                if (found != row->model.end()) { sum += found->second; peak = std::max(peak, found->second); ++n; }
+            }
+            out << '\"' << modelFields[i] << "\":{\"known_ticks\":" << n;
+            if (n) out << ",\"mean\":" << sum / n << ",\"max\":" << peak;
+            else out << ",\"mean\":null,\"max\":null";
+            out << '}';
+        }
+        out << "},\"signals\":{";
+        bool first = true;
+        for (const auto &field : TimelineValues()) {
+            double sum = 0.0, peak = 0.0; int n = 0;
+            for (const auto *row : samples) { bool known = false; const double value = EventValue(*row, field, &known); if (known) { sum += value; peak = std::max(peak, value); ++n; } }
+            if (!first) out << ','; first = false;
+            out << '\"' << field << "\":{\"known_ticks\":" << n;
+            if (n) out << ",\"mean\":" << sum / n << ",\"peak\":" << peak;
+            else out << ",\"mean\":null,\"peak\":null";
+            out << '}';
+        }
+        for (const auto &field : TimelineFlags()) {
+            int known = 0, active = 0;
+            for (const auto *row : samples) { bool present = false; const double value = EventValue(*row, field, &present); if (present) { ++known; if (value >= 0.5) ++active; } }
+            out << ",\"" << field << "\":{\"known_ticks\":" << known << ",\"active_ticks\":" << active << '}';
+        }
+        out << "}}";
+    }
+    out << "],\"missing_semantics\":\"known_ticks=0 means unavailable in stored history; zero observed value is distinct from missing\"}";
+    return out.str();
+}
+
+std::string EvidenceQuery::GetEpisodeDynamicDiagnosticsJson(const std::string &paramsJson) const
+{
+    std::vector<SemanticHistoryRow> rows;
+    std::string error;
+    if (!LoadSemanticEpisode(ResolveRoot(), paramsJson, &rows, &error))
+        return "{\"ok\":false,\"error\":\"" + Esc(error) + "\"}";
+    const int64_t tickMs = MedianTickMs(rows);
+    const int64_t mergeGap = std::max<int64_t>(10000, 2 * tickMs);
+    size_t peakIndex = 0;
+    for (size_t i = 1; i < rows.size(); ++i) if (rows[i].descent > rows[peakIndex].descent) peakIndex = i;
+    int monotonic = 0, comparisons = 0;
+    for (size_t i = 1; i <= peakIndex; ++i) {
+        if (!rows[i - 1].baroAvailable || !rows[i].baroAvailable) continue;
+        ++comparisons;
+        if (rows[i].descent + 0.5 >= rows[i - 1].descent) ++monotonic;
+    }
+    const int64_t descend = FirstEventMs(rows, "baro_descending");
+    const int64_t lower = FirstEventMs(rows, "baro_lower_platform", descend);
+    const int64_t ascend = FirstEventMs(rows, "baro_ascending", descend);
+    const int64_t closure = FirstEventMs(rows, "vertical_closure", ascend);
+    const int64_t pdr = FirstEventMs(rows, "pdr_outbound");
+    const int64_t geo = FirstEventMs(rows, "geo_outbound");
+    const int64_t wifi = FirstEventMs(rows, "wifi_detach");
+    int baroN = 0;
+    for (const auto &row : rows) if (row.baroAvailable) ++baroN;
+    const std::vector<std::string> events {
+        "walking", "pdr_outbound", "geo_outbound", "wifi_detach", "cell_detach",
+        "baro_descending", "baro_lower_platform", "baro_ascending", "vertical_closure",
+        "approaching", "attached", "outside"
+    };
+    std::ostringstream out;
+    out << "{\"ok\":true,\"schema_version\":1,\"episode_id\":\"" << Esc(rows.front().episode)
+        << "\",\"outcome_t_ms\":" << rows.front().outcome << ",\"tick_median_s\":" << tickMs / 1000.0
+        << ",\"coverage\":{\"semantic_ticks\":" << rows.size() << ",\"baro_available_ticks\":" << baroN
+        << ",\"baro_ratio\":" << static_cast<double>(baroN) / rows.size() << "},\"vertical_dynamics\":{"
+        << "\"max_descent_m\":" << rows[peakIndex].descent << ",\"max_descent_t_ms\":" << rows[peakIndex].t
+        << ",\"descent_monotonicity\":" << (comparisons ? static_cast<double>(monotonic) / comparisons : -1.0)
+        << ",\"first_descending_ms\":" << descend << ",\"first_lower_platform_ms\":" << lower
+        << ",\"first_ascending_after_descent_ms\":" << ascend
+        << ",\"first_closure_after_ascent_ms\":" << closure
+        << ",\"descent_to_peak_s\":" << (descend ? (rows[peakIndex].t - descend) / 1000.0 : -1.0)
+        << ",\"peak_to_closure_s\":" << (closure ? (closure - rows[peakIndex].t) / 1000.0 : -1.0)
+        << ",\"ordered_return\":" << (descend && ascend && closure ? "true" : "false") << "},\"cross_sensor_lags_s\":{";
+    auto lag = [&](const char *name, int64_t from, int64_t to, bool comma) {
+        if (comma) out << ',';
+        out << '\"' << name << "\":";
+        if (from && to) out << (to - from) / 1000.0; else out << "null";
+    };
+    lag("descending_to_pdr", descend, pdr, false);
+    lag("descending_to_geo", descend, geo, true);
+    lag("descending_to_wifi_detach", descend, wifi, true);
+    lag("peak_to_ascending", rows[peakIndex].t, ascend, true);
+    out << "},\"event_intervals\":{";
+    for (size_t i = 0; i < events.size(); ++i) {
+        if (i) out << ',';
+        out << '\"' << events[i] << "\":" << EventIntervalsJson(rows, events[i], mergeGap, tickMs);
+    }
+    out << "},\"interpretation_limits\":\"Observed span is first-to-last active tick; estimated duration adds one median tick. Intervals use bounded gap merging. They are deterministic descriptors, not labels, intent proof, raw-waveform analysis or causal attribution.\"}";
+    return out.str();
+}
+
 std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJson) const
 {
     const std::string root = ResolveRoot();
@@ -1544,7 +1856,10 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
     int baroPoints = 0;
     double baroMaxDescent = 0.0;
     double baroMaxDescending = 0.0;
+    double baroMaxAscending = 0.0;
     bool baroAnyLowerPlatform = false;
+    bool baroAnyVerticalClosure = false;
+    int64_t baroFirstVerticalClosureMs = 0;
     bool baroAtAvailable = false;
     bool baroAtLowerPlatform = false;
     double baroAtDescent = 0.0;
@@ -1563,17 +1878,26 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         bool lowerPlatform = false;
         double descent = 0.0;
         double descending = 0.0;
+        double ascending = 0.0;
+        double closure = 0.0;
         ExtractBool(historyLine, "baro_available", &available);
         ExtractBool(historyLine, "baro_lower_platform", &lowerPlatform);
         ExtractNumber(historyLine, "baro_descent_m", &descent);
         ExtractNumber(historyLine, "obs_baro_descending", &descending);
+        ExtractNumber(historyLine, "obs_baro_ascending", &ascending);
+        ExtractNumber(historyLine, "obs_vertical_closure", &closure);
         if (!available) {
             continue;
         }
         ++baroPoints;
         baroMaxDescent = std::max(baroMaxDescent, descent);
         baroMaxDescending = std::max(baroMaxDescending, descending);
+        baroMaxAscending = std::max(baroMaxAscending, ascending);
         baroAnyLowerPlatform = baroAnyLowerPlatform || lowerPlatform;
+        if (closure >= 0.5) {
+            baroAnyVerticalClosure = true;
+            if (!baroFirstVerticalClosureMs) baroFirstVerticalClosureMs = tMs;
+        }
         const int64_t delta = std::llabs(tMs - tCenter);
         if (delta < baroAtDelta) {
             baroAtDelta = delta;
@@ -1619,7 +1943,9 @@ std::string EvidenceQuery::GetLeaveSensorSummaryJson(const std::string &paramsJs
         << ",\"notes\":\"net = planar distance from walk-episode origin (not distance-to-home)\"}"
         << ",\"baro\":{\"available\":" << (baroPoints > 0 ? "true" : "false")
         << ",\"n_history_points\":" << baroPoints << ",\"max_descent_m\":" << baroMaxDescent
-        << ",\"max_descending\":" << baroMaxDescending << ",\"any_lower_platform\":"
+        << ",\"max_descending\":" << baroMaxDescending << ",\"max_ascending\":" << baroMaxAscending
+        << ",\"any_vertical_closure\":" << (baroAnyVerticalClosure ? "true" : "false")
+        << ",\"first_vertical_closure_t_ms\":" << baroFirstVerticalClosureMs << ",\"any_lower_platform\":"
         << (baroAnyLowerPlatform ? "true" : "false") << ",\"at_push\":{\"available\":"
         << (baroAtAvailable ? "true" : "false") << ",\"descent_m\":" << baroAtDescent
         << ",\"descending\":" << baroAtDescending << ",\"lower_platform\":"

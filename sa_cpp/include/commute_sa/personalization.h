@@ -18,7 +18,7 @@ struct PersonalizeJob {
     std::string last_intent;
     std::string last_scene;
     int64_t last_push_at_ms = 0;
-    /** CONFIRMED_LEAVE | FALSE_PUSH | MISSED_LEAVE | empty (DAY_END / MANUAL) */
+    /** CONFIRMED_LEAVE | ABORTED_LEAVE | FALSE_PUSH | MISSED_LEAVE | empty (DAY_END / MANUAL) */
     std::string settle_label;
     Theta theta_snapshot;
 };

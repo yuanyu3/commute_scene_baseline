@@ -18,10 +18,13 @@ Agent 可填写：
 - `applicability`：`always` 或 `baro_ready`；
 - `positive_sequence`：有顺序的正向事件；
 - `negative_pattern`：同时成立时抑制非特异证据的事件集合；
+- `cancel_sequence`：正向前缀启动后才允许匹配的有序返回序列；
 - `parameter_families`：当前可选 `vertical_threshold`，只表达参数类别；
 - `rationale`：可审计解释。
 
-事件只能来自 C++ catalog，例如 `baro_descending`、`lower_platform`、`geo_outbound`、`walking`、`wifi_detach`、`no_baro_descent`。每个子句最多 6 个原语。schema v3 不再放大或压低 walking/PDR/Wi-Fi/baro 等原子观测，而是独立输出 `sequence_progress`、`sequence_complete` 和 `negative_pattern_match`，由 HSMM 作为时序交互似然使用。序列进度保持为 0~1 的结构量，作用强度单独由 `sequence_reliability` 表达；该强度不在 Agent schema 中，而由 C++ 固定试验 LOW=0.2、MEDIUM=0.4、HIGH=0.6。
+事件只能来自 C++ catalog，例如 `baro_descending`、`lower_platform`、`baro_ascending`、`vertical_closure`、`geo_outbound`、`walking`、`wifi_detach`、`no_baro_descent`。每个子句最多 6 个原语。schema v5 不再放大或压低 walking/PDR/Wi-Fi/baro 等原子观测，而是独立输出 `sequence_progress`、`sequence_complete`、`negative_pattern_match` 和 `cancel_sequence_match`，由 HSMM 作为时序交互似然使用。序列进度保持为 0~1 的结构量，作用强度单独由 `sequence_reliability` 表达；该强度不在 Agent schema 中，而由 C++ 固定试验 LOW=0.2、MEDIUM=0.4、HIGH=0.6。
+
+`ABORTED_LEAVE` 和返回序列的实现、验证条件及限制见 [ABORTED_LEAVE_PERSONALIZATION.md](ABORTED_LEAVE_PERSONALIZATION.md)。
 
 当前只开放 `vertical_threshold`：使用至少 3 个经标签确认的低层平台 episode（包括最终确认离开，以及已判定为软正例的低层平台中间过程）估计稳定下降阈值，并保存在锚点模板内，不修改全局 theta。旧历史无法证明“低于旧阈值时平台是否稳定”，因此首版只允许气压阈值保持或升高，避免不可回放的激进放宽。
 

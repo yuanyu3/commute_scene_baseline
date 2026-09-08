@@ -41,6 +41,10 @@ struct LeaveObservation {
     double baro_descending = 0.0;
     double baro_lower_platform = 0.0;
     bool baro_available = false;
+    // Return semantics are consumed only by context templates, not by the
+    // atomic HSMM emission vector.
+    double baro_ascending = 0.0;
+    double vertical_closure = 0.0;
     /**
      * Context-template observations are kept separate from atomic sensor
      * semantics.  The template reports temporal structure; it never rewrites
@@ -49,7 +53,10 @@ struct LeaveObservation {
     bool sequence_available = false;
     double sequence_progress = 0.0;
     double sequence_complete = 0.0;
+    // -1 preserves legacy progress/completion fusion; [0,1] is calibrated prefix readiness.
+    double sequence_ready = -1.0;
     double negative_pattern_match = 0.0;
+    double cancel_sequence_match = 0.0;
     double sequence_reliability = 0.0;
 };
 

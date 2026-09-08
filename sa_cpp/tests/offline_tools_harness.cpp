@@ -7,6 +7,7 @@
 #include "commute_sa/evidence_query.h"
 #include "commute_sa/personalization_optimizer.h"
 #include "commute_sa/product_store.h"
+#include "commute_sa/theta_eval.h"
 
 #include <cmath>
 #include <cstdio>
@@ -46,7 +47,7 @@ int main(int argc, char **argv)
 {
     // Dataset mode used by ablation scripts:
     //   commute_offline_tools <root> <evaluate|rules|rule_optimize|agent_optimize|profile|
-    //     template_catalog|template_generate|template_trial|template_commit|template_discard|template_active|
+    //     template_catalog|template_generate|template_fit|template_trial|template_commit|template_discard|template_active|
     //     template_evaluate_frozen> [json]
     if (argc >= 3) {
         const std::string dataRoot = argv[1];
@@ -69,8 +70,20 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetPersonalizationProfileAction(params) << "\n";
         } else if (command == "template_catalog") {
             std::cout << commute_sa::GetContextTemplateCatalogAction(params) << "\n";
+        } else if (command == "semantic_timeline") {
+            std::cout << commute_sa::EvidenceQuery::GetInstance().GetEpisodeSemanticTimelineJson(params) << "\n";
+        } else if (command == "dynamic_diagnostics") {
+            std::cout << commute_sa::EvidenceQuery::GetInstance().GetEpisodeDynamicDiagnosticsJson(params) << "\n";
+        } else if (command == "aborted_candidates") {
+            std::cout << commute_sa::GetAbortedLeaveCandidatesAction(params) << "\n";
+        } else if (command == "propose_aborted") {
+            std::cout << commute_sa::ProposeAbortedLeaveInterpretationAction(params) << "\n";
         } else if (command == "template_generate") {
             std::cout << commute_sa::GenerateContextTemplateAction(params) << "\n";
+        } else if (command == "template_fit") {
+            const auto trial = commute_sa::GenerateContextTemplateAction(params);
+            std::cout << "{\"trial\":" << trial << ",\"commit\":"
+                      << commute_sa::CommitContextTemplateAction("{}") << "}\n";
         } else if (command == "template_trial") {
             std::cout << commute_sa::GetContextTemplateTrialAction(params) << "\n";
         } else if (command == "template_commit") {
@@ -81,6 +94,8 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetActiveContextTemplateAction(params) << "\n";
         } else if (command == "template_evaluate_frozen") {
             std::cout << commute_sa::EvaluateActiveContextTemplateOnHistoryAction(params) << "\n";
+        } else if (command == "template_diagnose") {
+            std::cout << commute_sa::DiagnoseContextTemplateOnHistoryAction(params) << "\n";
         } else {
             std::cout << "{\"ok\":false,\"error\":\"unknown dataset command\"}\n";
             return 2;
@@ -114,6 +129,7 @@ int main(int argc, char **argv)
         "\"acc\":15,\"walking\":true,\"home_relation\":\"NEAR\",\"dist_home_m\":48}\n"
         "{\"t_ms\":1700000120000,\"t_push_ms\":1700000000000,\"lat\":40.0500,\"lon\":116.1701,"
         "\"acc\":12,\"walking\":false,\"home_relation\":\"INSIDE\",\"dist_home_m\":18}\n");
+    WriteFile(root + "/episode_interpretations.jsonl", "");
 
     // Three independent validated lower-platform episodes support deterministic
     // estimation of the vertical parameter family.
@@ -122,6 +138,64 @@ int main(int argc, char **argv)
         "{\"t_ms\":1800086340000,\"outcome_t_ms\":1800086400000,\"side\":\"company\",\"label\":\"FALSE_PUSH\",\"baro_descent_m\":20,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":1,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
         "{\"t_ms\":1800172740000,\"outcome_t_ms\":1800172800000,\"side\":\"company\",\"label\":\"CONFIRMED_LEAVE\",\"baro_descent_m\":22,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":1,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
         "{\"t_ms\":1800259140000,\"outcome_t_ms\":1800259200000,\"side\":\"company\",\"label\":\"FALSE_PUSH\",\"baro_descent_m\":5,\"obs_pdr_outbound\":0.1,\"obs_walking\":1,\"obs_geo_outbound\":0,\"obs_wifi_detach\":1,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":0,\"obs_baro_lower_platform\":0,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n");
+
+    // Two explicitly labelled intent reversals. They are neither hard false
+    // examples nor successful departures: the positive prefix should remain
+    // recognizable and the ordered return should be learned as cancellation.
+    {
+        std::ofstream history(root + "/policy_history.jsonl", std::ios::app);
+        for (int episode = 0; episode < 2; ++episode) {
+            const int64_t base = 1800345600000LL + episode * 86400000LL;
+            const std::string id = "abort_" + std::to_string(episode);
+            history << "{\"t_ms\":" << base << ",\"outcome_t_ms\":" << base + 30000
+                    << ",\"abort_t_ms\":" << base + 20000 << ",\"episode_id\":\"" << id
+                    << "\",\"side\":\"company\",\"label\":\"ABORTED_LEAVE\",\"baro_descent_m\":18,"
+                       "\"baro_stable_platform\":false,\"obs_pdr_outbound\":0.7,\"obs_walking\":1,"
+                       "\"obs_geo_outbound\":0,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,"
+                       "\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,"
+                       "\"obs_baro_lower_platform\":0,\"obs_baro_ascending\":0,"
+                       "\"obs_vertical_closure\":0,\"obs_baro_available\":true,"
+                       "\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,"
+                       "\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false}\n";
+            history << "{\"t_ms\":" << base + 20000 << ",\"outcome_t_ms\":" << base + 30000
+                    << ",\"abort_t_ms\":" << base + 20000 << ",\"episode_id\":\"" << id
+                    << "\",\"side\":\"company\",\"label\":\"ABORTED_LEAVE\",\"baro_descent_m\":8,"
+                       "\"baro_stable_platform\":false,\"obs_pdr_outbound\":0,\"obs_walking\":1,"
+                       "\"obs_geo_outbound\":0,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,"
+                       "\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":0,"
+                       "\"obs_baro_lower_platform\":0,\"obs_baro_ascending\":1,"
+                       "\"obs_vertical_closure\":0,\"obs_baro_available\":true,"
+                       "\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,"
+                       "\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false}\n";
+            history << "{\"t_ms\":" << base + 30000 << ",\"outcome_t_ms\":" << base + 30000
+                    << ",\"abort_t_ms\":" << base + 20000 << ",\"episode_id\":\"" << id
+                    << "\",\"side\":\"company\",\"label\":\"ABORTED_LEAVE\",\"baro_descent_m\":1,"
+                       "\"baro_stable_platform\":true,\"obs_pdr_outbound\":0,\"obs_walking\":0,"
+                       "\"obs_geo_outbound\":0,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,"
+                       "\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":0,"
+                       "\"obs_baro_lower_platform\":0,\"obs_baro_ascending\":0,"
+                       "\"obs_vertical_closure\":1,\"obs_baro_available\":true,"
+                       "\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,"
+                       "\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":true}\n";
+        }
+        const int64_t candidate = 1800604800000LL;
+        for (int tick = 0; tick < 3; ++tick) {
+            const int64_t at = candidate + tick * 10000;
+            history << "{\"t_ms\":" << at << ",\"outcome_t_ms\":" << candidate + 20000
+                    << ",\"episode_id\":\"agent_abort_candidate\",\"side\":\"company\","
+                       "\"label\":\"FALSE_PUSH\",\"baro_descent_m\":" << (tick == 0 ? 18 : tick == 1 ? 8 : 1)
+                    << ",\"baro_stable_platform\":" << (tick == 2 ? "true" : "false")
+                    << ",\"obs_pdr_outbound\":" << (tick == 0 ? 0.7 : 0.0)
+                    << ",\"obs_walking\":" << (tick < 2 ? 1 : 0)
+                    << ",\"obs_geo_outbound\":0,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,"
+                       "\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":"
+                    << (tick == 0 ? 1 : 0) << ",\"obs_baro_lower_platform\":0,\"obs_baro_ascending\":"
+                    << (tick == 1 ? 1 : 0) << ",\"obs_vertical_closure\":" << (tick == 2 ? 1 : 0)
+                    << ",\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,"
+                       "\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,"
+                       "\"obs_attached\":" << (tick == 2 ? "true" : "false") << "}\n";
+        }
+    }
 
     // Fake Ability session CSVs (wallTsMs first column)
     WriteFile(session + "/wifi_data_smoke.csv",
@@ -168,6 +242,27 @@ int main(int argc, char **argv)
         eq.GetLeaveSensorSummaryJson("{\"t_push_ms\":1700000000000,\"before_s\":600,\"after_s\":1200}"));
     expectOk("get_leave_sensor_summary",
         eq.GetLeaveSensorSummaryJson("{\"t_push_ms\":1700000000000,\"before_s\":600,\"after_s\":1200}"));
+    const std::string semanticTimeline = eq.GetEpisodeSemanticTimelineJson(
+        "{\"episode_id\":\"abort_0\",\"side\":\"company\",\"bin_s\":10}");
+    Call("get_episode_semantic_timeline", semanticTimeline);
+    if (semanticTimeline.find("\"quality\":\"OBSERVED\"") == std::string::npos ||
+        semanticTimeline.find("\"vertical_closure\"") == std::string::npos ||
+        semanticTimeline.find("\"known_ticks\":1") == std::string::npos) {
+        std::cerr << "FAIL semantic timeline lost aligned signal detail\n"; ++fails;
+    }
+    const std::string dynamics = eq.GetEpisodeDynamicDiagnosticsJson(
+        "{\"episode_id\":\"abort_0\",\"side\":\"company\"}");
+    Call("get_episode_dynamic_diagnostics", dynamics);
+    if (dynamics.find("\"ordered_return\":true") == std::string::npos ||
+        dynamics.find("\"first_ascending_after_descent_ms\":1800345620000") == std::string::npos ||
+        dynamics.find("\"first_closure_after_ascent_ms\":1800345630000") == std::string::npos) {
+        std::cerr << "FAIL dynamic diagnostics lost ordered return\n"; ++fails;
+    }
+    const std::string boundedTimeline = eq.GetEpisodeSemanticTimelineJson(
+        "{\"episode_id\":\"abort_0\",\"side\":\"company\",\"bin_s\":5,\"max_bins\":1}");
+    if (boundedTimeline.find("exceeds max_bins") == std::string::npos) {
+        std::cerr << "FAIL semantic timeline ignored output budget\n"; ++fails;
+    }
 
     Section("ACTION");
     Call("get_param_limits", std::string("{\"ok\":true,\"param_limits\":") + commute_sa::GetParamLimitsJson() + "}");
@@ -252,6 +347,148 @@ int main(int argc, char **argv)
         ++fails;
     }
 
+    Section("GENERIC_PREFIX_READINESS");
+    WriteFile(root + "/active_context_template.json",
+        "{\"schema_version\":4,\"template_name\":\"generic_prefix\",\"side\":\"company\","
+        "\"anchor_id\":\"co\",\"applicability\":\"always\","
+        "\"positive_sequence\":\"wifi_detach,pdr_outbound,geo_outbound\","
+        "\"ready_prefix_length\":2,\"strength\":0.4}");
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    commute_sa::LeaveObservation firstPrefix;
+    firstPrefix.wifi_detach = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1800000000000, &firstPrefix);
+    commute_sa::LeaveObservation readyPrefix;
+    readyPrefix.pdr_outbound = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1800000005000, &readyPrefix);
+    commute_sa::LeaveObservation expiredPrefix;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1800000610000, &expiredPrefix);
+    if (firstPrefix.sequence_ready != 0.0 || readyPrefix.sequence_ready != 1.0 ||
+        readyPrefix.sequence_complete != 0.0 || expiredPrefix.sequence_ready != 0.0 ||
+        readyPrefix.pdr_outbound != 1.0) {
+        std::cerr << "FAIL generic prefix readiness/expiry/raw observation preservation\n";
+        ++fails;
+    }
+
+    Section("ABORTED_LEAVE_CANCEL_SEQUENCE");
+    WriteFile(root + "/active_context_template.json",
+        "{\"schema_version\":5,\"template_name\":\"return_cancel\",\"side\":\"company\","
+        "\"anchor_id\":\"co\",\"applicability\":\"baro_ready\","
+        "\"positive_sequence\":\"baro_descending,lower_platform\","
+        "\"cancel_sequence\":\"baro_ascending,vertical_closure\","
+        "\"negative_pattern\":\"\",\"ready_prefix_length\":1,\"strength\":0.4}");
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    commute_sa::LeaveObservation depart1;
+    depart1.baro_available = true; depart1.baro_descending = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1900000000000, &depart1);
+    commute_sa::LeaveObservation depart2;
+    depart2.baro_available = true; depart2.baro_lower_platform = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1900000010000, &depart2);
+    commute_sa::LeaveObservation reverse1;
+    reverse1.baro_available = true; reverse1.baro_ascending = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1900000020000, &reverse1);
+    commute_sa::LeaveObservation reverse2;
+    reverse2.baro_available = true; reverse2.vertical_closure = 1.0;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1900000030000, &reverse2);
+    commute_sa::LeaveObservation cancelHold;
+    cancelHold.baro_available = true;
+    commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1900000040000, &cancelHold);
+    if (reverse1.cancel_sequence_match != 0.0 || reverse2.cancel_sequence_match != 1.0 ||
+        reverse2.negative_pattern_match != 1.0 || cancelHold.cancel_sequence_match != 1.0 ||
+        reverse2.sequence_ready != 0.0) {
+        std::cerr << "FAIL ordered return sequence did not latch cancellation\n";
+        ++fails;
+    }
+
+    Section("ALTERNATIVE_RETURN_PATHS");
+    commute_sa::ReplayEpisodeSummary safeReturn;
+    safeReturn.key = "return"; safeReturn.aborted = true; safeReturn.cancel_ms = 100;
+    auto lateReturn = safeReturn;
+    lateReturn.cancel_ms = 101;
+    std::string guardReason;
+    if (commute_sa::CheckReplayEpisodeSafety({safeReturn}, {lateReturn}, &guardReason)) {
+        std::cerr << "FAIL delayed cancellation passed per-episode guard\n"; ++fails;
+    }
+    auto newPush = safeReturn;
+    newPush.pushed = true;
+    if (commute_sa::CheckReplayEpisodeSafety({safeReturn}, {newPush}, &guardReason)) {
+        std::cerr << "FAIL new aborted push passed per-episode guard\n"; ++fails;
+    }
+    WriteFile(root + "/active_context_template.json",
+        "{\"schema_version\":6,\"template_name\":\"return_paths\",\"side\":\"company\","
+        "\"anchor_id\":\"co\",\"applicability\":\"always\","
+        "\"positive_sequence\":\"walking\","
+        "\"cancel_paths\":\"baro_ascending,vertical_closure|geo_outbound,approaching,attached\","
+        "\"negative_pattern\":\"\",\"ready_prefix_length\":1,\"strength\":0.4}");
+    const auto step = [](int seconds, bool walk, bool up, bool closure, bool geo,
+                         bool approaching, bool attached, bool baro = true, bool outside = false) {
+        commute_sa::LeaveObservation obs;
+        obs.walking = walk; obs.baro_ascending = up; obs.vertical_closure = closure;
+        obs.geo_outbound = geo; obs.approaching = approaching; obs.attached = attached;
+        obs.baro_available = baro; obs.outside = outside;
+        commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1910000000000 + seconds * 1000, &obs);
+        return obs;
+    };
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false);
+    step(5, false, true, false, false, false, false);
+    if (step(10, false, false, true, false, false, false).cancel_sequence_match != 1.0) {
+        std::cerr << "FAIL vertical path required optional attachment\n"; ++fails;
+    }
+    step(15, true, false, false, true, false, false);
+    if (step(25, true, false, false, true, false, false).cancel_sequence_match != 0.0) {
+        std::cerr << "FAIL fresh departure could not release cancel hold\n"; ++fails;
+    }
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false, false);
+    step(5, false, false, false, true, false, false, false);
+    step(10, false, false, false, false, true, false, false);
+    if (step(15, false, false, false, false, false, true, false).cancel_sequence_match != 1.0) {
+        std::cerr << "FAIL horizontal alternative required barometer\n"; ++fails;
+    }
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false);
+    step(5, false, false, true, false, false, false);
+    if (step(10, false, true, false, false, false, false).cancel_sequence_match != 0.0 ||
+        step(200, false, false, true, false, false, false).cancel_sequence_match != 0.0) {
+        std::cerr << "FAIL unordered or expired events cancelled departure\n"; ++fails;
+    }
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false);
+    step(5, false, true, false, false, false, false, false);
+    if (step(10, false, false, true, false, false, false, false).cancel_sequence_match != 0.0) {
+        std::cerr << "FAIL unavailable barometer used as positive evidence\n"; ++fails;
+    }
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false);
+    step(5, false, true, false, false, false, false);
+    step(10, false, false, false, false, false, false, true, true);
+    if (step(15, false, false, true, false, false, false).cancel_sequence_match != 0.0) {
+        std::cerr << "FAIL outside followed by return treated as cancellation\n"; ++fails;
+    }
+
+    const std::string cancelGenerated = commute_sa::GenerateContextTemplateAction(
+        "{\"template_name\":\"cancel_fit\",\"side\":\"company\",\"anchor_id\":\"co\","
+        "\"applicability\":\"baro_ready\",\"positive_sequence\":\"baro_descending\","
+        "\"cancel_sequence\":\"baro_ascending,vertical_closure\",\"rationale\":\"smoke\"}");
+    Call("generate_cancel_context_template", cancelGenerated);
+    if (cancelGenerated.find("\"n_aborted_leave\":2") == std::string::npos ||
+        cancelGenerated.find("\"aborted_cancel_recognized\":2") == std::string::npos) {
+        std::cerr << "FAIL ABORTED_LEAVE replay did not recognize ordered cancellation\n";
+        ++fails;
+    }
+
+    const std::string interpretation = commute_sa::ProposeAbortedLeaveInterpretationAction(
+        "{\"side\":\"company\",\"episode_id\":\"agent_abort_candidate\","
+        "\"confidence\":0.8,"
+        "\"rationale\":\"shared vertical departure prefix followed by measured closure\"}");
+    Call("propose_aborted_leave_interpretation", interpretation);
+    const std::string interpretedReplay = commute_sa::EvaluateThetaOnHistoryAction("{}");
+    if (interpretation.find("\"ok\":true") == std::string::npos ||
+        interpretedReplay.find("\"n_aborted_leave\":3") == std::string::npos) {
+        std::cerr << "FAIL validated Agent interpretation was not applied as a replay label override\n";
+        ++fails;
+    }
+
     Section("PARAMETER_FAMILY_ESTIMATION");
     const std::string generated = commute_sa::GenerateContextTemplateAction(
         "{\"template_name\":\"parameter_family_smoke\",\"side\":\"company\",\"anchor_id\":\"co\","
@@ -265,6 +502,20 @@ int main(int argc, char **argv)
         ++fails;
     }
 
+    Section("DUPLICATE_HISTORY_REJECTED");
+    std::string repeatedTick;
+    {
+        std::ifstream history(root + "/policy_history.jsonl");
+        std::getline(history, repeatedTick);
+    }
+    {
+        std::ofstream history(root + "/policy_history.jsonl", std::ios::app);
+        history << repeatedTick << '\n';
+    }
+    const auto duplicateReplay = commute_sa::EvaluateActiveContextTemplateOnHistoryAction("{}");
+    if (duplicateReplay.find("\"ok\":false") == std::string::npos) {
+        std::cerr << "FAIL duplicate timestamps accepted by frozen replay\n"; ++fails;
+    }
     std::cout << "\n=== SUMMARY fails=" << fails << " ===\n";
     return fails == 0 ? 0 : 1;
 }

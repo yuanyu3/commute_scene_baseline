@@ -165,8 +165,13 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
             const std::array<double, kPhaseCount> completeLlr {{-1.00, 0.15, 1.20, -0.35}};
             const std::array<double, kPhaseCount> negativeLlr {{0.80, 0.25, -1.00, -0.25}};
             const double reliability = Clip01(observation.sequence_reliability);
-            value += 2.0 * reliability * Clip01(observation.sequence_progress) * progressLlr[state];
-            value += 2.0 * reliability * Clip01(observation.sequence_complete) * completeLlr[state];
+            if (observation.sequence_ready >= 0.0) {
+                // Readiness and completion describe overlapping evidence: never add both.
+                value += 2.0 * reliability * Clip01(observation.sequence_ready) * completeLlr[state];
+            } else {
+                value += 2.0 * reliability * Clip01(observation.sequence_progress) * progressLlr[state];
+                value += 2.0 * reliability * Clip01(observation.sequence_complete) * completeLlr[state];
+            }
             value += 2.0 * reliability * Clip01(observation.negative_pattern_match) * negativeLlr[state];
         }
         logLikelihood[state] = value;
@@ -197,6 +202,8 @@ LeaveHsmmResult LeaveHsmm::Step(
     if (config.reliability[7] <= 0.0 && config.reliability[8] <= 0.0) {
         effective.baro_descending = 0.0;
         effective.baro_lower_platform = 0.0;
+        effective.baro_ascending = 0.0;
+        effective.vertical_closure = 0.0;
         effective.baro_available = false;
     }
     if (!initialized_) {

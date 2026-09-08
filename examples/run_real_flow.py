@@ -125,6 +125,8 @@ def main() -> int:
         help="truncate replay at the last acc/gyro/mag/rv/baro sample",
     )
     ap.add_argument("--run-personalizer", action="store_true", help="call WSL personalizer_llm")
+    ap.add_argument("--local-time-axis", action="store_true",
+                    help="Borrowed baro must not shift tick alignment or extend the local capture window")
     ap.add_argument(
         "--company-radio-fingerprint",
         default=str(ROOT / "config" / "company_radio_fingerprint.json"),
@@ -260,12 +262,15 @@ def main() -> int:
     # baro / walking / radio advance every tick_s.
     t_start = merged[0].t
     t_end = merged[-1].t
-    if baro_series:
-        t_start = min(t_start, baro_series[0][0])
-        t_end = max(t_end, baro_series[-1][0])
+    axis_baro = load_baro_series(args.raw_dir) if args.local_time_axis else baro_series
+    if axis_baro:
+        t_start = min(t_start, axis_baro[0][0])
+        t_end = max(t_end, axis_baro[-1][0])
     if walks:
         t_start = min(t_start, walks[0][0])
         t_end = max(t_end, walks[-1][0])
+    if args.local_time_axis and motion_stop is not None:
+        t_end = min(t_end, motion_stop)
     # Align to whole seconds so dumps are easy to read.
     tick_t = t_start.replace(microsecond=0)
     if tick_t < t_start:
@@ -332,7 +337,9 @@ def main() -> int:
             baro_baseline_ready=baro_snap.baseline_ready,
             baro_stable_platform=baro_snap.stable_platform,
             baro_descending=baro_snap.descending,
+            baro_ascending=baro_snap.ascending,
             baro_lower_platform=baro_snap.lower_platform,
+            vertical_closure=baro_snap.vertical_closure,
             baro_mode=args.baro_mode,
         )
         d = engine.step(feat)
@@ -353,7 +360,9 @@ def main() -> int:
             "baro_baseline_ready": baro_snap.baseline_ready,
             "baro_stable_platform": baro_snap.stable_platform,
             "baro_descending": round(baro_snap.descending, 3),
+            "baro_ascending": round(baro_snap.ascending, 3),
             "baro_lower_platform": baro_snap.lower_platform,
+            "vertical_closure": baro_snap.vertical_closure,
             "acc": held_gps.acc,
             "gps_source_type": held_gps.source_type,
             "walking": walk_on,
@@ -445,6 +454,8 @@ def main() -> int:
                     "obs_time_prior": float(obs.get("time_prior", ev.get("s_time", 0.0))),
                     "obs_baro_descending": float(obs.get("baro_descending", r.get("baro_descending", 0.0))),
                     "obs_baro_lower_platform": float(obs.get("baro_lower_platform", 1.0 if r.get("baro_lower_platform") else 0.0)),
+                    "obs_baro_ascending": float(obs.get("baro_ascending", r.get("baro_ascending", 0.0))),
+                    "obs_vertical_closure": float(obs.get("vertical_closure", 1.0 if r.get("vertical_closure") else 0.0)),
                     "obs_baro_available": bool(obs.get("baro_available", r.get("baro_baseline_ready", False))),
                     "obs_sequence_available": bool(obs.get("sequence_available", False)),
                     "obs_sequence_progress": float(obs.get("sequence_progress", 0.0)),

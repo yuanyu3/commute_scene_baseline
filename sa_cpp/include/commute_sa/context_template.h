@@ -9,9 +9,18 @@ namespace commute_sa {
 
 /** Supported context-template DSL primitives and persisted active template. */
 std::string GetContextTemplateCatalogAction(const std::string &paramsJson);
+/** Read-only per-episode event timing used to ground aborted-leave analysis. */
+std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson);
 std::string GetActiveContextTemplateAction(const std::string &paramsJson);
 /** Evaluate the persisted template at its frozen strength; never tunes on the evaluation history. */
 std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &paramsJson);
+/** Read-only model intervention: disable positive/negative/both sequence terms and replay. */
+std::string DiagnoseContextTemplateOnHistoryAction(const std::string &paramsJson);
+/**
+ * Validate an Agent-proposed FALSE_PUSH -> ABORTED_LEAVE interpretation from
+ * raw replay semantics and append a non-destructive label override.
+ */
+std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJson);
 
 /**
  * Validate an Agent-composed event sequence, replay LOW/MEDIUM/HIGH effect
