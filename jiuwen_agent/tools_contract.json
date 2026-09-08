@@ -308,13 +308,19 @@
     },
 
     {
+      "name": "get_aborted_leave_candidates",
+      "kind": "read_only",
+      "description": "Return per-episode material descent, lower-platform, ascent, vertical-closure, outside and support-event timing. This is evidence rather than a label.",
+      "input_schema": {"side": "company|home", "limit": "1..100"}
+    },
+    {
       "name": "propose_aborted_leave_interpretation",
       "category": "template",
       "description": "Propose that an original FALSE_PUSH is an ABORTED_LEAVE. C++ validates material descent, a shared prefix found in confirmed history, later ascent and vertical closure, and absence of outside before appending a non-destructive interpretation.",
       "input_schema": {
         "side": "home|company",
         "episode_id": "exact string from history",
-        "outcome_t_ms": "exact integer from history",
+        "outcome_t_ms": "optional exact integer; required only when episode_id is ambiguous",
         "confidence": "0.5..1",
         "rationale": "evidence-grounded inference"
       },

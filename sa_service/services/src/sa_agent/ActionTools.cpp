@@ -116,6 +116,10 @@ std::string CallGetContextTemplateCatalog(const std::string &p)
 {
     return commute_sa::GetContextTemplateCatalogAction(p);
 }
+std::string CallGetAbortedLeaveCandidates(const std::string &p)
+{
+    return commute_sa::GetAbortedLeaveCandidatesAction(p);
+}
 std::string CallProposeAbortedLeave(const std::string &p)
 {
     return commute_sa::ProposeAbortedLeaveInterpretationAction(p);
@@ -176,6 +180,7 @@ const std::vector<std::string> &ActionToolNames()
         "get_personalization_profile",
         "submit_agent_analysis",
         "get_context_template_catalog",
+        "get_aborted_leave_candidates",
         "propose_aborted_leave_interpretation",
         "diagnose_context_template",
         "generate_context_template",
@@ -268,10 +273,12 @@ std::vector<std::string> RegisterActionTools()
 
     RegisterOne("get_context_template_catalog", "Return bounded context-template primitives", {},
         &CallGetContextTemplateCatalog);
+    RegisterOne("get_aborted_leave_candidates", "Return read-only physical reversal evidence per episode",
+        {{"side", "company|home", "string", false}, {"limit", "1..100", "integer", false}},
+        &CallGetAbortedLeaveCandidates);
     RegisterOne("propose_aborted_leave_interpretation",
         "Validate a proposed FALSE_PUSH as ABORTED_LEAVE from physical reversal evidence",
         {{"side", "company|home", "string", true}, {"episode_id", "exact episode id", "string", true},
-            {"outcome_t_ms", "exact outcome timestamp", "integer", true},
             {"confidence", "0.5..1", "number", true}, {"rationale", "evidence-grounded inference", "string", true}},
         &CallProposeAbortedLeave);
     RegisterOne("diagnose_context_template", "Read-only active-template sequence ablation",

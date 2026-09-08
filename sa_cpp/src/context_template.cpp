@@ -742,6 +742,91 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"strengths\":\"LOW|MEDIUM|HIGH selected by deterministic replay with continuous lead score and no false/missed regression\"}";
 }
 
+std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
+{
+    std::string wantedSide = "company";
+    ExtractString(paramsJson, "side", &wantedSide);
+    double limitValue = 50;
+    ExtractNumber(paramsJson, "limit", &limitValue);
+    const size_t limit = static_cast<size_t>(std::max(1.0, std::min(100.0, limitValue)));
+    struct Summary {
+        std::string episode;
+        std::string label;
+        int64_t outcome = 0;
+        int64_t firstDescent = 0;
+        int64_t firstLower = 0;
+        int64_t firstAscending = 0;
+        int64_t firstClosure = 0;
+        double maxDescent = 0;
+        bool outside = false;
+        bool walking = false;
+        bool outbound = false;
+        bool attached = false;
+    };
+    std::map<std::string, Summary> grouped;
+    std::ifstream in(RootDir() + "/policy_history.jsonl");
+    if (!in.is_open()) return "{\"ok\":false,\"error\":\"policy_history.jsonl missing\"}";
+    const double material = std::max(4.0, CurrentTheta().baro_min_descent_m);
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string side;
+        std::string episode;
+        std::string label;
+        double value = 0;
+        if (!ExtractString(line, "side", &side) || side != wantedSide ||
+            !ExtractString(line, "episode_id", &episode) || episode.empty() ||
+            !ExtractString(line, "label", &label) || label != "FALSE_PUSH" ||
+            !ExtractNumber(line, "outcome_t_ms", &value)) continue;
+        const int64_t outcome = static_cast<int64_t>(value);
+        const std::string key = episode + ":" + std::to_string(outcome);
+        auto &s = grouped[key];
+        s.episode = episode;
+        s.label = label;
+        s.outcome = outcome;
+        int64_t tMs = 0;
+        if (ExtractNumber(line, "t_ms", &value)) tMs = static_cast<int64_t>(value);
+        if (ExtractNumber(line, "baro_descent_m", &value)) {
+            s.maxDescent = std::max(s.maxDescent, value);
+            if (!s.firstDescent && value >= material) s.firstDescent = tMs;
+        }
+        if (ExtractNumber(line, "obs_baro_lower_platform", &value) && value >= 0.5 && !s.firstLower)
+            s.firstLower = tMs;
+        if (ExtractNumber(line, "obs_baro_ascending", &value) && value >= 0.5 && !s.firstAscending)
+            s.firstAscending = tMs;
+        if (ExtractNumber(line, "obs_vertical_closure", &value) && value >= 0.5 && !s.firstClosure)
+            s.firstClosure = tMs;
+        bool flag = false;
+        if (ExtractBool(line, "obs_outside", &flag) && flag) s.outside = true;
+        if (ExtractNumber(line, "obs_walking", &value) && value >= 0.5) s.walking = true;
+        const char *outboundFields[] = {"obs_pdr_outbound", "obs_geo_outbound", "obs_wifi_detach"};
+        for (const char *field : outboundFields) {
+            if (ExtractNumber(line, field, &value) && value >= 0.5) s.outbound = true;
+        }
+        if (ExtractBool(line, "obs_attached", &flag) && flag) s.attached = true;
+    }
+    std::ostringstream out;
+    out << "{\"ok\":true,\"side\":\"" << Esc(wantedSide)
+        << "\",\"material_descent_m\":" << material << ",\"episodes\":[";
+    size_t count = 0;
+    for (const auto &entry : grouped) {
+        if (count >= limit) break;
+        const auto &s = entry.second;
+        if (count++) out << ',';
+        out << "{\"episode_id\":\"" << Esc(s.episode) << "\",\"outcome_t_ms\":" << s.outcome
+            << ",\"label\":\"" << s.label << "\",\"max_baro_descent_m\":" << s.maxDescent
+            << ",\"first_material_descent_t_ms\":" << s.firstDescent
+            << ",\"first_lower_platform_t_ms\":" << s.firstLower
+            << ",\"first_baro_ascending_t_ms\":" << s.firstAscending
+            << ",\"first_vertical_closure_t_ms\":" << s.firstClosure
+            << ",\"outside_observed\":" << (s.outside ? "true" : "false")
+            << ",\"walking_observed\":" << (s.walking ? "true" : "false")
+            << ",\"outbound_support_observed\":" << (s.outbound ? "true" : "false")
+            << ",\"attached_observed\":" << (s.attached ? "true" : "false") << '}';
+    }
+    out << "],\"interpretation\":\"Read-only evidence, not an ABORTED_LEAVE label. Event order must be checked by timestamps and proposals remain C++ validated.\"}";
+    return out.str();
+}
+
 std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJson)
 {
     std::string side;
@@ -751,15 +836,17 @@ std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJso
     double confidence = 0.0;
     if (!ExtractString(paramsJson, "side", &side) ||
         !ExtractString(paramsJson, "episode_id", &episodeId) || episodeId.empty() ||
-        !ExtractNumber(paramsJson, "outcome_t_ms", &outcomeValue) || outcomeValue <= 0 ||
         !ExtractNumber(paramsJson, "confidence", &confidence) || confidence < 0.5 || confidence > 1.0 ||
         !ExtractString(paramsJson, "rationale", &rationale) || rationale.empty()) {
-        return "{\"ok\":false,\"error\":\"side, episode_id, outcome_t_ms, confidence>=0.5 and rationale required\"}";
+        return "{\"ok\":false,\"error\":\"side, episode_id, confidence>=0.5 and rationale required\"}";
     }
     if (side != "company" && side != "home") {
         return "{\"ok\":false,\"error\":\"side must be company|home\"}";
     }
-    const int64_t outcomeMs = static_cast<int64_t>(outcomeValue);
+    ExtractNumber(paramsJson, "outcome_t_ms", &outcomeValue);
+    const bool outcomeProvided = outcomeValue > 0;
+    int64_t outcomeMs = outcomeValue > 0 ? static_cast<int64_t>(outcomeValue) : 0;
+    bool ambiguousOutcome = false;
     const Theta theta = CurrentTheta();
     std::ifstream in(RootDir() + "/policy_history.jsonl");
     if (!in.is_open()) return "{\"ok\":false,\"error\":\"policy_history.jsonl missing\"}";
@@ -783,8 +870,11 @@ std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJso
         double rowOutcome = 0.0;
         if (!ExtractString(line, "side", &rowSide) || rowSide != side ||
             !ExtractString(line, "episode_id", &rowEpisode) || rowEpisode != episodeId ||
-            !ExtractNumber(line, "outcome_t_ms", &rowOutcome) ||
-            static_cast<int64_t>(rowOutcome) != outcomeMs) continue;
+            !ExtractNumber(line, "outcome_t_ms", &rowOutcome)) continue;
+        const int64_t rowOutcomeMs = static_cast<int64_t>(rowOutcome);
+        if (outcomeProvided && rowOutcomeMs != outcomeMs) continue;
+        if (outcomeMs == 0) outcomeMs = rowOutcomeMs;
+        else if (rowOutcomeMs != outcomeMs) ambiguousOutcome = true;
         found = true;
         ExtractString(line, "label", &label);
         originalFalse = originalFalse || label == "FALSE_PUSH";
@@ -817,6 +907,9 @@ std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJso
         }
     }
 
+    if (ambiguousOutcome) {
+        return "{\"ok\":false,\"error\":\"episode_id is ambiguous; provide outcome_t_ms\"}";
+    }
     if (!found || !originalFalse) {
         return "{\"ok\":false,\"error\":\"matching original FALSE_PUSH episode not found\"}";
     }

@@ -111,6 +111,10 @@ std::string GetProfile(const std::string &p) { return commute_sa::GetPersonaliza
 std::string ProposeProfile(const std::string &p) { return commute_sa::ProposeContextProfileUpdateAction(p); }
 std::string SubmitAnalysis(const std::string &p) { return commute_sa::SubmitAgentAnalysisAction(p); }
 std::string GetTemplateCatalog(const std::string &p) { return commute_sa::GetContextTemplateCatalogAction(p); }
+std::string GetAbortedCandidates(const std::string &p)
+{
+    return commute_sa::GetAbortedLeaveCandidatesAction(p);
+}
 std::string ProposeAbortedLeave(const std::string &p)
 {
     return commute_sa::ProposeAbortedLeaveInterpretationAction(p);
@@ -198,10 +202,13 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("get_context_template_catalog",
         "Return bounded event/effect primitives that the Agent may compose into a new context template", {},
         &GetTemplateCatalog);
+    Reg("get_aborted_leave_candidates",
+        "Return read-only per-episode descent, ascent, closure, outside and support-event timing",
+        {{"side", "company|home", "string", false}, {"limit", "1..100", "integer", false}},
+        &GetAbortedCandidates);
     Reg("propose_aborted_leave_interpretation",
         "Propose a FALSE_PUSH as ABORTED_LEAVE; C++ requires a confirmed shared prefix, ascent, vertical closure and no outside",
         {{"side", "company|home", "string", true}, {"episode_id", "exact episode id", "string", true},
-            {"outcome_t_ms", "exact outcome timestamp", "integer", true},
             {"confidence", "0.5..1", "number", true}, {"rationale", "evidence-grounded inference", "string", true}},
         &ProposeAbortedLeave);
     Reg("diagnose_context_template",
@@ -250,7 +257,8 @@ std::vector<std::string> RegisterPersonalizerTools()
         "analyze_personalization_rules", "run_constrained_theta_optimizer", "run_rule_personalization",
         "get_optimization_trial", "commit_optimized_theta", "discard_optimization_trial",
         "get_personalization_profile", "propose_context_profile_update", "submit_agent_analysis",
-        "get_context_template_catalog", "diagnose_context_template", "generate_context_template", "get_context_template_trial",
+        "get_context_template_catalog", "get_aborted_leave_candidates",
+        "propose_aborted_leave_interpretation", "diagnose_context_template", "generate_context_template", "get_context_template_trial",
         "commit_context_template", "discard_context_template", "get_active_context_template",
         "get_personalization_policy", "get_policy_catalog", "begin_policy_trial", "apply_policy_candidate",
         "evaluate_policy_on_history", "revert_policy_trial", "commit_policy_trial"};

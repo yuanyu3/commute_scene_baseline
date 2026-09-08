@@ -21,7 +21,7 @@
 
 ## Agent提议与C++验证
 
-Agent 可对一个原始 `FALSE_PUSH` 调用 `propose_aborted_leave_interpretation`。输入必须包含准确的 `side`、`episode_id`、`outcome_t_ms`、置信度和证据解释。
+Agent 先通过只读 `get_aborted_leave_candidates` 获取每条误推的下降、低层平台、回升、闭合和 outside 时间证据，再对原始 `FALSE_PUSH` 调用 `propose_aborted_leave_interpretation`。输入必须包含准确的 `side`、`episode_id`、置信度和证据解释；当 episode ID 不唯一时还必须提供 `outcome_t_ms`，唯一时由 C++ 解析。
 
 C++ 只有在以下条件全部成立时才接受：
 

@@ -382,7 +382,7 @@ int main(int argc, char **argv)
 
     const std::string interpretation = commute_sa::ProposeAbortedLeaveInterpretationAction(
         "{\"side\":\"company\",\"episode_id\":\"agent_abort_candidate\","
-        "\"outcome_t_ms\":1800604820000,\"confidence\":0.8,"
+        "\"confidence\":0.8,"
         "\"rationale\":\"shared vertical departure prefix followed by measured closure\"}");
     Call("propose_aborted_leave_interpretation", interpretation);
     const std::string interpretedReplay = commute_sa::EvaluateThetaOnHistoryAction("{}");
