@@ -7,6 +7,7 @@
 #include "commute_sa/evidence_query.h"
 #include "commute_sa/personalization_optimizer.h"
 #include "commute_sa/product_store.h"
+#include "commute_sa/theta_eval.h"
 
 #include <cmath>
 #include <cstdio>
@@ -69,6 +70,10 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetPersonalizationProfileAction(params) << "\n";
         } else if (command == "template_catalog") {
             std::cout << commute_sa::GetContextTemplateCatalogAction(params) << "\n";
+        } else if (command == "aborted_candidates") {
+            std::cout << commute_sa::GetAbortedLeaveCandidatesAction(params) << "\n";
+        } else if (command == "propose_aborted") {
+            std::cout << commute_sa::ProposeAbortedLeaveInterpretationAction(params) << "\n";
         } else if (command == "template_generate") {
             std::cout << commute_sa::GenerateContextTemplateAction(params) << "\n";
         } else if (command == "template_fit") {
@@ -369,6 +374,73 @@ int main(int argc, char **argv)
         ++fails;
     }
 
+    Section("ALTERNATIVE_RETURN_PATHS");
+    commute_sa::ReplayEpisodeSummary safeReturn;
+    safeReturn.key = "return"; safeReturn.aborted = true; safeReturn.cancel_ms = 100;
+    auto lateReturn = safeReturn;
+    lateReturn.cancel_ms = 101;
+    std::string guardReason;
+    if (commute_sa::CheckReplayEpisodeSafety({safeReturn}, {lateReturn}, &guardReason)) {
+        std::cerr << "FAIL delayed cancellation passed per-episode guard\n"; ++fails;
+    }
+    auto newPush = safeReturn;
+    newPush.pushed = true;
+    if (commute_sa::CheckReplayEpisodeSafety({safeReturn}, {newPush}, &guardReason)) {
+        std::cerr << "FAIL new aborted push passed per-episode guard\n"; ++fails;
+    }
+    WriteFile(root + "/active_context_template.json",
+        "{\"schema_version\":6,\"template_name\":\"return_paths\",\"side\":\"company\","
+        "\"anchor_id\":\"co\",\"applicability\":\"always\","
+        "\"positive_sequence\":\"walking\","
+        "\"cancel_paths\":\"baro_ascending,vertical_closure|geo_outbound,approaching,attached\","
+        "\"negative_pattern\":\"\",\"ready_prefix_length\":1,\"strength\":0.4}");
+    const auto step = [](int seconds, bool walk, bool up, bool closure, bool geo,
+                         bool approaching, bool attached, bool baro = true, bool outside = false) {
+        commute_sa::LeaveObservation obs;
+        obs.walking = walk; obs.baro_ascending = up; obs.vertical_closure = closure;
+        obs.geo_outbound = geo; obs.approaching = approaching; obs.attached = attached;
+        obs.baro_available = baro; obs.outside = outside;
+        commute_sa::ApplyActiveContextTemplateObservation("company", "co", 1910000000000 + seconds * 1000, &obs);
+        return obs;
+    };
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false);
+    step(5, false, true, false, false, false, false);
+    if (step(10, false, false, true, false, false, false).cancel_sequence_match != 1.0) {
+        std::cerr << "FAIL vertical path required optional attachment\n"; ++fails;
+    }
+    step(15, true, false, false, true, false, false);
+    if (step(25, true, false, false, true, false, false).cancel_sequence_match != 0.0) {
+        std::cerr << "FAIL fresh departure could not release cancel hold\n"; ++fails;
+    }
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false, false);
+    step(5, false, false, false, true, false, false, false);
+    step(10, false, false, false, false, true, false, false);
+    if (step(15, false, false, false, false, false, true, false).cancel_sequence_match != 1.0) {
+        std::cerr << "FAIL horizontal alternative required barometer\n"; ++fails;
+    }
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false);
+    step(5, false, false, true, false, false, false);
+    if (step(10, false, true, false, false, false, false).cancel_sequence_match != 0.0 ||
+        step(200, false, false, true, false, false, false).cancel_sequence_match != 0.0) {
+        std::cerr << "FAIL unordered or expired events cancelled departure\n"; ++fails;
+    }
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false);
+    step(5, false, true, false, false, false, false, false);
+    if (step(10, false, false, true, false, false, false, false).cancel_sequence_match != 0.0) {
+        std::cerr << "FAIL unavailable barometer used as positive evidence\n"; ++fails;
+    }
+    commute_sa::ReloadActiveContextTemplateRuntime();
+    step(0, true, false, false, false, false, false);
+    step(5, false, true, false, false, false, false);
+    step(10, false, false, false, false, false, false, true, true);
+    if (step(15, false, false, true, false, false, false).cancel_sequence_match != 0.0) {
+        std::cerr << "FAIL outside followed by return treated as cancellation\n"; ++fails;
+    }
+
     const std::string cancelGenerated = commute_sa::GenerateContextTemplateAction(
         "{\"template_name\":\"cancel_fit\",\"side\":\"company\",\"anchor_id\":\"co\","
         "\"applicability\":\"baro_ready\",\"positive_sequence\":\"baro_descending\","
@@ -405,6 +477,20 @@ int main(int argc, char **argv)
         ++fails;
     }
 
+    Section("DUPLICATE_HISTORY_REJECTED");
+    std::string repeatedTick;
+    {
+        std::ifstream history(root + "/policy_history.jsonl");
+        std::getline(history, repeatedTick);
+    }
+    {
+        std::ofstream history(root + "/policy_history.jsonl", std::ios::app);
+        history << repeatedTick << '\n';
+    }
+    const auto duplicateReplay = commute_sa::EvaluateActiveContextTemplateOnHistoryAction("{}");
+    if (duplicateReplay.find("\"ok\":false") == std::string::npos) {
+        std::cerr << "FAIL duplicate timestamps accepted by frozen replay\n"; ++fails;
+    }
     std::cout << "\n=== SUMMARY fails=" << fails << " ===\n";
     return fails == 0 ? 0 : 1;
 }

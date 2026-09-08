@@ -34,6 +34,8 @@ struct ReplayEpisodeSummary {
     bool pushed = false;
     int64_t push_ms = 0;
     double lead_s = -1.0;
+    bool aborted = false;
+    int64_t cancel_ms = 0;
 };
 // Reject per-episode regressions; aggregate counts can hide swaps between episodes.
 bool CheckReplayEpisodeSafety(const std::vector<ReplayEpisodeSummary> &baseline,

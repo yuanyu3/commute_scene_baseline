@@ -282,7 +282,8 @@ std::vector<std::string> RegisterActionTools()
             {"confidence", "0.5..1", "number", true}, {"rationale", "evidence-grounded inference", "string", true}},
         &CallProposeAbortedLeave);
     RegisterOne("diagnose_context_template", "Read-only active-template sequence ablation",
-        {{"ablation", "positive|negative|both", "string", true},
+        {{"ablation", "positive|negative|both|cancel_path", "string", true},
+            {"path_index", "zero-based alternative path for cancel_path ablation", "integer", false},
             {"limit", "1..100 episodes", "integer", false}}, &CallDiagnoseContextTemplate);
     RegisterOne("generate_context_template", "Stage a replay-safe Agent-composed context template",
         {{"template_name", "stable identifier", "string", true}, {"side", "company|home", "string", true},
@@ -290,6 +291,7 @@ std::vector<std::string> RegisterActionTools()
             {"applicability", "always|baro_ready", "string", true},
             {"positive_sequence", "ordered catalog events", "string", true},
             {"cancel_sequence", "optional ordered return events", "string", false},
+            {"cancel_paths", "optional comma-ordered, pipe-separated return paths; see catalog; excludes cancel_sequence", "string", false},
             {"negative_pattern", "optional same-tick conjunction", "string", false},
             {"parameter_families", "optional vertical_threshold", "string", false},
             {"rationale", "evidence-grounded explanation", "string", true}}, &CallGenerateContextTemplate);

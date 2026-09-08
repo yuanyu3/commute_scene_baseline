@@ -53,6 +53,9 @@ struct TemplateSpec {
     std::vector<std::string> positive_sequence;
     /** Ordered return sequence; active only after the positive prefix starts. */
     std::vector<std::string> cancel_sequence;
+    // Alternatives, not a bag of independently summed sensor observations.
+    std::vector<std::vector<std::string>> cancel_paths;
+    bool cancel_paths_mode = false; // Also retained when ablating the final path.
     std::vector<std::string> negative_pattern;
     std::vector<std::string> parameter_families;
     std::vector<std::string> unavailable_parameter_families;
@@ -96,6 +99,10 @@ struct TemplateRuntimeState {
     size_t cancel_index = 0;
     int64_t last_match_ms = 0;
     int64_t cancel_until_ms = 0;
+    std::vector<size_t> path_indices;
+    std::vector<int64_t> path_started_ms;
+    int64_t departure_started_ms = 0;
+    int64_t restart_started_ms = 0;
 };
 
 TemplateRuntimeState gActiveState;
@@ -414,6 +421,57 @@ void EstimateRequestedParameters(const Theta &theta, TemplateSpec *spec)
     }
 }
 
+// Small DSL: comma separates ordered events, pipe separates alternative paths.
+// Each path must contain an observed departure followed by a physical return,
+// or the vertical reversal/closure pair relative to the positive prefix.
+bool ParseCancelPaths(const std::string &csv, std::vector<std::vector<std::string>> *paths)
+{
+    paths->clear();
+    if (csv.empty()) return true;
+    if (csv.back() == '|') return false;
+    std::stringstream stream(csv);
+    std::string clause;
+    std::set<std::string> seen;
+    while (std::getline(stream, clause, '|')) {
+        const auto events = SplitCsv(clause);
+        if (events.size() < 2 || events.size() > 6 || !seen.insert(JoinCsv(events)).second) return false;
+        for (const auto &event : events) if (SupportedEvents().count(event) == 0) return false;
+        const auto hasOrdered = [&](const std::string &a, const std::string &b) {
+            auto first = std::find(events.begin(), events.end(), a);
+            return first != events.end() && std::find(first + 1, events.end(), b) != events.end();
+        };
+        const bool vertical = hasOrdered("baro_ascending", "vertical_closure");
+        const bool spatial = hasOrdered("geo_outbound", "approaching") &&
+            events.back() == "attached";
+        if (!vertical && !spatial) return false;
+        paths->push_back(events);
+    }
+    if (paths->empty() || paths->size() > 3) return false;
+    // With OR fusion a longer path prefixed by an accepted shorter path adds
+    // no recognition ability. Canonicalize instead of rewarding verbosity.
+    std::vector<std::vector<std::string>> minimal;
+    for (size_t i = 0; i < paths->size(); ++i) {
+        bool redundant = false;
+        for (size_t j = 0; j < paths->size(); ++j) {
+            if (i != j && (*paths)[j].size() < (*paths)[i].size() &&
+                std::equal((*paths)[j].begin(), (*paths)[j].end(), (*paths)[i].begin())) redundant = true;
+        }
+        if (!redundant) minimal.push_back((*paths)[i]);
+    }
+    *paths = std::move(minimal);
+    return true;
+}
+
+std::string JoinCancelPaths(const std::vector<std::vector<std::string>> &paths)
+{
+    std::string result;
+    for (const auto &path : paths) {
+        if (!result.empty()) result += '|';
+        result += JoinCsv(path);
+    }
+    return result;
+}
+
 bool EventActive(const std::string &event, const LeaveObservation &obs)
 {
     if (event == "walking") return obs.walking >= 0.5;
@@ -424,8 +482,8 @@ bool EventActive(const std::string &event, const LeaveObservation &obs)
     if (event == "ble_detach") return obs.ble_detach >= 0.5;
     if (event == "baro_descending") return obs.baro_descending >= 0.5;
     if (event == "lower_platform") return obs.baro_lower_platform >= 0.5;
-    if (event == "baro_ascending") return obs.baro_ascending >= 0.5;
-    if (event == "vertical_closure") return obs.vertical_closure >= 0.5;
+    if (event == "baro_ascending") return obs.baro_available && obs.baro_ascending >= 0.5;
+    if (event == "vertical_closure") return obs.baro_available && obs.vertical_closure >= 0.5;
     if (event == "outside") return obs.outside;
     if (event == "approaching") return obs.approaching;
     if (event == "attached") return obs.attached;
@@ -456,7 +514,19 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
             obs->baro_descent_m >= spec.baro_min_descent_m ? 1.0 : 0.0;
     }
     if (state->cancel_until_ms > 0) {
-        if (obs->t_ms <= state->cancel_until_ms) {
+        // New templates may release the hold after a fresh, sustained departure.
+        // A single noisy tick must not release cancellation.
+        if (spec.cancel_paths_mode) {
+            const bool restarting = !obs->approaching && !obs->attached &&
+                ((obs->baro_available && obs->baro_descending >= 0.5 && obs->vertical_closure < 0.5) ||
+                 (obs->walking >= 0.5 && obs->geo_outbound >= 0.5));
+            if (!restarting) state->restart_started_ms = 0;
+            else if (!state->restart_started_ms) state->restart_started_ms = obs->t_ms;
+            if (state->restart_started_ms && obs->t_ms - state->restart_started_ms >= 10000) {
+                *state = TemplateRuntimeState {};
+            }
+        }
+        if (state->cancel_until_ms > 0 && obs->t_ms <= state->cancel_until_ms) {
             obs->negative_pattern_match = 1.0;
             obs->cancel_sequence_match = 1.0;
             return false;
@@ -467,6 +537,7 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
     const size_t previousCancel = state->cancel_index;
     if (state->positive_index < spec.positive_sequence.size() &&
         EventActive(spec.positive_sequence[state->positive_index], *obs)) {
+        if (!state->positive_index) state->departure_started_ms = obs->t_ms;
         ++state->positive_index;
     }
     if (!spec.positive_sequence.empty()) {
@@ -487,11 +558,39 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         EventActive(spec.cancel_sequence[state->cancel_index], *obs)) {
         ++state->cancel_index;
     }
-    if (!spec.cancel_sequence.empty() && state->cancel_index >= spec.cancel_sequence.size()) {
+    bool pathComplete = false;
+    if (spec.cancel_paths_mode) {
+        if (state->path_indices.size() != spec.cancel_paths.size()) {
+            state->path_indices.assign(spec.cancel_paths.size(), 0);
+            state->path_started_ms.assign(spec.cancel_paths.size(), 0);
+        }
+        for (size_t i = 0; i < spec.cancel_paths.size(); ++i) {
+            auto &index = state->path_indices[i];
+            auto &started = state->path_started_ms[i];
+            const auto &path = spec.cancel_paths[i];
+            // Expire from the first event, not the latest match. Outside closes
+            // this attempted departure; a later homecoming is not a cancellation.
+            if (obs->outside || (started && obs->t_ms - started > 180000)) {
+                index = 0;
+                started = 0;
+            }
+            if (obs->outside || !state->positive_index ||
+                obs->t_ms <= state->departure_started_ms) continue;
+            if (index < path.size() && EventActive(path[index], *obs)) {
+                if (!index) started = obs->t_ms;
+                ++index; // At most one stage per tick, never unordered co-occurrence.
+            }
+            pathComplete = pathComplete || index == path.size();
+        }
+        if (obs->outside) state->positive_index = 0;
+    }
+    if (pathComplete || (!spec.cancel_sequence.empty() && state->cancel_index >= spec.cancel_sequence.size())) {
         constexpr int64_t kCancelHoldMs = 120000;
         state->cancel_until_ms = obs->t_ms + kCancelHoldMs;
         state->positive_index = 0;
         state->cancel_index = 0;
+        state->path_indices.clear();
+        state->path_started_ms.clear();
         obs->sequence_progress = 0.0;
         obs->sequence_complete = 0.0;
         obs->sequence_ready = spec.ready_prefix_length > 0 ? 0.0 : -1.0;
@@ -503,6 +602,11 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
     for (const auto &event : spec.negative_pattern) negative = negative && EventActive(event, *obs);
     if (negative) {
         obs->negative_pattern_match = 1.0;
+    }
+    if (spec.cancel_paths_mode && (obs->approaching || obs->attached || obs->outside)) {
+        obs->sequence_progress = 0.0;
+        obs->sequence_complete = 0.0;
+        obs->sequence_ready = spec.ready_prefix_length > 0 ? 0.0 : -1.0;
     }
     return state->positive_index > previousPositive || state->cancel_index > previousCancel ||
         state->cancel_until_ms > 0;
@@ -535,6 +639,10 @@ void LoadActiveTemplateLocked()
     }
     ExtractString(json, "negative_pattern", &negativeCsv);
     ExtractString(json, "cancel_sequence", &cancelCsv);
+    std::string pathsCsv;
+    ExtractString(json, "cancel_paths", &pathsCsv);
+    if (!ParseCancelPaths(pathsCsv, &spec.cancel_paths) || (!pathsCsv.empty() && !cancelCsv.empty())) return;
+    spec.cancel_paths_mode = !pathsCsv.empty();
     ExtractString(json, "parameter_families", &parameterFamiliesCsv);
     ExtractString(json, "rationale", &spec.rationale);
     spec.positive_sequence = SplitCsv(positiveCsv);
@@ -641,6 +749,9 @@ bool Eligible(const Metrics &base, const Metrics &candidate, std::string *why)
     if (candidate.aborted_visible_push > base.aborted_visible_push) {
         if (why) *why = "aborted_visible_push_increased"; return false;
     }
+    if (candidate.aborted_cancel_recognized < base.aborted_cancel_recognized) {
+        if (why) *why = "aborted_cancel_recognition_decreased"; return false;
+    }
     return true;
 }
 
@@ -663,7 +774,8 @@ ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
             state = TemplateRuntimeState {};
         }
         if (ApplySpec(spec, strength, &obs, &state)) state.last_match_ms = obs.t_ms;
-        if (obs.outside || obs.approaching || (obs.attached && state.cancel_until_ms <= 0)) {
+        if (obs.outside || (!spec.cancel_paths_mode &&
+            (obs.approaching || (obs.attached && state.cancel_until_ms <= 0)))) {
             state = TemplateRuntimeState {};
         }
     };
@@ -672,12 +784,13 @@ ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
 std::string SpecJson(const TemplateSpec &spec, const std::string &strengthName = "", double strength = 0.0)
 {
     std::ostringstream out;
-    out << "{\"schema_version\":5,\"ready_prefix_length\":" << spec.ready_prefix_length
+    out << "{\"schema_version\":6,\"ready_prefix_length\":" << spec.ready_prefix_length
         << ",\"template_name\":\"" << Esc(spec.template_name)
         << "\",\"side\":\"" << Esc(spec.side) << "\",\"anchor_id\":\"" << Esc(spec.anchor_id)
         << "\",\"applicability\":\"" << Esc(spec.applicability)
         << "\",\"positive_sequence\":\"" << Esc(JoinCsv(spec.positive_sequence))
         << "\",\"cancel_sequence\":\"" << Esc(JoinCsv(spec.cancel_sequence))
+        << "\",\"cancel_paths\":\"" << Esc(JoinCancelPaths(spec.cancel_paths))
         << "\",\"negative_pattern\":\"" << Esc(JoinCsv(spec.negative_pattern))
         << "\",\"parameter_families\":\"" << Esc(JoinCsv(spec.parameter_families))
         << "\",\"positive_effect\":\"emit_progress_completion_and_optional_prefix_readiness\","
@@ -727,7 +840,11 @@ std::string TrialJson(const Trial &trial)
 
 std::string GetContextTemplateCatalogAction(const std::string &)
 {
-    return "{\"ok\":true,\"schema_version\":5,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
+    return "{\"ok\":true,\"schema_version\":6,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
+           "\"cancel_paths\":{\"syntax\":\"ordered comma-separated events; pipe separates up to 3 alternative paths; mutually exclusive with cancel_sequence\","
+           "\"validation\":\"each path needs baro_ascending before vertical_closure, or geo_outbound before approaching ending in attached; <=6 events per path\","
+           "\"fusion\":\"any completed path; no additive sensor votes; redundant prefix extensions removed; 180s path expiry; fresh departure for 10s releases 120s hold\","
+           "\"evidence_rule\":\"attached_observed is whole-episode presence, NOT reattachment; missing auxiliary evidence must not become a mandatory prerequisite\"},"
            "\"applicability\":[\"always\",\"baro_ready\"],"
            "\"events\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\","
            "\"ble_detach\",\"baro_descending\",\"lower_platform\",\"outside\",\"approaching\","
@@ -762,6 +879,14 @@ std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
         bool walking = false;
         bool outbound = false;
         bool attached = false;
+        size_t ticks = 0;
+        size_t attachedKnown = 0;
+        size_t attachedTrue = 0;
+        size_t baroKnown = 0;
+        size_t baroValid = 0;
+        int64_t firstAttachedAfterClosure = 0;
+        int64_t firstAttached = 0;
+        int64_t lastMs = 0;
     };
     std::map<std::string, Summary> grouped;
     std::ifstream in(RootDir() + "/policy_history.jsonl");
@@ -785,15 +910,19 @@ std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
         s.outcome = outcome;
         int64_t tMs = 0;
         if (ExtractNumber(line, "t_ms", &value)) tMs = static_cast<int64_t>(value);
+        ++s.ticks;
+        s.lastMs = std::max(s.lastMs, tMs);
         if (ExtractNumber(line, "baro_descent_m", &value)) {
             s.maxDescent = std::max(s.maxDescent, value);
             if (!s.firstDescent && value >= material) s.firstDescent = tMs;
         }
         if (ExtractNumber(line, "obs_baro_lower_platform", &value) && value >= 0.5 && !s.firstLower)
             s.firstLower = tMs;
-        if (ExtractNumber(line, "obs_baro_ascending", &value) && value >= 0.5 && !s.firstAscending)
+        if (s.firstDescent && tMs > s.firstDescent &&
+            ExtractNumber(line, "obs_baro_ascending", &value) && value >= 0.5 && !s.firstAscending)
             s.firstAscending = tMs;
-        if (ExtractNumber(line, "obs_vertical_closure", &value) && value >= 0.5 && !s.firstClosure)
+        if (s.firstAscending && tMs > s.firstAscending &&
+            ExtractNumber(line, "obs_vertical_closure", &value) && value >= 0.5 && !s.firstClosure)
             s.firstClosure = tMs;
         bool flag = false;
         if (ExtractBool(line, "obs_outside", &flag) && flag) s.outside = true;
@@ -802,7 +931,20 @@ std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
         for (const char *field : outboundFields) {
             if (ExtractNumber(line, field, &value) && value >= 0.5) s.outbound = true;
         }
-        if (ExtractBool(line, "obs_attached", &flag) && flag) s.attached = true;
+        if (ExtractBool(line, "obs_baro_available", &flag)) {
+            ++s.baroKnown;
+            if (flag) ++s.baroValid;
+        }
+        if (ExtractBool(line, "obs_attached", &flag)) {
+            ++s.attachedKnown;
+            if (flag) {
+                ++s.attachedTrue;
+                s.attached = true;
+                if (!s.firstAttached) s.firstAttached = tMs;
+                if (s.firstClosure && tMs >= s.firstClosure && !s.firstAttachedAfterClosure)
+                    s.firstAttachedAfterClosure = tMs;
+            }
+        }
     }
     std::ostringstream out;
     out << "{\"ok\":true,\"side\":\"" << Esc(wantedSide)
@@ -821,9 +963,20 @@ std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
             << ",\"outside_observed\":" << (s.outside ? "true" : "false")
             << ",\"walking_observed\":" << (s.walking ? "true" : "false")
             << ",\"outbound_support_observed\":" << (s.outbound ? "true" : "false")
-            << ",\"attached_observed\":" << (s.attached ? "true" : "false") << '}';
+            << ",\"attached_observed\":" << (s.attached ? "true" : "false")
+            << ",\"ticks\":" << s.ticks << ",\"attached_field_ticks\":" << s.attachedKnown
+            << ",\"attached_true_ticks\":" << s.attachedTrue
+            << ",\"baro_field_ticks\":" << s.baroKnown << ",\"baro_available_ticks\":" << s.baroValid
+            << ",\"first_attached_t_ms\":" << s.firstAttached
+            << ",\"first_attached_after_closure_t_ms\":" << s.firstAttachedAfterClosure
+            << ",\"record_end_t_ms\":" << s.lastMs
+            << ",\"ordered_vertical_return_candidate\":"
+            << (s.firstDescent && s.firstAscending && s.firstClosure && !s.outside ? "true" : "false")
+            << ",\"attached_sensor_quality\":\"unknown: historical attached is a fused boolean, not scan availability; first_attached_after_closure is presence, NOT a measured detach-to-reattach transition\"}";
     }
-    out << "],\"interpretation\":\"Read-only evidence, not an ABORTED_LEAVE label. Event order must be checked by timestamps and proposals remain C++ validated.\"}";
+    out << "],\"total_candidates\":" << grouped.size() << ",\"returned_candidates\":" << count
+        << ",\"truncated\":" << (grouped.size() > count ? "true" : "false")
+        << ",\"interpretation\":\"Read-only evidence, not a label or proof of subjective intent. attached_observed=true means ever attached, NOT reattached; false means no observed attachment, NOT proof of no return. Missing auxiliary evidence is not counterevidence. Compare complete timelines; account for every candidate, including uncertain cases. Proposals remain C++ validated.\"}";
     return out.str();
 }
 
@@ -895,15 +1048,14 @@ std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJso
         for (const char *field : outboundFields) {
             if (ExtractNumber(line, field, &value) && value >= 0.5) outbound = true;
         }
-        if (firstMaterialDescentMs > 0 && tMs >= firstMaterialDescentMs &&
+        if (firstMaterialDescentMs > 0 && tMs > firstMaterialDescentMs &&
             ExtractNumber(line, "obs_baro_ascending", &value) && value >= 0.5) {
             sawAscendingAfterDescent = true;
             if (!abortMs) abortMs = tMs;
         }
-        if (firstMaterialDescentMs > 0 && tMs >= firstMaterialDescentMs &&
+        if (sawAscendingAfterDescent && abortMs > 0 && tMs > abortMs &&
             ExtractNumber(line, "obs_vertical_closure", &value) && value >= 0.5) {
             sawClosureAfterDescent = true;
-            if (!abortMs) abortMs = tMs;
         }
     }
 
@@ -987,6 +1139,12 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     }
     ExtractString(paramsJson, "negative_pattern", &negativeCsv);
     ExtractString(paramsJson, "cancel_sequence", &cancelCsv);
+    std::string pathsCsv;
+    ExtractString(paramsJson, "cancel_paths", &pathsCsv);
+    if (!ParseCancelPaths(pathsCsv, &spec.cancel_paths) || (!pathsCsv.empty() && !cancelCsv.empty())) {
+        return "{\"ok\":false,\"error\":\"invalid cancel_paths: need ordered physical reversal, <=3 paths, and no simultaneous cancel_sequence\"}";
+    }
+    spec.cancel_paths_mode = !pathsCsv.empty();
     ExtractString(paramsJson, "parameter_families", &parameterFamiliesCsv);
     ExtractString(paramsJson, "side", &spec.side);
     ExtractString(paramsJson, "anchor_id", &spec.anchor_id);
@@ -1037,9 +1195,22 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     const Metrics baseline = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
         RootDir(), theta, {}, 0, 100, false, 0, &baselineEpisodes));
     if (!baseline.ok) return "{\"ok\":false,\"error\":\"baseline history replay unavailable\"}";
-    if (!spec.cancel_sequence.empty() && baseline.n_aborted_leave < 2) {
+    if ((!spec.cancel_sequence.empty() || !spec.cancel_paths.empty()) && baseline.n_aborted_leave < 2) {
         return "{\"ok\":false,\"error\":\"cancel_sequence requires at least 2 ABORTED_LEAVE episodes\","
                "\"n_aborted_leave\":" + std::to_string(baseline.n_aborted_leave) + "}";
+    }
+    // A supported vertical path cannot license an untested alternative.
+    // Validate each path separately at a frozen diagnostic strength.
+    for (size_t i = 0; i < spec.cancel_paths.size(); ++i) {
+        TemplateSpec single = spec;
+        single.cancel_paths = {spec.cancel_paths[i]};
+        const Metrics support = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
+            RootDir(), theta, BuildAdapter(single, 0.2), 0, 100));
+        if (!support.ok || support.aborted_cancel_recognized < 2) {
+            return "{\"ok\":false,\"error\":\"each cancel path requires 2 independently labeled ABORTED_LEAVE matches\","
+                "\"path_index\":" + std::to_string(i) + ",\"matched_episodes\":" +
+                std::to_string(support.aborted_cancel_recognized) + "}";
+        }
     }
 
     Trial trial;
@@ -1173,15 +1344,18 @@ std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &args
         strength = gActiveStrength;
     }
     const Theta theta = CurrentTheta();
-    const std::string baseline = EvaluateThetaOnHistoryJson(RootDir(), theta, 0, 1000);
     bool trace = false;
     double cutoff = 0;
     ExtractBool(args, "include_prefix_trace", &trace);
     ExtractNumber(args, "cutoff_t_ms", &cutoff);
     if (!std::isfinite(cutoff) || cutoff < 0 || cutoff > 9007199254740991.0)
         return "{\"ok\":false,\"error\":\"invalid cutoff_t_ms\"}";
+    const std::string baseline = EvaluateThetaOnHistoryWithAdapterJson(
+        RootDir(), theta, {}, 0, 1000, trace, static_cast<int64_t>(cutoff));
     const std::string frozen = EvaluateThetaOnHistoryWithAdapterJson(
         RootDir(), theta, BuildAdapter(spec, strength), 0, 1000, trace, static_cast<int64_t>(cutoff));
+    if (!ParseMetrics(baseline).ok || !ParseMetrics(frozen).ok)
+        return "{\"ok\":false,\"error\":\"valid unique-timestamp HSMM history required; no score-only fallback permitted\"}";
     return "{\"ok\":true,\"mode\":\"frozen_template_no_tuning\",\"template\":" +
         SpecJson(spec, "FROZEN", strength) + ",\"baseline\":" + baseline + ",\"frozen\":" + frozen + '}';
 }
@@ -1190,8 +1364,8 @@ std::string DiagnoseContextTemplateOnHistoryAction(const std::string &args)
 {
     std::string ablation;
     if (!ExtractString(args, "ablation", &ablation) ||
-        (ablation != "positive" && ablation != "negative" && ablation != "both"))
-        return "{\"ok\":false,\"error\":\"ablation must be positive|negative|both\"}";
+        (ablation != "positive" && ablation != "negative" && ablation != "both" && ablation != "cancel_path"))
+        return "{\"ok\":false,\"error\":\"ablation must be positive|negative|both|cancel_path\"}";
     double limit = 20;
     ExtractNumber(args, "limit", &limit);
     if (!std::isfinite(limit) || limit < 1 || limit > 100 || limit != std::floor(limit))
@@ -1205,9 +1379,17 @@ std::string DiagnoseContextTemplateOnHistoryAction(const std::string &args)
         spec = gActiveSpec;
         strength = gActiveStrength;
     }
+    TemplateSpec ablatedSpec = spec;
+    if (ablation == "cancel_path") {
+        double index = -1;
+        if (!ExtractNumber(args, "path_index", &index) || !std::isfinite(index) ||
+            index < 0 || index != std::floor(index) || index >= spec.cancel_paths.size())
+            return "{\"ok\":false,\"error\":\"valid zero-based path_index required\"}";
+        ablatedSpec.cancel_paths.erase(ablatedSpec.cancel_paths.begin() + static_cast<size_t>(index));
+    }
     // Fresh adapter state for each arm. No profile/theta writes, no candidate fit.
     const Theta theta = CurrentTheta();
-    auto disabled = [adapter = BuildAdapter(spec, strength), ablation](LeaveObservation &obs, bool start) mutable {
+    auto disabled = [adapter = BuildAdapter(ablatedSpec, strength), ablation](LeaveObservation &obs, bool start) mutable {
         adapter(obs, start);
         if (ablation == "positive" || ablation == "both") {
             obs.sequence_progress = 0;
@@ -1251,8 +1433,8 @@ bool ApplyActiveContextTemplateObservation(const std::string &side, const std::s
     observation->t_ms = tMs;
     const bool advanced = ApplySpec(gActiveSpec, gActiveStrength, observation, &gActiveState);
     if (advanced) gActiveState.last_match_ms = tMs;
-    if (observation->outside || observation->approaching ||
-        (observation->attached && gActiveState.cancel_until_ms <= 0)) {
+    if (observation->outside || (!gActiveSpec.cancel_paths_mode &&
+        (observation->approaching || (observation->attached && gActiveState.cancel_until_ms <= 0)))) {
         gActiveState = TemplateRuntimeState {};
     }
     return true;

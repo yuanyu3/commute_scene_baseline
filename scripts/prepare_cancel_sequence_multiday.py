@@ -60,7 +60,7 @@ def main() -> int:
     selected = {(source, episode): label for source, episode, label in EPISODES}
     rows: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    for source, _, _ in EPISODES:
+    for source in dict.fromkeys(source for source, _, _ in EPISODES):
         source_path = ROOT / "output" / source / "frozen" / "policy_history.jsonl"
         if not source_path.is_file():
             raise SystemExit(f"missing source history: {source_path}")
@@ -76,6 +76,10 @@ def main() -> int:
             rows.append(row)
             seen.add(key)
 
+    tick_keys = [(r['episode_id'], r['outcome_t_ms'], r['side'], r['t_ms']) for r in rows]
+    if len(tick_keys) != len(set(tick_keys)):
+        raise SystemExit('duplicate episode/timestamp in source history; resolve before training')
+
     missing = set(selected) - seen
     if missing:
         raise SystemExit(f"episodes absent from source histories: {sorted(missing)}")
@@ -90,7 +94,7 @@ def main() -> int:
         episode_rows = [r for r in rows if r.get("episode_id") == episode]
         outcome = int(episode_rows[0]["outcome_t_ms"])
         label_lines.append(json.dumps({"type": "label", "t_label_ms": outcome,
-            "t_push_ms": outcome, "label": label, "side": "company",
+            "outcome_t_ms": outcome, "label": label, "side": "company",
             "episode_id": episode, "truth_source": "REVIEWED_MULTIDAY_EXPERIMENT"}))
     (out / "leave_episodes.jsonl").write_text("\n".join(label_lines) + "\n", encoding="utf-8")
 

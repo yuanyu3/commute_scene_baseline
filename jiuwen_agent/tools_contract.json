@@ -331,7 +331,7 @@
       "name": "diagnose_context_template",
       "category": "evidence",
       "description": "Read-only sequence-term intervention on an active template. Compare matched episode rows; no fit or commit and no physical causal guarantee.",
-      "input_schema": {"ablation": "positive|negative|both", "limit": "optional integer 1..100, default 20"},
+      "input_schema": {"ablation": "positive|negative|both|cancel_path", "path_index": "required zero-based index for cancel_path", "limit": "optional integer 1..100, default 20"},
       "output_schema": {"read_only": "bool", "template": "object", "active": "replay object", "ablated": "replay object"}
     },
 
@@ -346,6 +346,7 @@
         "applicability": "always|baro_ready",
         "positive_sequence": "comma-separated catalog events",
         "cancel_sequence": "comma-separated ordered return events, optional; requires >=2 ABORTED_LEAVE episodes",
+        "cancel_paths": "optional alternative ordered paths separated by |; each path uses comma-separated catalog events; mutually exclusive with cancel_sequence; requires >=2 ABORTED_LEAVE episodes",
         "negative_pattern": "comma-separated catalog events, optional",
         "parameter_families": "vertical_threshold, optional; departure_time disabled; Agent supplies no values",
         "rationale": "string"

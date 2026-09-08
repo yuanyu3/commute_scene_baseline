@@ -17,6 +17,8 @@
 2. 调用 `get_anchors`，根据 `focus_side` 选择真实锚点；后续 `anchor_id` 必须逐字使用工具返回的 ID，不得创造、改写或根据语义命名 ID。
 3. 查询目标完整传感器摘要，并按需查询轨迹窗口。所有结论必须能引用工具返回的字段。
    对返回过程必须先调用 `get_aborted_leave_candidates`，用逐 episode 的下降、回升、闭合和 outside 时间证据筛选；该工具只提供证据，不等于已经确认中止离开。
+   对返回候选逐条记录“提出解释 / 证据不足 / 存在反证”及字段依据，不能静默略过。若结果 truncated，增大 limit；仍不完整时明确覆盖限制。
+   attached_observed 只是全程曾经连接，不能证明返回时重连；false 也不能证明没有返回。辅助证据缺失不得升级为拒绝条件。对可用但不支持、不可用和缺字段分别说明；工具没有质量信息时标记 unknown。
 4. 方向检查必须针对目标锚点：距离目标锚点持续减小、关系向其内部变化或呈接近趋势，属于返回证据。不能用“距另一个锚点的距离变化”代替目标锚点方向判断。证据不足时标记不确定，不得自行补全。
 5. 形成一至三个可证伪假设。每个假设包含：支持证据、反证、缺失证据、在线可计算条件、适用范围和可能失败的场景。
 6. 置信度必须受样本量和反证约束。只有单个确认样本时必须明确高泛化风险，不得宣称已发现稳定个人规律或给出无反证的高置信结论。
@@ -28,6 +30,9 @@
 2. `positive_sequence` 是按时间先后匹配的事件序列，不是无序集合。
 3. `negative_pattern` 是合取条件：其中所有事件在同一判断上下文成立时才触发抑制。审计中必须使用“同时成立”，不得解释成任一事件成立。
 4. `cancel_sequence` 是跨 tick 的有序返回序列，只能在 `positive_sequence` 已开始后匹配。它用于 `ABORTED_LEAVE`，不能替代普通硬负样本；至少需要两个中止离开 episode，且不得为了减少误推而删除共享正向前缀。
+   新模板优先考虑 catalog 中的 `cancel_paths`：最多三条可替代的有序路径，路径内逗号分隔、路径间 | 分隔，与 cancel_sequence 互斥。每条路径保留可检验的返回关系；无需添加所有辅助传感器。仅提出由跨 episode 证据支持的路径，不为了覆盖更多原语而扩展模板。只有一个可信路径时保留一个即可。
+   对每条路径说明：支持它的 episode、可能混淆的正例、去掉辅助证据后的预期、观测缺失时是否仍可判断。路径并列不会累加证据；数值由回放工具选择。
+   已有 cancel_paths 时可用 diagnose_context_template 的 ablation=cancel_path 与 path_index 分别移除路径，检查新增路径的独立贡献。每条新路径必须各自匹配至少两个已校验返回样本；其他路径的样本不能代替它的支持。
 5. 模板描述结构，并可从 catalog 中申请 `parameter_families`。当前只开放 `vertical_threshold`；`departure_time` 在非自然时间采集阶段关闭。Agent 只能决定“哪类参数值得个性化”，不得提供数值强度、阈值或参数变化；数值由 C++ 从历史样本估计，样本不足时必须接受 unavailable/no-op。
 6. 模板必须小且可在线计算。中间阶段不能冒充最终离开结果；返回、接近、已连接、锚点关系和通知门控不能被模板绕过。
 7. 每次任务最多调用一次 `generate_context_template`。不要在候选被拒绝后改写结构反复试探历史数据。
@@ -45,6 +50,8 @@ context_hypotheses
 supporting_evidence
 contradicting_evidence
 missing_evidence
+candidate_dispositions (每个返回候选的 episode_id、处理状态、支持/反证/未知字段；遗漏必须说明)
+path_hypotheses_and_counterexamples
 generated_template_or_no_op
 template_replay_result
 sample_count_and_generalization_risk

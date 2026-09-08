@@ -213,7 +213,8 @@ std::vector<std::string> RegisterPersonalizerTools()
         &ProposeAbortedLeave);
     Reg("diagnose_context_template",
         "Read-only active-template ablation on the same history: compare per-episode push timing, prefix readiness, completion and gates. Not physical causal proof; never tunes or commits.",
-        {{"ablation", "disable positive|negative|both sequence terms", "string", true},
+        {{"ablation", "disable positive|negative|both sequence terms or cancel_path", "string", true},
+            {"path_index", "zero-based alternative path to remove for cancel_path ablation", "integer", false},
             {"limit", "1..100 episodes, default 20", "integer", false}},
         &commute_sa::DiagnoseContextTemplateOnHistoryAction);
     Reg("generate_context_template",
@@ -224,6 +225,7 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"applicability", "always|baro_ready", "string", true},
             {"positive_sequence", "comma-separated supported events in temporal order", "string", true},
             {"cancel_sequence", "optional ordered return events after the positive prefix starts", "string", false},
+            {"cancel_paths", "optional alternatives: comma-ordered events, pipe-separated paths; see catalog; excludes cancel_sequence", "string", false},
             {"negative_pattern", "comma-separated events that jointly suppress nonspecific leave evidence", "string", false},
             {"parameter_families", "optional vertical_threshold; departure_time is disabled; C++ estimates values", "string", false},
             {"rationale", "evidence-grounded explanation", "string", true}},

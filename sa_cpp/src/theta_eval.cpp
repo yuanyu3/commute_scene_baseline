@@ -303,7 +303,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             summaries->push_back({ep.side + ":" + std::to_string(ep.outcome_ms) + ":" + ep.label + ":" + ep.episode_id,
                 isSoft || ep.label == "CONFIRMED_LEAVE" || ep.label == "MISSED_LEAVE",
                 !isSoft && (ep.label == "FALSE_PUSH" || ep.label == "TRUE_NEGATIVE"),
-                wouldPush, pushAtMs, leadAtPush});
+                wouldPush, pushAtMs, leadAtPush, ep.label == "ABORTED_LEAVE", firstCancelMs});
         }
         // Outcome labels/time are used only for scoring, never by the prefix filter.
         if (wouldPush && (isSoft || ep.label == "CONFIRMED_LEAVE" || ep.label == "MISSED_LEAVE")) {
@@ -550,6 +550,14 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
     for (auto &entry : grouped) {
         std::sort(entry.second.ticks.begin(), entry.second.ticks.end(),
             [](const HsmmTick &a, const HsmmTick &b) { return a.t_ms < b.t_ms; });
+        // Repeated ticks must not repeatedly update the HSMM at one instant.
+        // Reject ambiguous input rather than silently choosing conflicting rows.
+        const auto &ticks = entry.second.ticks;
+        if (std::adjacent_find(ticks.begin(), ticks.end(),
+            [](const HsmmTick &a, const HsmmTick &b) { return a.t_ms == b.t_ms; }) != ticks.end()) {
+            out->clear();
+            return false;
+        }
         out->push_back(std::move(entry.second));
     }
     std::sort(out->begin(), out->end(),
@@ -914,6 +922,9 @@ bool CheckReplayEpisodeSafety(const std::vector<ReplayEpisodeSummary> &baseline,
         if (b.positive && b.pushed && !c.pushed) return reject("lost_positive:" + b.key);
         if (b.positive && b.pushed && c.pushed && c.push_ms > b.push_ms)
             return reject("positive_push_delayed:" + b.key);
+        if (b.aborted && !b.pushed && c.pushed) return reject("new_aborted_push:" + b.key);
+        if (b.aborted && b.cancel_ms > 0 && (c.cancel_ms <= 0 || c.cancel_ms > b.cancel_ms))
+            return reject("aborted_cancel_lost_or_delayed:" + b.key);
     }
     return true;
 }
