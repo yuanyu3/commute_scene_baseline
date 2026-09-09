@@ -162,7 +162,7 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("get_episode_semantic_timeline",
         "Bounded 5-60 second aligned semantic timeline; distinguishes missing from observed zero",
         {{"episode_id", "exact episode identifier", "string", true},
-            {"side", "company|home", "string", false}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
+            {"anchor_id", "anchor id from anchors.json", "string", true}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
             {"bin_s", "5..60 seconds, default 10", "integer", false},
             {"start_ms", "optional inclusive window start", "integer", false},
             {"end_ms", "optional inclusive window end", "integer", false},
@@ -170,7 +170,7 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("get_episode_dynamic_diagnostics",
         "Exact semantic event intervals, vertical recovery descriptors and cross-sensor lags for one episode",
         {{"episode_id", "exact episode identifier", "string", true},
-            {"side", "company|home", "string", false}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
+            {"anchor_id", "anchor id from anchors.json", "string", true}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
             {"start_ms", "optional inclusive window start", "integer", false},
             {"end_ms", "optional inclusive window end", "integer", false}}, &GetDynamicDiagnostics);
     Reg("get_param_limits", "Param min/max/step", {}, &GetLimits);
@@ -227,11 +227,11 @@ std::vector<std::string> RegisterPersonalizerTools()
         &GetTemplateCatalog);
     Reg("get_aborted_leave_candidates",
         "Return read-only per-episode descent, ascent, closure, outside and support-event timing",
-        {{"side", "company|home", "string", false}, {"limit", "1..100", "integer", false}},
+        {{"anchor_id", "exact anchor id", "string", true}, {"limit", "1..100", "integer", false}},
         &GetAbortedCandidates);
     Reg("propose_aborted_leave_interpretation",
         "Propose a FALSE_PUSH as ABORTED_LEAVE; C++ requires a confirmed shared prefix, ascent, vertical closure and no outside",
-        {{"side", "company|home", "string", true}, {"episode_id", "exact episode id", "string", true},
+        {{"anchor_id", "exact anchor id", "string", true}, {"episode_id", "exact episode id", "string", true},
             {"confidence", "0.5..1", "number", true}, {"rationale", "evidence-grounded inference", "string", true}},
         &ProposeAbortedLeave);
     Reg("diagnose_context_template",
@@ -243,7 +243,6 @@ std::vector<std::string> RegisterPersonalizerTools()
     Reg("generate_context_template",
         "Validate an Agent-composed event sequence, deterministically estimate requested parameter families, replay strengths, and stage the best safe template",
         {{"template_name", "new stable identifier", "string", true},
-            {"side", "company|home", "string", true},
             {"anchor_id", "context anchor identifier", "string", true},
             {"applicability", "always|baro_ready", "string", true},
             {"positive_sequence", "comma-separated supported events in temporal order", "string", true},
@@ -261,12 +260,16 @@ std::vector<std::string> RegisterPersonalizerTools()
         &DiscardTemplate);
     Reg("get_active_context_template", "Return the currently persisted executable context template", {},
         &GetActiveTemplate);
-    Reg("get_current_user_anchor_profile", "Return committed anchor-specific evidence strengths or global fallback",
-        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true}},
+    Reg("get_current_user_anchor_profile", "Return committed anchor-specific profile or global fallback",
+        {{"anchor_id", "exact anchor id", "string", true}},
         &commute_sa::GetUserAnchorProfileAction);
+    Reg("get_personalization_history_summary",
+        "Return outcome, primitive and duration facts grouped only by anchor id; no recommendation",
+        {{"anchor_id", "exact anchor id", "string", true}},
+        &commute_sa::GetPersonalizationHistorySummaryAction);
     Reg("estimate_evidence_strength",
         "Deterministically fit selected channel strengths from labeled history and stage a replay-checked candidate",
-        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true},
+        {{"anchor_id", "exact anchor id", "string", true},
             {"families", "comma-separated walking,pdr,geo,wifi,cell,ble,time,baro; empty means all", "string", false}},
         &commute_sa::EstimateEvidenceStrengthAction);
     Reg("get_evidence_strength_trial", "Inspect the staged evidence-strength candidate", {},
@@ -277,7 +280,7 @@ std::vector<std::string> RegisterPersonalizerTools()
         &commute_sa::DiscardEvidenceStrengthCandidateAction);
     Reg("fit_duration_prior",
         "Robustly fit one HSMM state duration from labeled history and stage a replay-checked candidate",
-        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true},
+        {{"anchor_id", "exact anchor id", "string", true},
             {"state", "PRE_LEAVE|LEAVING", "string", true}},
         &commute_sa::FitDurationPriorAction);
     Reg("get_duration_prior_trial", "Inspect the staged duration candidate", {},
@@ -311,7 +314,8 @@ std::vector<std::string> RegisterPersonalizerTools()
         "get_context_template_catalog", "get_aborted_leave_candidates",
         "propose_aborted_leave_interpretation", "diagnose_context_template", "generate_context_template", "get_context_template_trial",
         "commit_context_template", "discard_context_template", "get_active_context_template",
-        "get_current_user_anchor_profile", "estimate_evidence_strength", "get_evidence_strength_trial",
+        "get_current_user_anchor_profile", "get_personalization_history_summary",
+        "estimate_evidence_strength", "get_evidence_strength_trial",
         "commit_evidence_strength_candidate", "discard_evidence_strength_candidate",
         "fit_duration_prior", "get_duration_prior_trial", "commit_duration_prior_candidate",
         "discard_duration_prior_candidate",

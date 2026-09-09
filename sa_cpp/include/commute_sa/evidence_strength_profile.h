@@ -18,13 +18,14 @@ double EstimateDurationMeanValue(double globalMean, const std::vector<double> &s
 
 /** Overlay all committed side/anchor profile fields on global theta. */
 Theta ApplyCommittedUserAnchorProfile(
-    const Theta &global, const std::string &side, const std::string &anchorId);
+    const Theta &global, const std::string &anchorId);
 
 /** Compatibility alias retained for existing callers. */
 Theta ApplyCommittedEvidenceStrengthProfile(
     const Theta &global, const std::string &side, const std::string &anchorId);
 
 std::string GetUserAnchorProfileAction(const std::string &paramsJson);
+std::string GetPersonalizationHistorySummaryAction(const std::string &paramsJson);
 std::string EstimateEvidenceStrengthAction(const std::string &paramsJson);
 std::string GetEvidenceStrengthTrialAction(const std::string &paramsJson);
 std::string CommitEvidenceStrengthCandidateAction(const std::string &paramsJson);

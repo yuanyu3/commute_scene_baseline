@@ -14,7 +14,7 @@
 ## 必须执行的证据流程
 
 1. 查询目标标签、总体错误统计、当前 theta、目标 episode 和跨 episode 画像。
-2. 调用 `get_anchors`，根据 `focus_side` 选择真实锚点；后续 `anchor_id` 必须逐字使用工具返回的 ID，不得创造、改写或根据语义命名 ID。
+2. 调用 `get_anchors` 选择真实锚点；后续个性化查询和估计只使用 `anchor_id`，且必须逐字使用工具返回的 ID，不得创造、改写或同时使用 side 作为统计主键。调用 `get_personalization_history_summary` 读取该 anchor 的结果、原语覆盖和时长事实。旧历史中的 company/home 仅由代码迁移到当前 anchor_id，Agent 不负责映射。
 3. 使用多分辨率证据：先查询目标完整传感器摘要；仅对能区分竞争假设的episode调用 `get_episode_semantic_timeline`，先用10秒bin，需要时用5秒或收窄start/end；持续、事件顺序、恢复和跨传感器时差必须调用 `get_episode_dynamic_diagnostics` 精确计算，不能凭表格目测估计。所有结论必须能引用工具返回的字段。
    timeline来自逐tick语义历史，不是原始波形。`known_ticks=0` 是缺失；已观测均值为0才是无变化。空bin表示该时间段没有语义tick，不得插值补全。若工具因max_bins拒绝，增大bin或缩小窗口，而不是要求输出无限数据。
    对返回过程必须先调用 `get_aborted_leave_candidates`，用逐 episode 的下降、回升、闭合和 outside 时间证据筛选；该工具只提供证据，不等于已经确认中止离开。
@@ -26,11 +26,11 @@
 7. 已有活动模板时，可调用 `diagnose_context_template`，选择关闭 positive、negative 或 both，检验自己的序列贡献假设。比较同一 episode 的就绪/完成/概率越线时间、门控和推送结果；区分“匹配了模式”和“实际改变了推送”。这只是模型内部干预，不是物理因果证明。无收益、出现反证或缺少真值时可保留现状/no-op，不必生成新模板。
 8. 读取 `get_current_user_anchor_profile`。如果跨 episode 事实显示问题主要是各原子 evidence
    对正负结果的长期区分能力，而不是事件顺序，则选择 Evidence Strength intervention：
-   调用 `estimate_evidence_strength`，只填写 anchor 和需要重新拟合的通道族，不得填写目标数值。
+   调用 `estimate_evidence_strength`，只填写 anchor_id 和需要重新拟合的通道族，不得填写 side 或目标数值。
    读取确定性统计与完整HSMM回放；只有 eligible=true 才能提交，否则必须丢弃或 no-op。
    不得根据单条 episode 判断某通道应升高或降低，也不得用 strength 拟合替代明确的顺序/返回结构问题。
 9. 如果正例的事件证据与顺序本身稳定，但 HSMM 的 `PRE_LEAVE` 或 `LEAVING` 占用时长持续偏离全局先验，
-   才选择 Duration intervention。调用 `fit_duration_prior` 时只填写真实 anchor 与一个状态
+   才选择 Duration intervention。调用 `fit_duration_prior` 时只填写真实 anchor_id 与一个状态
    `PRE_LEAVE|LEAVING`，不得给均值、边界或变化方向。确定性工具从正例后验路径提取未截断时长，
    使用 median、trimmed mean、MAD、样本量收缩和 ±50% 硬限制，再做完整历史回放。
    少于3条有效样本、离群严重、候选导致新增误推/漏报/正例延后时必须接受 reject 或 no-op；

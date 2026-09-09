@@ -50,7 +50,7 @@ public:
 
     /**
      * Aligned, bounded semantic timeline from policy_history.jsonl.
-     * params: {"episode_id":"...","side":"company","outcome_t_ms":0,
+     * params: {"episode_id":"...","anchor_id":"company_001","outcome_t_ms":0,
      *          "bin_s":10,"start_ms":0,"end_ms":0,"max_bins":120}
      */
     std::string GetEpisodeSemanticTimelineJson(const std::string &paramsJson) const;

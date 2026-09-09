@@ -1,5 +1,6 @@
 #include "commute_sa/evidence_strength_profile.h"
 
+#include "commute_sa/anchors.h"
 #include "commute_sa/product_store.h"
 #include "commute_sa/theta_eval.h"
 
@@ -37,6 +38,7 @@ struct EpisodeChannel {
 
 struct Episode {
     std::string label;
+    bool legacy_anchor_mapping = false;
     std::map<std::string, EpisodeChannel> channels;
 };
 
@@ -132,9 +134,26 @@ std::string RootDir()
     return root.empty() ? std::string("/data/service/el1/public/commuteagentservice") : root;
 }
 
-std::string ProfilePath(const std::string &side)
+bool ResolveAnchor(const std::string &requested, std::string *anchorId, std::string *legacySide)
 {
-    return RootDir() + "/user_anchor_profile_" + side + ".json";
+    AnchorSet anchors = DefaultAnchors();
+    LoadAnchorsFromFile(RootDir() + "/anchors.json", &anchors, nullptr);
+    if (requested == anchors.home.id || requested == "home") {
+        if (anchorId) *anchorId = anchors.home.id;
+        if (legacySide) *legacySide = "home";
+        return !anchors.home.id.empty();
+    }
+    if (requested == anchors.company.id || requested == "company") {
+        if (anchorId) *anchorId = anchors.company.id;
+        if (legacySide) *legacySide = "company";
+        return !anchors.company.id.empty();
+    }
+    return false;
+}
+
+std::string ProfilePath(const std::string &anchorId)
+{
+    return RootDir() + "/user_anchor_profile_" + anchorId + ".json";
 }
 
 double *Strength(Theta *theta, const std::string &name)
@@ -188,9 +207,9 @@ std::string ObsKey(const std::string &name)
     return "obs_baro_descending";
 }
 
-bool LoadProfile(const std::string &side, const std::string &anchorId, Theta *theta, std::string *raw)
+bool LoadProfile(const std::string &anchorId, const std::string &legacySide, Theta *theta, std::string *raw)
 {
-    const std::string cacheKey = RootDir() + ":" + side + ":" + anchorId;
+    const std::string cacheKey = RootDir() + ":" + anchorId;
     std::lock_guard<std::mutex> cacheLock(gProfileMu);
     auto &cached = gProfiles[cacheKey];
     if (cached.loaded) {
@@ -200,15 +219,17 @@ bool LoadProfile(const std::string &side, const std::string &anchorId, Theta *th
         return true;
     }
     cached.loaded = true;
-    std::ifstream in(ProfilePath(side), std::ios::binary);
+    std::ifstream in(ProfilePath(anchorId), std::ios::binary);
+    if (!in && !legacySide.empty()) {
+        in.clear();
+        in.open(RootDir() + "/user_anchor_profile_" + legacySide + ".json", std::ios::binary);
+    }
     if (!in) return false;
     std::ostringstream ss;
     ss << in.rdbuf();
     const std::string json = ss.str();
-    std::string storedSide;
     std::string storedAnchor;
-    if (!ExtractString(json, "side", &storedSide) || !ExtractString(json, "anchor_id", &storedAnchor) ||
-        storedSide != side || storedAnchor != anchorId) return false;
+    if (!ExtractString(json, "anchor_id", &storedAnchor) || storedAnchor != anchorId) return false;
     for (const auto &name : Channels()) {
         double value = 0.0;
         if (ExtractNumber(json, name, &value)) {
@@ -267,7 +288,7 @@ bool IsNegative(const std::string &label)
     return label == "FALSE_PUSH" || label == "TRUE_NEGATIVE";
 }
 
-std::map<std::string, Episode> LoadEpisodes(const std::string &side)
+std::map<std::string, Episode> LoadEpisodes(const std::string &anchorId, const std::string &legacySide)
 {
     std::map<std::string, Episode> episodes;
     std::set<std::string> aborted;
@@ -276,11 +297,14 @@ std::map<std::string, Episode> LoadEpisodes(const std::string &side)
         std::string row;
         while (std::getline(labels, row)) {
             std::string rowSide;
+            std::string rowAnchor;
             std::string episodeId;
             std::string type;
             double outcome = 0.0;
-            if (ExtractString(row, "side", &rowSide) && rowSide == side &&
-                ExtractString(row, "episode_id", &episodeId) &&
+            ExtractString(row, "side", &rowSide);
+            ExtractString(row, "anchor_id", &rowAnchor);
+            const bool anchorMatches = !rowAnchor.empty() ? rowAnchor == anchorId : rowSide == legacySide;
+            if (anchorMatches && ExtractString(row, "episode_id", &episodeId) &&
                 ExtractString(row, "episode_type", &type) && type == "ABORTED_LEAVE" &&
                 ExtractNumber(row, "outcome_t_ms", &outcome)) {
                 aborted.insert(episodeId + ":" + std::to_string(static_cast<int64_t>(outcome)));
@@ -291,17 +315,22 @@ std::map<std::string, Episode> LoadEpisodes(const std::string &side)
     std::string line;
     while (std::getline(in, line)) {
         std::string rowSide;
+        std::string rowAnchor;
         std::string label;
         std::string episodeId;
         double outcome = 0.0;
-        if (!ExtractString(line, "side", &rowSide) || rowSide != side ||
-            !ExtractString(line, "label", &label) || (!IsPositive(label) && !IsNegative(label))) continue;
+        ExtractString(line, "side", &rowSide);
+        ExtractString(line, "anchor_id", &rowAnchor);
+        const bool anchorMatches = !rowAnchor.empty() ? rowAnchor == anchorId : rowSide == legacySide;
+        if (!anchorMatches || !ExtractString(line, "label", &label) ||
+            (!IsPositive(label) && !IsNegative(label))) continue;
         ExtractString(line, "episode_id", &episodeId);
         if (!ExtractNumber(line, "outcome_t_ms", &outcome)) ExtractNumber(line, "t_ms", &outcome);
         const std::string key = episodeId + ":" + std::to_string(static_cast<int64_t>(outcome));
         if (aborted.count(key) != 0) continue;  // structural return, not a strength negative
         auto &ep = episodes[key];
         ep.label = label;
+        ep.legacy_anchor_mapping = ep.legacy_anchor_mapping || rowAnchor.empty();
         for (const auto &name : Channels()) {
             double value = 0.0;
             const bool seen = ExtractNumber(line, ObsKey(name), &value);
@@ -323,13 +352,13 @@ std::map<std::string, Episode> LoadEpisodes(const std::string &side)
     return episodes;
 }
 
-std::string BuildProfileJson(const std::string &side, const std::string &anchorId, const Theta &candidate,
+std::string BuildProfileJson(const std::string &anchorId, const Theta &candidate,
     const std::set<std::string> &channels, const std::set<std::string> &durations,
     int posN, int negN, const std::string &estimator)
 {
     std::ostringstream out;
-    out << "{\"schema_version\":1,\"side\":\"" << Esc(side)
-        << "\",\"anchor_id\":\"" << Esc(anchorId) << "\",\"evidence_strength\":{";
+    out << "{\"schema_version\":2,\"anchor_id\":\"" << Esc(anchorId)
+        << "\",\"evidence_strength\":{";
     bool first = true;
     for (const auto &name : Channels()) {
         if (channels.count(name) == 0) continue;
@@ -431,34 +460,124 @@ double EstimateDurationMeanValue(double globalMean, const std::vector<double> &s
         globalMean * (1.0 + kMaxDurationRelativeChange));
 }
 
-Theta ApplyCommittedUserAnchorProfile(
-    const Theta &global, const std::string &side, const std::string &anchorId)
+Theta ApplyCommittedUserAnchorProfile(const Theta &global, const std::string &requestedAnchorId)
 {
     Theta effective = global;
-    LoadProfile(side, anchorId, &effective, nullptr);
+    std::string anchorId;
+    std::string legacySide;
+    if (ResolveAnchor(requestedAnchorId, &anchorId, &legacySide)) {
+        LoadProfile(anchorId, legacySide, &effective, nullptr);
+    }
     return effective;
 }
 
 Theta ApplyCommittedEvidenceStrengthProfile(
     const Theta &global, const std::string &side, const std::string &anchorId)
 {
-    return ApplyCommittedUserAnchorProfile(global, side, anchorId);
+    (void)side;
+    return ApplyCommittedUserAnchorProfile(global, anchorId);
 }
 
 std::string GetUserAnchorProfileAction(const std::string &paramsJson)
 {
-    std::string side;
+    std::string requestedAnchor;
     std::string anchor;
-    if (!ExtractString(paramsJson, "side", &side) || !ExtractString(paramsJson, "anchor_id", &anchor) ||
-        (side != "home" && side != "company")) {
-        return "{\"ok\":false,\"error\":\"side and anchor_id required\"}";
+    std::string legacySide;
+    if (!ExtractString(paramsJson, "anchor_id", &requestedAnchor) ||
+        !ResolveAnchor(requestedAnchor, &anchor, &legacySide)) {
+        return "{\"ok\":false,\"error\":\"known anchor_id required\"}";
     }
     Theta effective = DefaultTheta();
     std::string raw;
-    if (!LoadProfile(side, anchor, &effective, &raw)) {
-        return "{\"ok\":true,\"active\":false,\"fallback\":\"global evidence strength\"}";
+    if (!LoadProfile(anchor, legacySide, &effective, &raw)) {
+        return "{\"ok\":true,\"active\":false,\"anchor_id\":\"" + Esc(anchor) +
+            "\",\"fallback\":\"global profile\"}";
     }
     return "{\"ok\":true,\"active\":true,\"profile\":" + raw + "}";
+}
+
+std::string GetPersonalizationHistorySummaryAction(const std::string &paramsJson)
+{
+    std::string requestedAnchor;
+    std::string anchor;
+    std::string legacySide;
+    if (!ExtractString(paramsJson, "anchor_id", &requestedAnchor) ||
+        !ResolveAnchor(requestedAnchor, &anchor, &legacySide)) {
+        return "{\"ok\":false,\"error\":\"known anchor_id required\"}";
+    }
+    const auto episodes = LoadEpisodes(anchor, legacySide);
+    int confirmed = 0;
+    int missed = 0;
+    int falsePush = 0;
+    int trueNegative = 0;
+    int legacyMapped = 0;
+    std::map<std::string, ChannelStats> stats;
+    for (const auto &entry : episodes) {
+        const auto &ep = entry.second;
+        if (ep.label == "CONFIRMED_LEAVE") ++confirmed;
+        else if (ep.label == "MISSED_LEAVE") ++missed;
+        else if (ep.label == "FALSE_PUSH") ++falsePush;
+        else if (ep.label == "TRUE_NEGATIVE") ++trueNegative;
+        if (ep.legacy_anchor_mapping) ++legacyMapped;
+        const bool positive = IsPositive(ep.label);
+        for (const auto &name : Channels()) {
+            const auto found = ep.channels.find(name);
+            if (found == ep.channels.end() || !found->second.valid) continue;
+            auto &s = stats[name];
+            if (positive) {
+                ++s.pos_valid;
+                if (found->second.peak >= 0.5) ++s.pos_hit;
+            } else {
+                ++s.neg_valid;
+                if (found->second.peak >= 0.5) ++s.neg_hit;
+            }
+        }
+    }
+
+    Theta theta = DefaultTheta();
+    LoadThetaFromFile(RootDir() + "/theta.json", &theta, nullptr);
+    theta = ApplyCommittedUserAnchorProfile(theta, anchor);
+    auto durationJson = [&](const std::string &state) {
+        const auto samples = InferHsmmDurationSamples(RootDir(), theta, anchor, legacySide, state, 100);
+        double median = 0.0;
+        double trimmed = 0.0;
+        double mad = 0.0;
+        double confidence = 0.0;
+        const double globalMean = state == "PRE_LEAVE" ? theta.hsmm_preleave_mean_s : theta.hsmm_leaving_mean_s;
+        EstimateDurationMeanValue(globalMean, samples, &median, &trimmed, &mad, &confidence);
+        std::ostringstream value;
+        value << "{\"n\":" << samples.size() << ",\"median_s\":" << median
+            << ",\"trimmed_mean_s\":" << trimmed << ",\"mad_s\":" << mad
+            << ",\"confidence\":" << confidence << '}';
+        return value.str();
+    };
+
+    std::ostringstream out;
+    out << "{\"ok\":true,\"anchor_id\":\"" << Esc(anchor) << "\",\"outcomes\":{"
+        << "\"confirmed_leave\":" << confirmed << ",\"missed_leave\":" << missed
+        << ",\"false_push\":" << falsePush << ",\"true_negative\":" << trueNegative
+        << "},\"primitive_stats\":{";
+    bool first = true;
+    for (const auto &name : Channels()) {
+        if (!first) out << ',';
+        first = false;
+        const auto s = stats[name];
+        const int valid = s.pos_valid + s.neg_valid;
+        out << "\"" << name << "\":{\"positive_hit\":" << s.pos_hit
+            << ",\"positive_valid\":" << s.pos_valid << ",\"negative_hit\":" << s.neg_hit
+            << ",\"negative_valid\":" << s.neg_valid << ",\"positive_rate\":"
+            << (s.pos_valid > 0 ? static_cast<double>(s.pos_hit) / s.pos_valid : 0.0)
+            << ",\"negative_rate\":"
+            << (s.neg_valid > 0 ? static_cast<double>(s.neg_hit) / s.neg_valid : 0.0)
+            << ",\"coverage\":" << (episodes.empty() ? 0.0 : valid / static_cast<double>(episodes.size()))
+            << '}';
+    }
+    out << "},\"duration_stats\":{\"PRE_LEAVE\":" << durationJson("PRE_LEAVE")
+        << ",\"LEAVING\":" << durationJson("LEAVING") << "},\"migration\":{"
+        << "\"legacy_episode_count_mapped_from_role\":" << legacyMapped
+        << ",\"mapping\":\"" << Esc(legacySide) << " -> " << Esc(anchor)
+        << "\"},\"notes\":\"Facts only; no intervention recommendation. New rows use anchor_id; legacy rows without it are mapped through the current anchors file.\"}";
+    return out.str();
 }
 
 std::string EstimateEvidenceStrengthAction(const std::string &paramsJson)
@@ -468,15 +587,16 @@ std::string EstimateEvidenceStrengthAction(const std::string &paramsJson)
         return "{\"ok\":false,\"error\":\"another personalization trial is active\"}";
     }
     std::string side;
+    std::string requestedAnchor;
     std::string anchor;
     std::string families;
-    if (!ExtractString(paramsJson, "side", &side) || !ExtractString(paramsJson, "anchor_id", &anchor) ||
-        (side != "home" && side != "company")) {
-        return "{\"ok\":false,\"error\":\"side and anchor_id required\"}";
+    if (!ExtractString(paramsJson, "anchor_id", &requestedAnchor) ||
+        !ResolveAnchor(requestedAnchor, &anchor, &side)) {
+        return "{\"ok\":false,\"error\":\"known anchor_id required\"}";
     }
     ExtractString(paramsJson, "families", &families);
     const auto requested = RequestedChannels(families);
-    auto episodes = LoadEpisodes(side);
+    auto episodes = LoadEpisodes(anchor, side);
     std::map<std::string, ChannelStats> stats;
     int posN = 0;
     int negN = 0;
@@ -503,11 +623,11 @@ std::string EstimateEvidenceStrengthAction(const std::string &paramsJson)
     gTrial.active = true;
     gTrial.side = side;
     gTrial.anchor_id = anchor;
-    gTrial.baseline = ApplyCommittedUserAnchorProfile(global, side, anchor);
+    gTrial.baseline = ApplyCommittedUserAnchorProfile(global, anchor);
     gTrial.candidate = gTrial.baseline;
     std::string activeRaw;
     Theta ignored = global;
-    if (LoadProfile(side, anchor, &ignored, &activeRaw)) {
+    if (LoadProfile(anchor, side, &ignored, &activeRaw)) {
         FindExistingOverrides(activeRaw, &gTrial.override_channels, &gTrial.override_durations);
     }
     gTrial.override_channels.insert(requested.begin(), requested.end());
@@ -541,9 +661,9 @@ std::string EstimateEvidenceStrengthAction(const std::string &paramsJson)
     std::vector<ReplayEpisodeSummary> baselineEpisodes;
     std::vector<ReplayEpisodeSummary> candidateEpisodes;
     gTrial.baseline_json = EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), gTrial.baseline, {}, 0, 0, false, 0, &baselineEpisodes);
+        RootDir(), gTrial.baseline, {}, 0, 0, false, 0, &baselineEpisodes, anchor, side);
     gTrial.candidate_json = EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), gTrial.candidate, {}, 0, 0, false, 0, &candidateEpisodes);
+        RootDir(), gTrial.candidate, {}, 0, 0, false, 0, &candidateEpisodes, anchor, side);
     const bool replayOk = gTrial.baseline_json.find("\"ok\":true") != std::string::npos &&
         gTrial.candidate_json.find("\"ok\":true") != std::string::npos;
     std::string episodeSafetyReason;
@@ -563,7 +683,7 @@ std::string EstimateEvidenceStrengthAction(const std::string &paramsJson)
     else if (!noMoreFalse) gTrial.rejection = "false_push_increased";
     else if (!noMoreMiss) gTrial.rejection = "missed_leave_increased";
     else if (!keepConfirmed) gTrial.rejection = "confirmed_leave_decreased";
-    gTrial.profile_json = BuildProfileJson(gTrial.side, gTrial.anchor_id, gTrial.candidate,
+    gTrial.profile_json = BuildProfileJson(gTrial.anchor_id, gTrial.candidate,
         gTrial.override_channels, gTrial.override_durations, posN, negN,
         "laplace_discrimination_shrinkage_v1");
 
@@ -588,12 +708,12 @@ std::string CommitEvidenceStrengthCandidateAction(const std::string &)
     if (!gTrial.active || !gTrial.eligible) {
         return "{\"ok\":false,\"error\":\"no eligible evidence strength candidate\"}";
     }
-    std::ofstream out(ProfilePath(gTrial.side), std::ios::trunc);
+    std::ofstream out(ProfilePath(gTrial.anchor_id), std::ios::trunc);
     if (!out) return "{\"ok\":false,\"error\":\"cannot persist user anchor profile\"}";
     out << gTrial.profile_json << '\n';
     {
         std::lock_guard<std::mutex> cacheLock(gProfileMu);
-        gProfiles.erase(RootDir() + ":" + gTrial.side + ":" + gTrial.anchor_id);
+        gProfiles.erase(RootDir() + ":" + gTrial.anchor_id);
     }
     const std::string profile = gTrial.profile_json;
     gTrial = Trial {};
@@ -615,12 +735,13 @@ std::string FitDurationPriorAction(const std::string &paramsJson)
         return "{\"ok\":false,\"error\":\"another personalization trial is active\"}";
     }
     std::string side;
+    std::string requestedAnchor;
     std::string anchor;
     std::string state;
-    if (!ExtractString(paramsJson, "side", &side) || !ExtractString(paramsJson, "anchor_id", &anchor) ||
-        !ExtractString(paramsJson, "state", &state) || (side != "home" && side != "company") ||
+    if (!ExtractString(paramsJson, "anchor_id", &requestedAnchor) ||
+        !ResolveAnchor(requestedAnchor, &anchor, &side) || !ExtractString(paramsJson, "state", &state) ||
         (state != "PRE_LEAVE" && state != "LEAVING")) {
-        return "{\"ok\":false,\"error\":\"side, anchor_id and state PRE_LEAVE|LEAVING required\"}";
+        return "{\"ok\":false,\"error\":\"known anchor_id and state PRE_LEAVE|LEAVING required\"}";
     }
 
     Theta global = DefaultTheta();
@@ -630,17 +751,18 @@ std::string FitDurationPriorAction(const std::string &paramsJson)
     gDurationTrial.side = side;
     gDurationTrial.anchor_id = anchor;
     gDurationTrial.state = state;
-    gDurationTrial.baseline = ApplyCommittedUserAnchorProfile(global, side, anchor);
+    gDurationTrial.baseline = ApplyCommittedUserAnchorProfile(global, anchor);
     gDurationTrial.candidate = gDurationTrial.baseline;
 
     std::string activeRaw;
     Theta ignored = global;
-    if (LoadProfile(side, anchor, &ignored, &activeRaw)) {
+    if (LoadProfile(anchor, side, &ignored, &activeRaw)) {
         FindExistingOverrides(activeRaw, &gDurationTrial.override_channels, &gDurationTrial.override_durations);
     }
     gDurationTrial.override_durations.insert(state);
 
-    const auto samples = InferHsmmDurationSamples(RootDir(), gDurationTrial.baseline, side, state, 100);
+    const auto samples = InferHsmmDurationSamples(
+        RootDir(), gDurationTrial.baseline, anchor, side, state, 100);
     gDurationTrial.sample_count = static_cast<int>(samples.size());
     double *candidateMean = DurationMean(&gDurationTrial.candidate, state);
     const double globalMean = *DurationMean(&gDurationTrial.baseline, state);
@@ -658,9 +780,9 @@ std::string FitDurationPriorAction(const std::string &paramsJson)
     std::vector<ReplayEpisodeSummary> baselineEpisodes;
     std::vector<ReplayEpisodeSummary> candidateEpisodes;
     gDurationTrial.baseline_json = EvaluateThetaOnHistoryWithAdapterJson(RootDir(),
-        gDurationTrial.baseline, {}, 0, 0, false, 0, &baselineEpisodes);
+        gDurationTrial.baseline, {}, 0, 0, false, 0, &baselineEpisodes, anchor, side);
     gDurationTrial.candidate_json = EvaluateThetaOnHistoryWithAdapterJson(RootDir(),
-        gDurationTrial.candidate, {}, 0, 0, false, 0, &candidateEpisodes);
+        gDurationTrial.candidate, {}, 0, 0, false, 0, &candidateEpisodes, anchor, side);
     const bool replayOk = gDurationTrial.baseline_json.find("\"ok\":true") != std::string::npos &&
         gDurationTrial.candidate_json.find("\"ok\":true") != std::string::npos;
     std::string episodeSafetyReason;
@@ -681,14 +803,14 @@ std::string FitDurationPriorAction(const std::string &paramsJson)
     else if (!noMoreMiss) gDurationTrial.rejection = "missed_leave_increased";
     else if (!keepConfirmed) gDurationTrial.rejection = "confirmed_leave_decreased";
 
-    auto episodes = LoadEpisodes(side);
+    auto episodes = LoadEpisodes(anchor, side);
     int posN = 0;
     int negN = 0;
     for (const auto &entry : episodes) {
         if (IsPositive(entry.second.label)) ++posN;
         else if (IsNegative(entry.second.label)) ++negN;
     }
-    gDurationTrial.profile_json = BuildProfileJson(gDurationTrial.side, gDurationTrial.anchor_id,
+    gDurationTrial.profile_json = BuildProfileJson(gDurationTrial.anchor_id,
         gDurationTrial.candidate, gDurationTrial.override_channels, gDurationTrial.override_durations,
         posN, negN, "robust_posterior_duration_shrinkage_v1");
 
@@ -723,12 +845,12 @@ std::string CommitDurationPriorCandidateAction(const std::string &)
     if (!gDurationTrial.active || !gDurationTrial.eligible) {
         return "{\"ok\":false,\"error\":\"no eligible duration candidate\"}";
     }
-    std::ofstream out(ProfilePath(gDurationTrial.side), std::ios::trunc);
+    std::ofstream out(ProfilePath(gDurationTrial.anchor_id), std::ios::trunc);
     if (!out) return "{\"ok\":false,\"error\":\"cannot persist user anchor profile\"}";
     out << gDurationTrial.profile_json << '\n';
     {
         std::lock_guard<std::mutex> cacheLock(gProfileMu);
-        gProfiles.erase(RootDir() + ":" + gDurationTrial.side + ":" + gDurationTrial.anchor_id);
+        gProfiles.erase(RootDir() + ":" + gDurationTrial.anchor_id);
     }
     const std::string profile = gDurationTrial.profile_json;
     gDurationTrial = DurationTrial {};

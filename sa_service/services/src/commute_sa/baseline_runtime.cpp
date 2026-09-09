@@ -244,7 +244,9 @@ TickDecision BaselineRuntime::OnTick(
     }
 
     TickDecision dec = engine_->Step(feat);
-    ProductStore::GetInstance().ObservePolicyFeatures(feat, dec);
+    const auto &policyAnchors = engine_->GetAnchors();
+    ProductStore::GetInstance().ObservePolicyFeatures(
+        feat, dec, policyAnchors.home.id, policyAnchors.company.id);
     if (FocusAllowsHome(engine_->GetTheta().focus_side) || FocusAllowsCompany(engine_->GetTheta().focus_side)) {
         const Relation dwellHome =
             FocusAllowsHome(engine_->GetTheta().focus_side) ? dec.home_relation : Relation::kOutside;

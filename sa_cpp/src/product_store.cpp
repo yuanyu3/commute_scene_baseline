@@ -261,7 +261,8 @@ void ProductStore::AppendLeaveLabel(int64_t tLabelMs, int64_t tPushMs, const std
     }
 }
 
-void ProductStore::ObservePolicyFeatures(const TickFeatures &f, const TickDecision &d)
+void ProductStore::ObservePolicyFeatures(const TickFeatures &f, const TickDecision &d,
+    const std::string &homeAnchorId, const std::string &companyAnchorId)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!inited_ || !policyHistory_.is_open() || (lastPolicySampleMs_ > 0 && f.t_ms - lastPolicySampleMs_ < 5000)) {
@@ -273,11 +274,12 @@ void ProductStore::ObservePolicyFeatures(const TickFeatures &f, const TickDecisi
         return;
     }
     lastPolicySampleMs_ = f.t_ms;
-    auto add = [&](const std::string &side, double preleave, double leaving, int hits, double pdr,
+    auto add = [&](const std::string &side, const std::string &anchorId, double preleave, double leaving, int hits, double pdr,
                    bool wifi, bool cell, bool ble, Relation rel, const LeaveObservation &obs) {
         PolicyHistoryRow row;
         row.t_ms = f.t_ms;
         row.side = side;
+        row.anchor_id = anchorId;
         row.preleave_probability = preleave;
         row.leaving_probability = leaving;
         row.hits = hits;
@@ -295,9 +297,9 @@ void ProductStore::ObservePolicyFeatures(const TickFeatures &f, const TickDecisi
         row.hsmm_obs = obs;
         policyBuffer_.push_back(row);
     };
-    add("home", d.hsmm_preleave_home, d.score_home, d.hits_home, f.pdr_net_out_home_m,
+    add("home", homeAnchorId, d.hsmm_preleave_home, d.score_home, d.hits_home, f.pdr_net_out_home_m,
         f.wifi_home_detach, f.cell_leave_home, f.ble_home_detach, d.home_relation, d.hsmm_obs_home);
-    add("company", d.hsmm_preleave_company, d.score_company, d.hits_company, f.pdr_net_out_company_m,
+    add("company", companyAnchorId, d.hsmm_preleave_company, d.score_company, d.hits_company, f.pdr_net_out_company_m,
         f.wifi_company_detach, f.cell_leave_company, f.ble_company_detach, d.company_relation, d.hsmm_obs_company);
     const int64_t keepAfter = f.t_ms - 30 * 60 * 1000;
     while (!policyBuffer_.empty() && policyBuffer_.front().t_ms < keepAfter) policyBuffer_.pop_front();
@@ -310,7 +312,8 @@ void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::
         if (row.side != side || row.t_ms < begin || row.t_ms > outcomeMs) continue;
         std::ostringstream out;
         out << std::setprecision(8) << "{\"t_ms\":" << row.t_ms << ",\"outcome_t_ms\":" << outcomeMs
-            << ",\"side\":\"" << Esc(side) << "\",\"label\":\"" << Esc(label)
+            << ",\"anchor_id\":\"" << Esc(row.anchor_id) << "\",\"side\":\"" << Esc(side)
+            << "\",\"label\":\"" << Esc(label)
             << "\",\"preleave_probability\":" << row.preleave_probability
             << ",\"leaving_probability\":" << row.leaving_probability << ",\"hits\":" << row.hits
             << ",\"walking\":" << (row.walking ? "true" : "false")

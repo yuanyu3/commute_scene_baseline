@@ -153,6 +153,10 @@ std::string CallGetUserAnchorProfile(const std::string &p)
 {
     return commute_sa::GetUserAnchorProfileAction(p);
 }
+std::string CallGetPersonalizationHistorySummary(const std::string &p)
+{
+    return commute_sa::GetPersonalizationHistorySummaryAction(p);
+}
 std::string CallEstimateEvidenceStrength(const std::string &p)
 {
     return commute_sa::EstimateEvidenceStrengthAction(p);
@@ -214,6 +218,7 @@ const std::vector<std::string> &ActionToolNames()
         "discard_context_template",
         "get_active_context_template",
         "get_current_user_anchor_profile",
+        "get_personalization_history_summary",
         "estimate_evidence_strength",
         "get_evidence_strength_trial",
         "commit_evidence_strength_candidate",
@@ -308,11 +313,11 @@ std::vector<std::string> RegisterActionTools()
     RegisterOne("get_context_template_catalog", "Return bounded context-template primitives", {},
         &CallGetContextTemplateCatalog);
     RegisterOne("get_aborted_leave_candidates", "Return read-only physical reversal evidence per episode",
-        {{"side", "company|home", "string", false}, {"limit", "1..100", "integer", false}},
+        {{"anchor_id", "exact anchor id", "string", true}, {"limit", "1..100", "integer", false}},
         &CallGetAbortedLeaveCandidates);
     RegisterOne("propose_aborted_leave_interpretation",
         "Validate a proposed FALSE_PUSH as ABORTED_LEAVE from physical reversal evidence",
-        {{"side", "company|home", "string", true}, {"episode_id", "exact episode id", "string", true},
+        {{"anchor_id", "exact anchor id", "string", true}, {"episode_id", "exact episode id", "string", true},
             {"confidence", "0.5..1", "number", true}, {"rationale", "evidence-grounded inference", "string", true}},
         &CallProposeAbortedLeave);
     RegisterOne("diagnose_context_template", "Read-only active-template sequence ablation",
@@ -320,7 +325,7 @@ std::vector<std::string> RegisterActionTools()
             {"path_index", "zero-based alternative path for cancel_path ablation", "integer", false},
             {"limit", "1..100 episodes", "integer", false}}, &CallDiagnoseContextTemplate);
     RegisterOne("generate_context_template", "Stage a replay-safe Agent-composed context template",
-        {{"template_name", "stable identifier", "string", true}, {"side", "company|home", "string", true},
+        {{"template_name", "stable identifier", "string", true},
             {"anchor_id", "exact anchor id", "string", true},
             {"applicability", "always|baro_ready", "string", true},
             {"positive_sequence", "ordered catalog events", "string", true},
@@ -337,11 +342,13 @@ std::vector<std::string> RegisterActionTools()
         &CallDiscardContextTemplate);
     RegisterOne("get_active_context_template", "Return the persisted executable template", {},
         &CallGetActiveContextTemplate);
-    RegisterOne("get_current_user_anchor_profile", "Return committed anchor-specific evidence strengths",
-        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true}},
+    RegisterOne("get_current_user_anchor_profile", "Return committed anchor-specific profile",
+        {{"anchor_id", "exact anchor id", "string", true}},
         &CallGetUserAnchorProfile);
+    RegisterOne("get_personalization_history_summary", "Return facts grouped only by anchor id",
+        {{"anchor_id", "exact anchor id", "string", true}}, &CallGetPersonalizationHistorySummary);
     RegisterOne("estimate_evidence_strength", "Fit selected strengths and stage a replay-checked candidate",
-        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true},
+        {{"anchor_id", "exact anchor id", "string", true},
             {"families", "comma-separated evidence channels", "string", false}},
         &CallEstimateEvidenceStrength);
     RegisterOne("get_evidence_strength_trial", "Inspect staged strength candidate", {},
@@ -351,7 +358,7 @@ std::vector<std::string> RegisterActionTools()
     RegisterOne("discard_evidence_strength_candidate", "Discard staged strength candidate", {},
         &CallDiscardEvidenceStrength);
     RegisterOne("fit_duration_prior", "Fit PRE_LEAVE or LEAVING duration and stage a replay-checked candidate",
-        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true},
+        {{"anchor_id", "exact anchor id", "string", true},
             {"state", "PRE_LEAVE|LEAVING", "string", true}}, &CallFitDurationPrior);
     RegisterOne("get_duration_prior_trial", "Inspect staged duration candidate", {}, &CallGetDurationPriorTrial);
     RegisterOne("commit_duration_prior_candidate", "Commit replay-safe anchor duration", {},

@@ -35,7 +35,9 @@
       "get_episode_dynamic_diagnostics",
 
       "diagnose_context_template"
-      ,"get_current_user_anchor_profile"
+      ,"get_current_user_anchor_profile",
+
+      "get_personalization_history_summary"
 
     ],
 

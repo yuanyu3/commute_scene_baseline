@@ -329,8 +329,8 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         lastWalkStopMs_ = feat.t_ms;
     }
     wasWalking_ = feat.walking;
-    const Theta homeTheta = ApplyCommittedUserAnchorProfile(theta_, "home", anchors_.home.id);
-    const Theta companyTheta = ApplyCommittedUserAnchorProfile(theta_, "company", anchors_.company.id);
+    const Theta homeTheta = ApplyCommittedUserAnchorProfile(theta_, anchors_.home.id);
+    const Theta companyTheta = ApplyCommittedUserAnchorProfile(theta_, anchors_.company.id);
     const bool wifiHomeAttach = homeTheta.w_wifi > 0.0 && feat.wifi_home_attach;
     const bool wifiCompanyAttach = companyTheta.w_wifi > 0.0 && feat.wifi_company_attach;
     double dHome = 0.0;

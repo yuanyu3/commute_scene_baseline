@@ -55,9 +55,10 @@ geo必须relation_known。已经通过物理证据解释为 ABORTED_LEAVE 的返
 
 候选使用同一份历史完整重放HSMM。除聚合误推、漏报不得增加且确认离开不得减少外，逐episode
 还禁止新增误推、丢失正例或推迟已有正例推送。满足安全门后才允许
-`commit_evidence_strength_candidate`。提交结果写入side隔离的
-`user_anchor_profile_home.json` 或 `user_anchor_profile_company.json`；运行时仅覆盖匹配
-side与anchor_id的强度，因此Company配置不会影响Home。Profile读取有进程内缓存，不在逐tick读取文件。
+`commit_evidence_strength_candidate`。提交结果按真实ID写入
+`user_anchor_profile_<anchor_id>.json`；运行时只覆盖匹配 anchor_id 的强度，因此不同锚点互不影响。
+新历史行固化 `anchor_id`；旧的 company/home 行通过当前 `anchors.json` 映射到对应真实ID，原日志不被改写。
+Profile读取有进程内缓存，不在逐tick读取文件。
 
 同一个 `UserAnchorProfile` 现在也可保存 `duration_prior.pre_leave_mean_s` 与
 `duration_prior.leaving_mean_s`。Evidence Strength 与 Duration 每次只能选择一个主要干预族，

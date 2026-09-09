@@ -1,5 +1,6 @@
 #include "commute_sa/context_template.h"
 
+#include "commute_sa/anchors.h"
 #include "commute_sa/baseline_runtime.h"
 #include "commute_sa/product_store.h"
 #include "commute_sa/theta.h"
@@ -111,6 +112,23 @@ std::string RootDir()
 {
     const std::string root = ProductStore::GetInstance().RootDir();
     return root.empty() ? "/data/service/el1/public/commuteagentservice" : root;
+}
+
+bool ResolveAnchorRole(const std::string &requested, std::string *anchorId, std::string *role)
+{
+    AnchorSet anchors = DefaultAnchors();
+    LoadAnchorsFromFile(RootDir() + "/anchors.json", &anchors, nullptr);
+    if (requested == anchors.home.id || requested == "home") {
+        if (anchorId) *anchorId = anchors.home.id;
+        if (role) *role = "home";
+        return true;
+    }
+    if (requested == anchors.company.id || requested == "company") {
+        if (anchorId) *anchorId = anchors.company.id;
+        if (role) *role = "company";
+        return true;
+    }
+    return false;
 }
 
 Theta CurrentTheta()
@@ -287,6 +305,7 @@ double Quantile(std::vector<double> values, double q)
 
 struct EpisodeParameterEvidence {
     std::string side;
+    std::string anchor_id;
     std::string label;
     int64_t outcome_ms = 0;
     double max_baro_descent_m = 0.0;
@@ -319,6 +338,7 @@ std::vector<EpisodeParameterEvidence> LoadParameterEvidence()
         int64_t outcomeMs = 0;
         double outcomeValue = 0.0;
         std::string side;
+        std::string anchorId;
         std::string label;
         std::string episodeId;
         if (!ExtractNumber(line, "outcome_t_ms", &outcomeValue) ||
@@ -326,13 +346,16 @@ std::vector<EpisodeParameterEvidence> LoadParameterEvidence()
             continue;
         }
         outcomeMs = static_cast<int64_t>(outcomeValue);
+        ExtractString(line, "anchor_id", &anchorId);
         ExtractString(line, "episode_id", &episodeId);
         const auto interpretation = interpretations.find(
             side + ":" + std::to_string(outcomeMs) + ":" + episodeId);
         if (label == "FALSE_PUSH" && interpretation != interpretations.end()) label = interpretation->second;
-        const std::string key = side + ":" + std::to_string(outcomeMs) + ":" + label + ":" + episodeId;
+        const std::string key = (anchorId.empty() ? side : anchorId) + ":" +
+            std::to_string(outcomeMs) + ":" + label + ":" + episodeId;
         auto &episode = grouped[key];
         episode.side = side;
+        episode.anchor_id = anchorId;
         episode.label = label;
         episode.outcome_ms = outcomeMs;
         double descent = 0.0;
@@ -357,7 +380,9 @@ void EstimateRequestedParameters(const Theta &theta, TemplateSpec *spec)
         if (family == "departure_time") {
             std::vector<double> hours;
             for (const auto &episode : episodes) {
-                if (episode.side == spec->side && episode.label == "CONFIRMED_LEAVE" && episode.outcome_ms > 0) {
+                const bool anchorMatches = !episode.anchor_id.empty() ?
+                    episode.anchor_id == spec->anchor_id : episode.side == spec->side;
+                if (anchorMatches && episode.label == "CONFIRMED_LEAVE" && episode.outcome_ms > 0) {
                     hours.push_back(DecimalHourLocal(episode.outcome_ms));
                 }
             }
@@ -387,7 +412,9 @@ void EstimateRequestedParameters(const Theta &theta, TemplateSpec *spec)
             std::vector<double> positives;
             std::vector<double> hardFalse;
             for (const auto &episode : episodes) {
-                if (episode.side != spec->side || episode.max_baro_descent_m <= 0.0) continue;
+                const bool anchorMatches = !episode.anchor_id.empty() ?
+                    episode.anchor_id == spec->anchor_id : episode.side == spec->side;
+                if (!anchorMatches || episode.max_baro_descent_m <= 0.0) continue;
                 // A labeled lobby/lower-platform intermediate is valid
                 // vertical evidence even if the user has not crossed outside.
                 if ((episode.label == "CONFIRMED_LEAVE" || episode.label == "ABORTED_LEAVE" ||
@@ -861,8 +888,13 @@ std::string GetContextTemplateCatalogAction(const std::string &)
 
 std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
 {
-    std::string wantedSide = "company";
-    ExtractString(paramsJson, "side", &wantedSide);
+    std::string requestedAnchor;
+    std::string wantedAnchor;
+    std::string legacySide;
+    if (!ExtractString(paramsJson, "anchor_id", &requestedAnchor) ||
+        !ResolveAnchorRole(requestedAnchor, &wantedAnchor, &legacySide)) {
+        return "{\"ok\":false,\"error\":\"known anchor_id required\"}";
+    }
     double limitValue = 50;
     ExtractNumber(paramsJson, "limit", &limitValue);
     const size_t limit = static_cast<size_t>(std::max(1.0, std::min(100.0, limitValue)));
@@ -895,10 +927,14 @@ std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
     std::string line;
     while (std::getline(in, line)) {
         std::string side;
+        std::string rowAnchor;
         std::string episode;
         std::string label;
         double value = 0;
-        if (!ExtractString(line, "side", &side) || side != wantedSide ||
+        ExtractString(line, "side", &side);
+        ExtractString(line, "anchor_id", &rowAnchor);
+        const bool anchorMatches = !rowAnchor.empty() ? rowAnchor == wantedAnchor : side == legacySide;
+        if (!anchorMatches ||
             !ExtractString(line, "episode_id", &episode) || episode.empty() ||
             !ExtractString(line, "label", &label) || label != "FALSE_PUSH" ||
             !ExtractNumber(line, "outcome_t_ms", &value)) continue;
@@ -947,7 +983,7 @@ std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
         }
     }
     std::ostringstream out;
-    out << "{\"ok\":true,\"side\":\"" << Esc(wantedSide)
+    out << "{\"ok\":true,\"anchor_id\":\"" << Esc(wantedAnchor)
         << "\",\"material_descent_m\":" << material << ",\"episodes\":[";
     size_t count = 0;
     for (const auto &entry : grouped) {
@@ -983,18 +1019,18 @@ std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
 std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJson)
 {
     std::string side;
+    std::string requestedAnchor;
+    std::string anchorId;
     std::string episodeId;
     std::string rationale;
     double outcomeValue = 0.0;
     double confidence = 0.0;
-    if (!ExtractString(paramsJson, "side", &side) ||
+    if (!ExtractString(paramsJson, "anchor_id", &requestedAnchor) ||
+        !ResolveAnchorRole(requestedAnchor, &anchorId, &side) ||
         !ExtractString(paramsJson, "episode_id", &episodeId) || episodeId.empty() ||
         !ExtractNumber(paramsJson, "confidence", &confidence) || confidence < 0.5 || confidence > 1.0 ||
         !ExtractString(paramsJson, "rationale", &rationale) || rationale.empty()) {
-        return "{\"ok\":false,\"error\":\"side, episode_id, confidence>=0.5 and rationale required\"}";
-    }
-    if (side != "company" && side != "home") {
-        return "{\"ok\":false,\"error\":\"side must be company|home\"}";
+        return "{\"ok\":false,\"error\":\"anchor_id, episode_id, confidence>=0.5 and rationale required\"}";
     }
     ExtractNumber(paramsJson, "outcome_t_ms", &outcomeValue);
     const bool outcomeProvided = outcomeValue > 0;
@@ -1018,10 +1054,14 @@ std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJso
     std::string line;
     while (std::getline(in, line)) {
         std::string rowSide;
+        std::string rowAnchor;
         std::string rowEpisode;
         std::string label;
         double rowOutcome = 0.0;
-        if (!ExtractString(line, "side", &rowSide) || rowSide != side ||
+        ExtractString(line, "side", &rowSide);
+        ExtractString(line, "anchor_id", &rowAnchor);
+        const bool anchorMatches = !rowAnchor.empty() ? rowAnchor == anchorId : rowSide == side;
+        if (!anchorMatches ||
             !ExtractString(line, "episode_id", &rowEpisode) || rowEpisode != episodeId ||
             !ExtractNumber(line, "outcome_t_ms", &rowOutcome)) continue;
         const int64_t rowOutcomeMs = static_cast<int64_t>(rowOutcome);
@@ -1073,10 +1113,14 @@ std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJso
     std::map<std::string, std::pair<bool, int>> confirmedEvidence;
     while (std::getline(confirmedIn, line)) {
         std::string rowSide;
+        std::string rowAnchor;
         std::string label;
         std::string rowEpisode;
         double rowOutcome = 0.0;
-        if (!ExtractString(line, "side", &rowSide) || rowSide != side ||
+        ExtractString(line, "side", &rowSide);
+        ExtractString(line, "anchor_id", &rowAnchor);
+        const bool anchorMatches = !rowAnchor.empty() ? rowAnchor == anchorId : rowSide == side;
+        if (!anchorMatches ||
             !ExtractString(line, "label", &label) || label != "CONFIRMED_LEAVE" ||
             !ExtractNumber(line, "outcome_t_ms", &rowOutcome)) continue;
         ExtractString(line, "episode_id", &rowEpisode);
@@ -1112,8 +1156,9 @@ std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJso
 
     std::ofstream out(RootDir() + "/episode_interpretations.jsonl", std::ios::out | std::ios::app);
     if (!out.is_open()) return "{\"ok\":false,\"error\":\"cannot persist episode interpretation\"}";
-    out << "{\"created_at_ms\":" << NowMs() << ",\"side\":\"" << Esc(side)
-        << "\",\"episode_id\":\"" << Esc(episodeId) << "\",\"outcome_t_ms\":" << outcomeMs
+    out << "{\"created_at_ms\":" << NowMs() << ",\"anchor_id\":\"" << Esc(anchorId)
+        << "\",\"side\":\"" << Esc(side) << "\",\"episode_id\":\"" << Esc(episodeId)
+        << "\",\"outcome_t_ms\":" << outcomeMs
         << ",\"original_label\":\"FALSE_PUSH\",\"episode_type\":\"ABORTED_LEAVE\""
         << ",\"abort_t_ms\":" << abortMs << ",\"confidence\":" << confidence
         << ",\"max_baro_descent_m\":" << maxDescent
@@ -1146,13 +1191,13 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     }
     spec.cancel_paths_mode = !pathsCsv.empty();
     ExtractString(paramsJson, "parameter_families", &parameterFamiliesCsv);
-    ExtractString(paramsJson, "side", &spec.side);
-    ExtractString(paramsJson, "anchor_id", &spec.anchor_id);
+    std::string requestedAnchor;
+    if (!ExtractString(paramsJson, "anchor_id", &requestedAnchor) ||
+        !ResolveAnchorRole(requestedAnchor, &spec.anchor_id, &spec.side)) {
+        return "{\"ok\":false,\"error\":\"known anchor_id required\"}";
+    }
     ExtractString(paramsJson, "applicability", &spec.applicability);
     ExtractString(paramsJson, "rationale", &spec.rationale);
-    if (spec.side != "company" && spec.side != "home") {
-        return "{\"ok\":false,\"error\":\"side must be company|home\"}";
-    }
     if (spec.applicability != "always" && spec.applicability != "baro_ready") {
         return "{\"ok\":false,\"error\":\"applicability must be always|baro_ready\"}";
     }
@@ -1193,7 +1238,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     EstimateRequestedParameters(theta, &spec);
     std::vector<ReplayEpisodeSummary> baselineEpisodes, incumbentEpisodes;
     const Metrics baseline = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), theta, {}, 0, 100, false, 0, &baselineEpisodes));
+        RootDir(), theta, {}, 0, 100, false, 0, &baselineEpisodes, spec.anchor_id, spec.side));
     if (!baseline.ok) return "{\"ok\":false,\"error\":\"baseline history replay unavailable\"}";
     if ((!spec.cancel_sequence.empty() || !spec.cancel_paths.empty()) && baseline.n_aborted_leave < 2) {
         return "{\"ok\":false,\"error\":\"cancel_sequence requires at least 2 ABORTED_LEAVE episodes\","
@@ -1205,7 +1250,8 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         TemplateSpec single = spec;
         single.cancel_paths = {spec.cancel_paths[i]};
         const Metrics support = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(single, 0.2), 0, 100));
+            RootDir(), theta, BuildAdapter(single, 0.2), 0, 100, false, 0, nullptr,
+            spec.anchor_id, spec.side));
         if (!support.ok || support.aborted_cancel_recognized < 2) {
             return "{\"ok\":false,\"error\":\"each cancel path requires 2 independently labeled ABORTED_LEAVE matches\","
                 "\"path_index\":" + std::to_string(i) + ",\"matched_episodes\":" +
@@ -1231,7 +1277,8 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     }
     if (incumbentStrength > 0.0) {
         trial.incumbent = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(incumbentSpec, incumbentStrength), 0, 100, false, 0, &incumbentEpisodes));
+            RootDir(), theta, BuildAdapter(incumbentSpec, incumbentStrength), 0, 100, false, 0,
+            &incumbentEpisodes, spec.anchor_id, spec.side));
     }
     const std::vector<std::pair<std::string, double>> levels = {{"LOW", 0.20}, {"MEDIUM", 0.40}, {"HIGH", 0.60}};
     double bestScore = -1.0e100;
@@ -1246,7 +1293,8 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         candidate.strength = level.second;
         std::vector<ReplayEpisodeSummary> candidateEpisodes;
         candidate.metrics = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(candidate.spec, candidate.strength), 0, 100, false, 0, &candidateEpisodes));
+            RootDir(), theta, BuildAdapter(candidate.spec, candidate.strength), 0, 100, false, 0,
+            &candidateEpisodes, spec.anchor_id, spec.side));
         candidate.eligible = Eligible(baseline, candidate.metrics, &candidate.rejection);
         if (candidate.eligible && !CheckReplayEpisodeSafety(baselineEpisodes, candidateEpisodes, &candidate.rejection))
             candidate.eligible = false;
@@ -1351,9 +1399,11 @@ std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &args
     if (!std::isfinite(cutoff) || cutoff < 0 || cutoff > 9007199254740991.0)
         return "{\"ok\":false,\"error\":\"invalid cutoff_t_ms\"}";
     const std::string baseline = EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), theta, {}, 0, 1000, trace, static_cast<int64_t>(cutoff));
+        RootDir(), theta, {}, 0, 1000, trace, static_cast<int64_t>(cutoff), nullptr,
+        spec.anchor_id, spec.side);
     const std::string frozen = EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), theta, BuildAdapter(spec, strength), 0, 1000, trace, static_cast<int64_t>(cutoff));
+        RootDir(), theta, BuildAdapter(spec, strength), 0, 1000, trace, static_cast<int64_t>(cutoff), nullptr,
+        spec.anchor_id, spec.side);
     if (!ParseMetrics(baseline).ok || !ParseMetrics(frozen).ok)
         return "{\"ok\":false,\"error\":\"valid unique-timestamp HSMM history required; no score-only fallback permitted\"}";
     return "{\"ok\":true,\"mode\":\"frozen_template_no_tuning\",\"template\":" +
@@ -1402,9 +1452,11 @@ std::string DiagnoseContextTemplateOnHistoryAction(const std::string &args)
         }
     };
     const auto active = EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), theta, BuildAdapter(spec, strength), 0, static_cast<int>(limit));
+        RootDir(), theta, BuildAdapter(spec, strength), 0, static_cast<int>(limit), false, 0, nullptr,
+        spec.anchor_id, spec.side);
     const auto counterfactual = EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), theta, disabled, 0, static_cast<int>(limit));
+        RootDir(), theta, disabled, 0, static_cast<int>(limit), false, 0, nullptr,
+        spec.anchor_id, spec.side);
     if (!ParseMetrics(active).ok || !ParseMetrics(counterfactual).ok)
         return "{\"ok\":false,\"read_only\":true,\"error\":\"HSMM replay history unavailable\"}";
     return "{\"ok\":true,\"read_only\":true,\"ablation\":\"" + ablation +

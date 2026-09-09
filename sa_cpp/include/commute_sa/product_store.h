@@ -61,7 +61,8 @@ public:
         const std::string &homeRelation, double distHomeM);
 
     /** Buffer semantic candidate ticks; they are persisted with a label when an episode settles. */
-    void ObservePolicyFeatures(const TickFeatures &features, const TickDecision &decision);
+    void ObservePolicyFeatures(const TickFeatures &features, const TickDecision &decision,
+        const std::string &homeAnchorId = "", const std::string &companyAnchorId = "");
 
     void AppendPersonalizeJob(int64_t createdAtMs, const std::string &reason, const std::string &lastIntent,
         const std::string &lastScene, int64_t lastPushAtMs, const Theta &theta);
@@ -128,6 +129,7 @@ private:
     struct PolicyHistoryRow {
         int64_t t_ms = 0;
         std::string side;
+        std::string anchor_id;
         double preleave_probability = 0.0;
         double leaving_probability = 0.0;
         int hits = 0;

@@ -1251,6 +1251,7 @@ struct SemanticHistoryRow {
     int64_t t = 0;
     int64_t outcome = 0;
     std::string episode;
+    std::string anchor;
     std::string side;
     std::string label;
     double descent = 0.0;
@@ -1282,7 +1283,7 @@ bool LoadSemanticEpisode(const std::string &root, const std::string &params,
     std::vector<SemanticHistoryRow> *rows, std::string *error)
 {
     std::string wantedEpisode;
-    std::string wantedSide = "company";
+    std::string wantedAnchor;
     int64_t wantedOutcome = 0;
     int64_t startMs = 0;
     int64_t endMs = 0;
@@ -1290,13 +1291,29 @@ bool LoadSemanticEpisode(const std::string &root, const std::string &params,
         *error = "episode_id required";
         return false;
     }
-    ExtractString(params, "side", &wantedSide);
+    if (!ExtractString(params, "anchor_id", &wantedAnchor) || wantedAnchor.empty()) {
+        *error = "anchor_id required";
+        return false;
+    }
+    AnchorSet anchors = DefaultAnchors();
+    LoadAnchorsFromFile(root + "/anchors.json", &anchors, nullptr);
+    std::string canonicalAnchor;
+    std::string legacySide;
+    if (wantedAnchor == anchors.company.id || wantedAnchor == "company") {
+        canonicalAnchor = anchors.company.id;
+        legacySide = "company";
+    } else if (wantedAnchor == anchors.home.id || wantedAnchor == "home") {
+        canonicalAnchor = anchors.home.id;
+        legacySide = "home";
+    } else {
+        *error = "anchor_id not found in anchors.json";
+        return false;
+    }
     ExtractInt64(params, "outcome_t_ms", &wantedOutcome);
     ExtractInt64(params, "start_ms", &startMs);
     ExtractInt64(params, "end_ms", &endMs);
-    if ((wantedSide != "company" && wantedSide != "home") || startMs < 0 || endMs < 0 ||
-        (startMs && endMs && startMs > endMs)) {
-        *error = "side must be company|home and start_ms must not exceed end_ms";
+    if (startMs < 0 || endMs < 0 || (startMs && endMs && startMs > endMs)) {
+        *error = "start_ms must not exceed end_ms";
         return false;
     }
     std::ifstream in(root + "/policy_history.jsonl");
@@ -1309,9 +1326,12 @@ bool LoadSemanticEpisode(const std::string &root, const std::string &params,
     while (std::getline(in, line)) {
         SemanticHistoryRow row;
         if (!ExtractString(line, "episode_id", &row.episode) || row.episode != wantedEpisode ||
-            !ExtractString(line, "side", &row.side) || row.side != wantedSide ||
             !ExtractInt64(line, "outcome_t_ms", &row.outcome) ||
             !ExtractInt64(line, "t_ms", &row.t)) continue;
+        const bool hasAnchor = ExtractString(line, "anchor_id", &row.anchor) && !row.anchor.empty();
+        ExtractString(line, "side", &row.side);
+        if ((hasAnchor && row.anchor != canonicalAnchor) || (!hasAnchor && row.side != legacySide)) continue;
+        row.anchor = canonicalAnchor;
         outcomes.insert(row.outcome);
         if (wantedOutcome > 0 && row.outcome != wantedOutcome) continue;
         if (startMs > 0 && row.t < startMs) continue;
@@ -1438,7 +1458,7 @@ std::string EvidenceQuery::GetEpisodeSemanticTimelineJson(const std::string &par
     }
     std::ostringstream out;
     out << "{\"ok\":true,\"schema_version\":1,\"episode_id\":\"" << Esc(rows.front().episode)
-        << "\",\"side\":\"" << Esc(rows.front().side) << "\",\"label\":\"" << Esc(rows.front().label)
+        << "\",\"anchor_id\":\"" << Esc(rows.front().anchor) << "\",\"label\":\"" << Esc(rows.front().label)
         << "\",\"outcome_t_ms\":" << rows.front().outcome << ",\"record_start_ms\":" << rows.front().t
         << ",\"record_end_ms\":" << rows.back().t << ",\"bin_s\":" << binS
         << ",\"source\":\"policy_history semantic observations; not raw sensor samples\",\"bins\":[";

@@ -131,14 +131,20 @@
     {
       "name": "get_current_user_anchor_profile",
       "category": "profile",
-      "description": "Return the committed side/anchor evidence-strength profile, or explicit global fallback.",
-      "input_schema": {"side": "company|home", "anchor_id": "exact id from get_anchors"}
+      "description": "Return the committed anchor profile, or explicit global fallback. Anchor id is the only personalization key.",
+      "input_schema": {"anchor_id": "exact id from get_anchors"}
+    },
+    {
+      "name": "get_personalization_history_summary",
+      "category": "evidence",
+      "description": "Return outcome counts, primitive hit/valid/coverage facts and robust duration statistics grouped by anchor_id. It contains no recommendation. Legacy role-only rows are mapped to the current anchor id by code.",
+      "input_schema": {"anchor_id": "exact id from get_anchors"}
     },
     {
       "name": "estimate_evidence_strength",
       "category": "estimator",
       "description": "Agent selects channel families; deterministic code computes Laplace-smoothed discrimination, coverage, sample shrinkage, bounded change and full HSMM replay. No numeric target is accepted.",
-      "input_schema": {"side": "company|home", "anchor_id": "exact id", "families": "optional comma-separated walking,pdr,geo,wifi,cell,ble,time,baro"}
+      "input_schema": {"anchor_id": "exact id", "families": "optional comma-separated walking,pdr,geo,wifi,cell,ble,time,baro"}
     },
     {
       "name": "get_evidence_strength_trial",
@@ -162,7 +168,7 @@
       "name": "fit_duration_prior",
       "category": "estimator",
       "description": "Agent selects PRE_LEAVE or LEAVING only; deterministic code infers uncensored positive posterior durations, applies robust statistics, sample shrinkage, a 50% change bound and full replay. No numeric target is accepted.",
-      "input_schema": {"side": "company|home", "anchor_id": "exact id", "state": "PRE_LEAVE|LEAVING"}
+      "input_schema": {"anchor_id": "exact id", "state": "PRE_LEAVE|LEAVING"}
     },
     {
       "name": "get_duration_prior_trial",
@@ -190,7 +196,7 @@
 
       "description": "Bounded multi-resolution timeline from stored semantic ticks. Use after overview to inspect slopes, persistence and synchronization; it is not raw sensor data.",
 
-      "input_schema": {"episode_id": "required", "side": "company|home", "outcome_t_ms": "required if id ambiguous", "bin_s": "5..60", "start_ms": "optional", "end_ms": "optional", "max_bins": "1..120"},
+      "input_schema": {"episode_id": "required", "anchor_id": "required; id from anchors.json", "outcome_t_ms": "required if id ambiguous", "bin_s": "5..60", "start_ms": "optional", "end_ms": "optional", "max_bins": "1..120"},
 
       "output_schema": {"bins": "aligned bins with sample count, missing/observed quality, barometer coverage and signal mean/peak"}
 
@@ -204,7 +210,7 @@
 
       "description": "Deterministic event intervals, vertical change/recovery descriptors and cross-sensor lags for one episode.",
 
-      "input_schema": {"episode_id": "required", "side": "company|home", "outcome_t_ms": "required if id ambiguous", "start_ms": "optional", "end_ms": "optional"},
+      "input_schema": {"episode_id": "required", "anchor_id": "required; id from anchors.json", "outcome_t_ms": "required if id ambiguous", "start_ms": "optional", "end_ms": "optional"},
 
       "output_schema": {"coverage": "stored semantic coverage", "vertical_dynamics": "order, monotonicity and durations", "cross_sensor_lags_s": "event timing differences", "event_intervals": "start/end/observed span/estimated duration/support/peak"}
 
@@ -393,14 +399,14 @@
       "name": "get_aborted_leave_candidates",
       "kind": "read_only",
       "description": "Return per-episode material descent, lower-platform, ascent, vertical-closure, outside and support-event timing. This is evidence rather than a label.",
-      "input_schema": {"side": "company|home", "limit": "1..100"}
+      "input_schema": {"anchor_id": "exact id", "limit": "1..100"}
     },
     {
       "name": "propose_aborted_leave_interpretation",
       "category": "template",
       "description": "Propose that an original FALSE_PUSH is an ABORTED_LEAVE. C++ validates material descent, a shared prefix found in confirmed history, later ascent and vertical closure, and absence of outside before appending a non-destructive interpretation.",
       "input_schema": {
-        "side": "home|company",
+        "anchor_id": "exact id",
         "episode_id": "exact string from history",
         "outcome_t_ms": "optional exact integer; required only when episode_id is ambiguous",
         "confidence": "0.5..1",
@@ -423,7 +429,6 @@
       "description": "Validate Agent structure, emit independent sequence observations without rewriting atomic sensors, estimate requested parameter families in C++, and replay LOW/MEDIUM/HIGH sequence reliabilities on all historical HSMM episodes.",
       "input_schema": {
         "template_name": "string",
-        "side": "home|company",
         "anchor_id": "string",
         "applicability": "always|baro_ready",
         "positive_sequence": "comma-separated catalog events",

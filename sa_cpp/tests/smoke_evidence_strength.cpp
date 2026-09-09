@@ -81,9 +81,9 @@ int main()
         R"("evidence_strength":{"wifi":0.10,"baro":0.90},)"
         R"("duration_prior":{"pre_leave_mean_s":135,"leaving_mean_s":180}})");
     const auto company = commute_sa::ApplyCommittedUserAnchorProfile(
-        commute_sa::DefaultTheta(), "company", "company_001");
+        commute_sa::DefaultTheta(), "company_001");
     const auto home = commute_sa::ApplyCommittedUserAnchorProfile(
-        commute_sa::DefaultTheta(), "home", "home_001");
+        commute_sa::DefaultTheta(), "home_001");
     if (!Near(company.w_wifi, 0.10) || !Near(company.w_baro, 0.90) ||
         !Near(company.hsmm_preleave_mean_s, 135.0) || !Near(company.hsmm_leaving_mean_s, 180.0) ||
         !Near(home.hsmm_leaving_mean_s, commute_sa::DefaultTheta().hsmm_leaving_mean_s) ||

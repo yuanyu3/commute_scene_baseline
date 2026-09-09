@@ -14,7 +14,7 @@
 
 Agent 可填写：
 
-- `side`、`anchor_id`：模板适用锚点；
+- `anchor_id`：Agent侧唯一的模板和历史主键；运行时由当前 `anchors.json` 映射为Home/Company产品角色；
 - `applicability`：`always` 或 `baro_ready`；
 - `positive_sequence`：有顺序的正向事件；
 - `negative_pattern`：同时成立时抑制非特异证据的事件集合；

@@ -71,6 +71,8 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetPersonalizationProfileAction(params) << "\n";
         } else if (command == "anchor_profile") {
             std::cout << commute_sa::GetUserAnchorProfileAction(params) << "\n";
+        } else if (command == "history_summary") {
+            std::cout << commute_sa::GetPersonalizationHistorySummaryAction(params) << "\n";
         } else if (command == "strength_estimate") {
             std::cout << commute_sa::EstimateEvidenceStrengthAction(params) << "\n";
         } else if (command == "strength_trial") {
@@ -262,7 +264,7 @@ int main(int argc, char **argv)
     expectOk("get_leave_sensor_summary",
         eq.GetLeaveSensorSummaryJson("{\"t_push_ms\":1700000000000,\"before_s\":600,\"after_s\":1200}"));
     const std::string semanticTimeline = eq.GetEpisodeSemanticTimelineJson(
-        "{\"episode_id\":\"abort_0\",\"side\":\"company\",\"bin_s\":10}");
+        "{\"episode_id\":\"abort_0\",\"anchor_id\":\"co\",\"bin_s\":10}");
     Call("get_episode_semantic_timeline", semanticTimeline);
     if (semanticTimeline.find("\"quality\":\"OBSERVED\"") == std::string::npos ||
         semanticTimeline.find("\"vertical_closure\"") == std::string::npos ||
@@ -270,7 +272,7 @@ int main(int argc, char **argv)
         std::cerr << "FAIL semantic timeline lost aligned signal detail\n"; ++fails;
     }
     const std::string dynamics = eq.GetEpisodeDynamicDiagnosticsJson(
-        "{\"episode_id\":\"abort_0\",\"side\":\"company\"}");
+        "{\"episode_id\":\"abort_0\",\"anchor_id\":\"co\"}");
     Call("get_episode_dynamic_diagnostics", dynamics);
     if (dynamics.find("\"ordered_return\":true") == std::string::npos ||
         dynamics.find("\"first_ascending_after_descent_ms\":1800345620000") == std::string::npos ||
@@ -278,7 +280,7 @@ int main(int argc, char **argv)
         std::cerr << "FAIL dynamic diagnostics lost ordered return\n"; ++fails;
     }
     const std::string boundedTimeline = eq.GetEpisodeSemanticTimelineJson(
-        "{\"episode_id\":\"abort_0\",\"side\":\"company\",\"bin_s\":5,\"max_bins\":1}");
+        "{\"episode_id\":\"abort_0\",\"anchor_id\":\"co\",\"bin_s\":5,\"max_bins\":1}");
     if (boundedTimeline.find("exceeds max_bins") == std::string::npos) {
         std::cerr << "FAIL semantic timeline ignored output budget\n"; ++fails;
     }
@@ -486,7 +488,7 @@ int main(int argc, char **argv)
     }
 
     const std::string cancelGenerated = commute_sa::GenerateContextTemplateAction(
-        "{\"template_name\":\"cancel_fit\",\"side\":\"company\",\"anchor_id\":\"co\","
+        "{\"template_name\":\"cancel_fit\",\"anchor_id\":\"co\","
         "\"applicability\":\"baro_ready\",\"positive_sequence\":\"baro_descending\","
         "\"cancel_sequence\":\"baro_ascending,vertical_closure\",\"rationale\":\"smoke\"}");
     Call("generate_cancel_context_template", cancelGenerated);
@@ -497,7 +499,7 @@ int main(int argc, char **argv)
     }
 
     const std::string interpretation = commute_sa::ProposeAbortedLeaveInterpretationAction(
-        "{\"side\":\"company\",\"episode_id\":\"agent_abort_candidate\","
+        "{\"anchor_id\":\"co\",\"episode_id\":\"agent_abort_candidate\","
         "\"confidence\":0.8,"
         "\"rationale\":\"shared vertical departure prefix followed by measured closure\"}");
     Call("propose_aborted_leave_interpretation", interpretation);
@@ -510,7 +512,7 @@ int main(int argc, char **argv)
 
     Section("PARAMETER_FAMILY_ESTIMATION");
     const std::string generated = commute_sa::GenerateContextTemplateAction(
-        "{\"template_name\":\"parameter_family_smoke\",\"side\":\"company\",\"anchor_id\":\"co\","
+        "{\"template_name\":\"parameter_family_smoke\",\"anchor_id\":\"co\","
         "\"applicability\":\"always\",\"positive_sequence\":\"walking\","
         "\"parameter_families\":\"vertical_threshold\",\"rationale\":\"smoke\"}");
     Call("generate_context_template", generated);

@@ -43,7 +43,8 @@ bool CheckReplayEpisodeSafety(const std::vector<ReplayEpisodeSummary> &baseline,
 std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, const Theta &theta,
     const ObservationAdapter &adapter, int64_t sinceMs = 0, int maxEpisodes = 30,
     bool includePrefixTrace = false, int64_t cutoffMs = 0,
-    std::vector<ReplayEpisodeSummary> *summaries = nullptr);
+    std::vector<ReplayEpisodeSummary> *summaries = nullptr,
+    const std::string &anchorId = "", const std::string &legacySide = "");
 
 /**
  * Infer uncensored PRE_LEAVE/LEAVING dwell samples from labeled positive
@@ -51,7 +52,8 @@ std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, co
  * for robust, low-frequency personalization rather than online inference.
  */
 std::vector<double> InferHsmmDurationSamples(const std::string &rootDir, const Theta &theta,
-    const std::string &side, const std::string &state, int maxEpisodes = 100);
+    const std::string &anchorId, const std::string &legacySide,
+    const std::string &state, int maxEpisodes = 100);
 
 /** Snapshot / restore live θ for agent trial loops (in-memory + file persist on revert). */
 bool BeginThetaTrial(std::string *err = nullptr);

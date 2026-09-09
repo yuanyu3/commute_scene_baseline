@@ -150,6 +150,7 @@ struct HsmmTick {
 
 struct HsmmEpisode {
     std::string episode_id;
+    std::string anchor_id;
     std::string side;
     std::string label;
     int64_t outcome_ms = 0;
@@ -184,7 +185,8 @@ bool EpisodeHasBaroLowerPlatform(const HsmmEpisode &ep)
 
 std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Theta &theta,
     const ObservationAdapter &adapter = {}, bool includePrefixTrace = false, int64_t cutoffMs = 0,
-    std::vector<ReplayEpisodeSummary> *summaries = nullptr)
+    std::vector<ReplayEpisodeSummary> *summaries = nullptr,
+    const std::string &anchorId = "", const std::string &legacySide = "")
 {
     if (summaries) summaries->clear();
     int n = 0;
@@ -216,6 +218,10 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
 
     const LeaveHsmmConfig cfg = HsmmConfigFromTheta(theta);
     for (const auto &ep : episodes) {
+        if (!anchorId.empty()) {
+            const bool match = !ep.anchor_id.empty() ? ep.anchor_id == anchorId : ep.side == legacySide;
+            if (!match) continue;
+        }
         if (!FocusAllowsHome(theta.focus_side) && ep.side == "home") {
             continue;
         }
@@ -516,6 +522,8 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
 
         std::string side = "company";
         ExtractString(line, "side", &side);
+        std::string anchorId;
+        ExtractString(line, "anchor_id", &anchorId);
         tick.obs.context_side = side;
         std::string label;
         ExtractString(line, "label", &label);
@@ -534,9 +542,11 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
             label = interpretation->second.type;
             abortMs = interpretation->second.abort_ms;
         }
-        const std::string key = side + ":" + std::to_string(outcomeMs) + ":" + label + ":" + episodeId;
+        const std::string key = (anchorId.empty() ? side : anchorId) + ":" +
+            std::to_string(outcomeMs) + ":" + label + ":" + episodeId;
         auto &ep = grouped[key];
         ep.episode_id = episodeId;
+        ep.anchor_id = anchorId;
         ep.side = side;
         ep.label = label;
         ep.outcome_ms = outcomeMs;
@@ -646,7 +656,8 @@ bool PersistTheta(const Theta &t, std::string *err)
 }  // namespace
 
 std::vector<double> InferHsmmDurationSamples(const std::string &rootDir, const Theta &theta,
-    const std::string &side, const std::string &state, int maxEpisodes)
+    const std::string &anchorId, const std::string &legacySide,
+    const std::string &state, int maxEpisodes)
 {
     std::vector<HsmmEpisode> episodes;
     std::vector<double> samples;
@@ -656,7 +667,11 @@ std::vector<double> InferHsmmDurationSamples(const std::string &rootDir, const T
     }
     const LeaveHsmmConfig cfg = HsmmConfigFromTheta(theta);
     for (const auto &ep : episodes) {
-        if (ep.side != side || (ep.label != "CONFIRMED_LEAVE" && ep.label != "MISSED_LEAVE") ||
+        if (!anchorId.empty()) {
+            const bool match = !ep.anchor_id.empty() ? ep.anchor_id == anchorId : ep.side == legacySide;
+            if (!match) continue;
+        }
+        if ((ep.label != "CONFIRMED_LEAVE" && ep.label != "MISSED_LEAVE") ||
             ep.ticks.size() < 3) {
             continue;
         }
@@ -949,13 +964,14 @@ bool CommitThetaTrial(std::string *err)
 
 std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, const Theta &theta,
     const ObservationAdapter &adapter, int64_t sinceMs, int maxEpisodes, bool includePrefixTrace, int64_t cutoffMs,
-    std::vector<ReplayEpisodeSummary> *summaries)
+    std::vector<ReplayEpisodeSummary> *summaries, const std::string &anchorId, const std::string &legacySide)
 {
     std::vector<HsmmEpisode> hsmmEpisodes;
     if (!LoadHsmmEpisodes(rootDir, sinceMs, maxEpisodes, &hsmmEpisodes)) {
         return "{\"ok\":false,\"error\":\"policy_history.jsonl with HSMM observations required for context template replay\"}";
     }
-    return ScoreHsmmReplay(hsmmEpisodes, theta, adapter, includePrefixTrace, cutoffMs, summaries);
+    return ScoreHsmmReplay(hsmmEpisodes, theta, adapter, includePrefixTrace, cutoffMs, summaries,
+        anchorId, legacySide);
 }
 
 bool CheckReplayEpisodeSafety(const std::vector<ReplayEpisodeSummary> &baseline,

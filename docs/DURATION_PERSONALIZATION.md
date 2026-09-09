@@ -1,12 +1,12 @@
 # HSMM Duration 个性化
 
-运行时先读取全局 `Theta`，再按 `side + anchor_id` 叠加
+运行时先读取全局 `Theta`，再只按 `anchor_id` 叠加
 `UserAnchorProfile.duration_prior`。第一版只开放：
 
 - `PRE_LEAVE` 的 mean duration；
 - `LEAVING` 的 mean duration。
 
-Agent 只能调用 `fit_duration_prior(side, anchor_id, state)` 选择需要重估的状态，不能提交数值、
+Agent 只能调用 `fit_duration_prior(anchor_id, state)` 选择需要重估的状态，不能提交数值、
 方向或上下界。C++ 使用当前基线重放已确认离开/漏报正例，从四状态后验路径提取未左截断的
 PRE_LEAVE 段，以及从 LEAVING 主导开始到 OUTSIDE/真实离开时刻的时长。
 
@@ -23,7 +23,6 @@ Profile 示例：
 ~~~json
 {
   "schema_version": 1,
-  "side": "company",
   "anchor_id": "company_001",
   "evidence_strength": {"wifi": 0.31, "baro": 0.85},
   "duration_prior": {"leaving_mean_s": 156},
