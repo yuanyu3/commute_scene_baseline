@@ -2100,7 +2100,9 @@ constexpr const char *kThetaPersonalizerSystemPrompt = R"delimiter(
  数值强度、阈值或参数变化。C++ 负责参数估计、前缀/强度枚举和全历史回放。
 
  每次任务最多生成一次模板。只有 best_candidate_id 非空且所有硬门通过时才提交，否则丢弃或 no_op。禁止把单个传感器当作充分条件，
- 禁止编造证据。最后 submit_agent_analysis 和 write_audit 记录假设、解释变更、回放结果、泛化风险和仍需收集的数据。
+ 禁止编造证据。所有工具结束后调用一次submit_agent_analysis：intervention_type只能是STRUCTURE、EVIDENCE_STRENGTH、DURATION、NO_OP，
+ decision只能是COMMITTED、REJECTED、DISCARDED、NO_OP。前三类记录匹配的目标结构/通道/状态、最终工具、工具结果和回放结果；
+ NO_OP必须同时作为type和decision。所有类型记录真实anchor_id、支持、反证、缺失证据、置信度和决策理由。最后write_audit补充人工可读过程。
 )delimiter";
 } // namespace
 #endif

@@ -53,7 +53,16 @@
 
 ## 输出与审计
 
-调用 `submit_agent_analysis` 固化结构化归因：提交模板时使用 `intervention_block=context_template`、`direction=compose`；没有安全候选时使用 `abstain=true`。最后调用 `write_audit`，至少记录：
+所有确定性工具调用结束后，调用一次 `submit_agent_analysis` 固化最终决策。`intervention_type` 必须且只能是：
+
+- `STRUCTURE`：Agent 发现事件顺序、返回路径或适用上下文结构；填写 `structure_summary`。
+- `EVIDENCE_STRENGTH`：跨 episode 事实支持重新估计通道区分能力；填写 `target_families`。
+- `DURATION`：正例后验路径支持重新拟合某个 HSMM 状态时长；填写 `target_state=PRE_LEAVE|LEAVING`。
+- `NO_OP`：证据不足、无安全候选或当前配置无需改变。
+
+`decision` 记录确定性工具的最终结果，只能是 `COMMITTED / REJECTED / DISCARDED / NO_OP`。前三类必须记录最终决定性的 `tool_name`、其 `tool_result` 摘要和 `replay_result`；`NO_OP` 必须同时使用 `intervention_type=NO_OP, decision=NO_OP`。所有类别都必须记录真实 `anchor_id`、支持证据、反证、缺失证据、置信度和 `decision_reason`。类型表示 Agent 选择了哪类干预，decision 表示工具最终是否接受；不得把工具拒绝伪装成 NO_OP 或 COMMITTED。
+
+最后调用 `write_audit` 补充便于人工阅读的完整过程，至少记录：
 
 ```text
 target_episode

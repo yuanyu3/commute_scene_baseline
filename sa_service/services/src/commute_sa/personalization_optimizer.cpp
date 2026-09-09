@@ -948,35 +948,121 @@ std::string ProposeContextProfileUpdateAction(const std::string &paramsJson)
 
 std::string SubmitAgentAnalysisAction(const std::string &paramsJson)
 {
+    std::string interventionType;
+    std::string anchorId;
+    std::string decision;
     std::string context;
     std::string cause;
-    std::string block;
-    std::string direction;
     std::string supporting;
     std::string contradicting;
-    if (!ExtractString(paramsJson, "context_name", &context) || context.empty() ||
+    std::string missing;
+    std::string toolName;
+    std::string toolResult;
+    std::string replayResult;
+    std::string decisionReason;
+    if (!ExtractString(paramsJson, "intervention_type", &interventionType) || interventionType.empty() ||
+        !ExtractString(paramsJson, "anchor_id", &anchorId) || anchorId.empty() ||
+        !ExtractString(paramsJson, "decision", &decision) || decision.empty() ||
+        !ExtractString(paramsJson, "context_name", &context) || context.empty() ||
         !ExtractString(paramsJson, "primary_cause", &cause) || cause.empty() ||
         !ExtractString(paramsJson, "supporting_evidence", &supporting) || supporting.empty() ||
-        !ExtractString(paramsJson, "contradicting_evidence", &contradicting)) {
-        return "{\"ok\":false,\"error\":\"context_name, primary_cause, supporting_evidence and contradicting_evidence required\"}";
+        !ExtractString(paramsJson, "contradicting_evidence", &contradicting) || contradicting.empty() ||
+        !ExtractString(paramsJson, "missing_evidence", &missing) || missing.empty() ||
+        !ExtractString(paramsJson, "decision_reason", &decisionReason) || decisionReason.empty()) {
+        return "{\"ok\":false,\"error\":\"intervention_type, anchor_id, decision, context_name, primary_cause, supporting_evidence, contradicting_evidence, missing_evidence and decision_reason required\"}";
     }
-    ExtractString(paramsJson, "intervention_block", &block);
-    ExtractString(paramsJson, "direction", &direction);
-    bool abstain = false;
-    ExtractBool(paramsJson, "abstain", &abstain);
-    const bool templateComposition = block == "context_template" && direction == "compose";
-    if (!abstain && !templateComposition && ParamsForBlock(block, direction).empty()) {
-        return "{\"ok\":false,\"error\":\"non-abstain analysis requires context_template/compose or a supported legacy semantic block\"}";
+    const std::set<std::string> types {"STRUCTURE", "EVIDENCE_STRENGTH", "DURATION", "NO_OP"};
+    const std::set<std::string> decisions {"COMMITTED", "REJECTED", "DISCARDED", "NO_OP"};
+    if (types.find(interventionType) == types.end()) {
+        return "{\"ok\":false,\"error\":\"intervention_type must be STRUCTURE|EVIDENCE_STRENGTH|DURATION|NO_OP\"}";
+    }
+    if (decisions.find(decision) == decisions.end()) {
+        return "{\"ok\":false,\"error\":\"decision must be COMMITTED|REJECTED|DISCARDED|NO_OP\"}";
+    }
+    if ((interventionType == "NO_OP") != (decision == "NO_OP")) {
+        return "{\"ok\":false,\"error\":\"NO_OP intervention_type and decision must be used together\"}";
     }
     double confidence = 0.0;
-    ExtractNumber(paramsJson, "confidence", &confidence);
-    if (confidence < 0.0 || confidence > 1.0) {
-        return "{\"ok\":false,\"error\":\"confidence must be in [0,1]\"}";
+    if (!ExtractNumber(paramsJson, "confidence", &confidence) || confidence < 0.0 || confidence > 1.0) {
+        return "{\"ok\":false,\"error\":\"confidence required and must be in [0,1]\"}";
     }
+
+    std::string detailKey;
+    std::string detailValue;
+    if (interventionType == "STRUCTURE") {
+        detailKey = "structure_summary";
+    } else if (interventionType == "EVIDENCE_STRENGTH") {
+        detailKey = "target_families";
+    } else if (interventionType == "DURATION") {
+        detailKey = "target_state";
+    }
+    if (!detailKey.empty() &&
+        (!ExtractString(paramsJson, detailKey.c_str(), &detailValue) || detailValue.empty())) {
+        return "{\"ok\":false,\"error\":\"" + detailKey + " required for " + interventionType + "\"}";
+    }
+    if (interventionType == "DURATION" && detailValue != "PRE_LEAVE" && detailValue != "LEAVING") {
+        return "{\"ok\":false,\"error\":\"target_state must be PRE_LEAVE|LEAVING\"}";
+    }
+    if (interventionType != "NO_OP") {
+        if (!ExtractString(paramsJson, "tool_name", &toolName) || toolName.empty() ||
+            !ExtractString(paramsJson, "tool_result", &toolResult) || toolResult.empty() ||
+            !ExtractString(paramsJson, "replay_result", &replayResult) || replayResult.empty()) {
+            return "{\"ok\":false,\"error\":\"tool_name, tool_result and replay_result required for an intervention\"}";
+        }
+        const std::set<std::string> structureTools {
+            "diagnose_context_template", "generate_context_template", "commit_context_template",
+            "discard_context_template"
+        };
+        const std::set<std::string> strengthTools {
+            "estimate_evidence_strength", "commit_evidence_strength_candidate",
+            "discard_evidence_strength_candidate"
+        };
+        const std::set<std::string> durationTools {
+            "fit_duration_prior", "commit_duration_prior_candidate", "discard_duration_prior_candidate"
+        };
+        const bool toolMatches =
+            (interventionType == "STRUCTURE" && structureTools.find(toolName) != structureTools.end()) ||
+            (interventionType == "EVIDENCE_STRENGTH" && strengthTools.find(toolName) != strengthTools.end()) ||
+            (interventionType == "DURATION" && durationTools.find(toolName) != durationTools.end());
+        if (!toolMatches) {
+            return "{\"ok\":false,\"error\":\"tool_name does not match intervention_type\"}";
+        }
+        const bool decisionMatches =
+            (decision == "COMMITTED" && toolName.find("commit_") == 0) ||
+            (decision == "DISCARDED" && toolName.find("discard_") == 0) ||
+            (decision == "REJECTED" && toolName.find("commit_") != 0 && toolName.find("discard_") != 0);
+        if (!decisionMatches) {
+            return "{\"ok\":false,\"error\":\"tool_name does not match final decision\"}";
+        }
+    }
+
+    std::ostringstream normalized;
+    normalized << "{\"schema_version\":2,\"record_type\":\"AGENT_ANALYSIS\""
+        << ",\"intervention_type\":\"" << Esc(interventionType) << "\""
+        << ",\"anchor_id\":\"" << Esc(anchorId) << "\""
+        << ",\"decision\":\"" << Esc(decision) << "\""
+        << ",\"context_name\":\"" << Esc(context) << "\""
+        << ",\"primary_cause\":\"" << Esc(cause) << "\""
+        << ",\"supporting_evidence\":\"" << Esc(supporting) << "\""
+        << ",\"contradicting_evidence\":\"" << Esc(contradicting) << "\""
+        << ",\"missing_evidence\":\"" << Esc(missing) << "\""
+        << ",\"confidence\":" << confidence
+        << ",\"decision_reason\":\"" << Esc(decisionReason) << "\""
+        << ",\"abstain\":" << (interventionType == "NO_OP" ? "true" : "false");
+    if (!detailKey.empty()) normalized << ",\"" << detailKey << "\":\"" << Esc(detailValue) << "\"";
+    if (interventionType != "NO_OP") {
+        normalized << ",\"tool_name\":\"" << Esc(toolName) << "\""
+            << ",\"tool_result\":\"" << Esc(toolResult) << "\""
+            << ",\"replay_result\":\"" << Esc(replayResult) << "\"";
+    }
+    normalized << '}';
     const std::string auditId = ProductStore::GetInstance().AppendAudit(NowMs(),
-        "structured_agent_analysis context=" + context + " cause=" + cause + (abstain ? " abstain" : ""),
-        paramsJson);
-    return "{\"ok\":true,\"validated\":true,\"audit_id\":\"" + Esc(auditId) + "\"}";
+        "structured_agent_analysis type=" + interventionType + " anchor=" + anchorId + " decision=" + decision,
+        normalized.str());
+    if (auditId.empty()) return "{\"ok\":false,\"error\":\"audit store unavailable\"}";
+    return "{\"ok\":true,\"validated\":true,\"schema_version\":2,\"intervention_type\":\"" +
+        Esc(interventionType) + "\",\"decision\":\"" + Esc(decision) + "\",\"audit_id\":\"" +
+        Esc(auditId) + "\"}";
 }
 
 }  // namespace commute_sa

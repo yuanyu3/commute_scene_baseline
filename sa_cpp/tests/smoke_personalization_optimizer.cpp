@@ -131,12 +131,58 @@ int main()
         return 1;
     }
     const std::string submitted = commute_sa::SubmitAgentAnalysisAction(
-        "{\"context_name\":\"vertical_exit\",\"primary_cause\":\"WIFI_TRANSIENT\","
-        "\"supporting_evidence\":\"wifi reattached; outbound weak\",\"contradicting_evidence\":\"walking sustained\","
-        "\"intervention_block\":\"radio_reliability\",\"direction\":\"decrease\","
-        "\"confidence\":0.78,\"abstain\":false}");
-    if (submitted.find("\"validated\":true") == std::string::npos) {
-        std::cerr << "FAIL structured analysis\n";
+        "{\"intervention_type\":\"EVIDENCE_STRENGTH\",\"anchor_id\":\"company_001\","
+        "\"decision\":\"DISCARDED\",\"context_name\":\"vertical_exit\","
+        "\"primary_cause\":\"WIFI_TRANSIENT\",\"supporting_evidence\":\"wifi reattached; outbound weak\","
+        "\"contradicting_evidence\":\"walking sustained\",\"missing_evidence\":\"none\","
+        "\"target_families\":\"wifi\",\"tool_name\":\"discard_evidence_strength_candidate\","
+        "\"tool_result\":\"candidate discarded\",\"replay_result\":\"positive delayed\","
+        "\"decision_reason\":\"replay guard rejected the candidate\",\"confidence\":0.78}");
+    const std::string structure = commute_sa::SubmitAgentAnalysisAction(
+        "{\"intervention_type\":\"STRUCTURE\",\"anchor_id\":\"company_001\","
+        "\"decision\":\"COMMITTED\",\"context_name\":\"vertical_return\","
+        "\"primary_cause\":\"ORDERED_RETURN\",\"supporting_evidence\":\"two ordered closures\","
+        "\"contradicting_evidence\":\"none\",\"missing_evidence\":\"one episode lacks wifi\","
+        "\"structure_summary\":\"descent then ascent then closure\","
+        "\"tool_name\":\"commit_context_template\",\"tool_result\":\"candidate committed\","
+        "\"replay_result\":\"no new false or delayed positive\","
+        "\"decision_reason\":\"structure passed per-episode guards\",\"confidence\":0.74}");
+    const std::string duration = commute_sa::SubmitAgentAnalysisAction(
+        "{\"intervention_type\":\"DURATION\",\"anchor_id\":\"company_001\","
+        "\"decision\":\"REJECTED\",\"context_name\":\"short_preleave\","
+        "\"primary_cause\":\"DURATION_MISMATCH\",\"supporting_evidence\":\"median below global\","
+        "\"contradicting_evidence\":\"high MAD\",\"missing_evidence\":\"more positives\","
+        "\"target_state\":\"PRE_LEAVE\",\"tool_name\":\"fit_duration_prior\","
+        "\"tool_result\":\"eligible false\",\"replay_result\":\"positive delayed\","
+        "\"decision_reason\":\"hard replay guard failed\",\"confidence\":0.55}");
+    const std::string noOp = commute_sa::SubmitAgentAnalysisAction(
+        "{\"intervention_type\":\"NO_OP\",\"anchor_id\":\"company_001\","
+        "\"decision\":\"NO_OP\",\"context_name\":\"insufficient_history\","
+        "\"primary_cause\":\"INSUFFICIENT_EVIDENCE\",\"supporting_evidence\":\"only one positive\","
+        "\"contradicting_evidence\":\"none\",\"missing_evidence\":\"additional labeled episodes\","
+        "\"decision_reason\":\"no intervention can pass minimum support\",\"confidence\":0.3}");
+    const std::string mismatch = commute_sa::SubmitAgentAnalysisAction(
+        "{\"intervention_type\":\"NO_OP\",\"anchor_id\":\"company_001\",\"decision\":\"COMMITTED\","
+        "\"context_name\":\"bad\",\"primary_cause\":\"bad\",\"supporting_evidence\":\"x\","
+        "\"contradicting_evidence\":\"none\",\"missing_evidence\":\"none\","
+        "\"decision_reason\":\"bad\",\"confidence\":0.5}");
+    if (submitted.find("\"validated\":true") == std::string::npos ||
+        structure.find("\"validated\":true") == std::string::npos ||
+        duration.find("\"validated\":true") == std::string::npos ||
+        noOp.find("\"validated\":true") == std::string::npos ||
+        mismatch.find("\"ok\":false") == std::string::npos) {
+        std::cerr << "FAIL typed structured analysis\n";
+        return 1;
+    }
+    std::ifstream auditIn(root + "/audit.jsonl");
+    std::string auditBody;
+    std::string auditLine;
+    while (std::getline(auditIn, auditLine)) auditBody += auditLine + "\n";
+    if (auditBody.find("\"intervention_type\":\"STRUCTURE\"") == std::string::npos ||
+        auditBody.find("\"intervention_type\":\"EVIDENCE_STRENGTH\"") == std::string::npos ||
+        auditBody.find("\"intervention_type\":\"DURATION\"") == std::string::npos ||
+        auditBody.find("\"intervention_type\":\"NO_OP\"") == std::string::npos) {
+        std::cerr << "FAIL typed audit persistence\n";
         return 1;
     }
     using commute_sa::ReplayEpisodeSummary;

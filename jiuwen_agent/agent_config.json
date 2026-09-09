@@ -74,6 +74,8 @@
 
       "discard_duration_prior_candidate",
 
+      "submit_agent_analysis",
+
       "write_audit",
 
       "request_anchor_reestimate"

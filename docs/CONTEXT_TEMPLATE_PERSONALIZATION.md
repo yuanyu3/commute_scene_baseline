@@ -64,7 +64,18 @@ Agent 可填写：
 
 approaching、attached、OUTSIDE 等产品门控仍由编译代码决定，模板不能覆盖。若没有候选通过，工具返回空 `best_candidate_id`，Agent 只能 discard/no-op。
 
-## 5. 0812 真实数据结果
+## 5. 结构化决策审计
+
+`submit_agent_analysis` 不再接受模糊的 `intervention_block/direction` 记录。每次个性化流程结束后必须写入一个明确类别：
+
+- `STRUCTURE`：事件顺序、返回路径或上下文结构；
+- `EVIDENCE_STRENGTH`：一个或多个原子证据通道的锚点级强度重估；
+- `DURATION`：`PRE_LEAVE` 或 `LEAVING` 的锚点级时长重估；
+- `NO_OP`：证据不足或没有安全候选。
+
+审计同时记录 `decision=COMMITTED|REJECTED|DISCARDED|NO_OP`。非 NO-OP 记录必须包含决定性工具、工具结果和回放结果；所有记录都包含 `anchor_id`、支持证据、反证、缺失证据、置信度及最终理由。标准化后的 schema v2 数据写入 `audit.jsonl` 的 `changes` 对象，可直接用于统计各类 Agent 决策和工具接受率。
+
+## 6. 0812 真实数据结果
 
 输入为 5 条可评估离开 episode，另有 1 条返回公司序列（方向检查后不标为漏报）。基线包含 2 条明确误推、2 条到达低层平台但尚未离开的中间过程、1 条确认离开。
 

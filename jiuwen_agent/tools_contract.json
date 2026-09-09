@@ -476,18 +476,31 @@
     {
       "name": "submit_agent_analysis",
       "category": "diagnosis",
-      "description": "Validate and persist the Agent's structured hypothesis and semantic intervention audit.",
+      "description": "Persist one final typed intervention decision so Agent contribution and deterministic-tool outcome can be audited separately.",
       "input_schema": {
+        "intervention_type": "required: STRUCTURE|EVIDENCE_STRENGTH|DURATION|NO_OP",
+        "anchor_id": "required: exact id from get_anchors",
+        "decision": "required: COMMITTED|REJECTED|DISCARDED|NO_OP",
         "context_name": "string",
         "primary_cause": "string",
-        "supporting_evidence": "string",
-        "contradicting_evidence": "string",
-        "intervention_block": "context_template for current path; optional when abstain",
-        "direction": "compose for context_template; optional when abstain",
         "confidence": "number 0..1",
-        "abstain": "bool"
+        "supporting_evidence": "string",
+        "contradicting_evidence": "required string; use none when absent",
+        "missing_evidence": "required string; use none when complete",
+        "decision_reason": "required evidence/replay-grounded final reason",
+        "structure_summary": "required only for STRUCTURE",
+        "target_families": "required only for EVIDENCE_STRENGTH",
+        "target_state": "required only for DURATION: PRE_LEAVE|LEAVING",
+        "tool_name": "required except NO_OP; final decisive tool",
+        "tool_result": "required except NO_OP; compact eligibility/commit/rejection result",
+        "replay_result": "required except NO_OP; compact baseline/candidate result"
       },
-      "output_schema": {"validated": "bool", "audit_id": "string"}
+      "output_schema": {
+        "validated": "bool",
+        "intervention_type": "STRUCTURE|EVIDENCE_STRENGTH|DURATION|NO_OP",
+        "decision": "COMMITTED|REJECTED|DISCARDED|NO_OP",
+        "audit_id": "string"
+      }
     },
 
     {
