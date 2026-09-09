@@ -6,6 +6,7 @@
 
 #include "commute_sa/action_ops.h"
 #include "commute_sa/context_template.h"
+#include "commute_sa/evidence_strength_profile.h"
 #include "commute_sa/personalization_optimizer.h"
 
 #include "ErrorCode.h"
@@ -148,6 +149,30 @@ std::string CallGetActiveContextTemplate(const std::string &p)
 {
     return commute_sa::GetActiveContextTemplateAction(p);
 }
+std::string CallGetUserAnchorProfile(const std::string &p)
+{
+    return commute_sa::GetUserAnchorProfileAction(p);
+}
+std::string CallEstimateEvidenceStrength(const std::string &p)
+{
+    return commute_sa::EstimateEvidenceStrengthAction(p);
+}
+std::string CallGetEvidenceStrengthTrial(const std::string &p)
+{
+    return commute_sa::GetEvidenceStrengthTrialAction(p);
+}
+std::string CallCommitEvidenceStrength(const std::string &p)
+{
+    return commute_sa::CommitEvidenceStrengthCandidateAction(p);
+}
+std::string CallDiscardEvidenceStrength(const std::string &p)
+{
+    return commute_sa::DiscardEvidenceStrengthCandidateAction(p);
+}
+std::string CallFitDurationPrior(const std::string &p) { return commute_sa::FitDurationPriorAction(p); }
+std::string CallGetDurationPriorTrial(const std::string &p) { return commute_sa::GetDurationPriorTrialAction(p); }
+std::string CallCommitDurationPrior(const std::string &p) { return commute_sa::CommitDurationPriorCandidateAction(p); }
+std::string CallDiscardDurationPrior(const std::string &p) { return commute_sa::DiscardDurationPriorCandidateAction(p); }
 
 std::string CallGetPolicy(const std::string &p) { return commute_sa::GetPersonalizationPolicyAction(p); }
 std::string CallGetPolicyCatalog(const std::string &p) { return commute_sa::GetPolicyCatalogAction(p); }
@@ -188,6 +213,15 @@ const std::vector<std::string> &ActionToolNames()
         "commit_context_template",
         "discard_context_template",
         "get_active_context_template",
+        "get_current_user_anchor_profile",
+        "estimate_evidence_strength",
+        "get_evidence_strength_trial",
+        "commit_evidence_strength_candidate",
+        "discard_evidence_strength_candidate",
+        "fit_duration_prior",
+        "get_duration_prior_trial",
+        "commit_duration_prior_candidate",
+        "discard_duration_prior_candidate",
     };
     return kNames;
 }
@@ -303,6 +337,27 @@ std::vector<std::string> RegisterActionTools()
         &CallDiscardContextTemplate);
     RegisterOne("get_active_context_template", "Return the persisted executable template", {},
         &CallGetActiveContextTemplate);
+    RegisterOne("get_current_user_anchor_profile", "Return committed anchor-specific evidence strengths",
+        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true}},
+        &CallGetUserAnchorProfile);
+    RegisterOne("estimate_evidence_strength", "Fit selected strengths and stage a replay-checked candidate",
+        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true},
+            {"families", "comma-separated evidence channels", "string", false}},
+        &CallEstimateEvidenceStrength);
+    RegisterOne("get_evidence_strength_trial", "Inspect staged strength candidate", {},
+        &CallGetEvidenceStrengthTrial);
+    RegisterOne("commit_evidence_strength_candidate", "Commit replay-safe anchor profile", {},
+        &CallCommitEvidenceStrength);
+    RegisterOne("discard_evidence_strength_candidate", "Discard staged strength candidate", {},
+        &CallDiscardEvidenceStrength);
+    RegisterOne("fit_duration_prior", "Fit PRE_LEAVE or LEAVING duration and stage a replay-checked candidate",
+        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true},
+            {"state", "PRE_LEAVE|LEAVING", "string", true}}, &CallFitDurationPrior);
+    RegisterOne("get_duration_prior_trial", "Inspect staged duration candidate", {}, &CallGetDurationPriorTrial);
+    RegisterOne("commit_duration_prior_candidate", "Commit replay-safe anchor duration", {},
+        &CallCommitDurationPrior);
+    RegisterOne("discard_duration_prior_candidate", "Discard staged duration candidate", {},
+        &CallDiscardDurationPrior);
 
     RegisterOne("get_personalization_policy", "Return active bounded high-level strategy", {}, &CallGetPolicy);
     RegisterOne("get_policy_catalog", "Return allowed strategy templates and bounds", {}, &CallGetPolicyCatalog);

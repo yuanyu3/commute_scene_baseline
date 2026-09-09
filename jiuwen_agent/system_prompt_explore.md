@@ -57,7 +57,8 @@
 
 HSMM 输出 `P(LEAVING)`。仍 INSIDE/NEAR 且 `P(LEAVING) ≥ enter_leave`，并满足 `arm_delay_s`、cooldown、一次一推等，才发 `LEAVE_COMPANY_NOTIFICATION`。OUTSIDE / approaching / Wi‑Fi 再附着由 C++ 硬禁。
 
-气压有样本就进入发射项；重要性只靠 `w_baro`。各 `w_*` 是发射项可靠度，不是简单加权求和成分。
+气压有样本就进入发射项；重要性由 baro evidence strength 控制。旧 `w_*` 名称当前承载直接
+[0,1] evidence strength，不再经过隐藏映射，也不是简单加权求和成分。
 
 ## 可改参量（含义供猜想，不是指令）
 

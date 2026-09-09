@@ -162,10 +162,7 @@ class LeaveHsmm:
             [0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08, 0.82],
         ]
         keys = ["w_walk", "w_pdr", "w_geo", "w_wifi", "w_cell", "w_ble", "w_time", "w_baro", "w_baro"]
-        feature_reliability = [
-            0.0 if float(theta.get(key, 0.0)) <= 0.0 else 0.25 + 3.0 * float(theta.get(key, 0.0))
-            for key in keys
-        ]
+        feature_reliability = [_clip01(float(theta.get(key, 0.0))) for key in keys]
         logs: List[float] = []
         for state in range(4):
             value = 0.0

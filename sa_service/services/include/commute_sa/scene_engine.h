@@ -142,12 +142,10 @@ private:
         int hits = 0;
     };
 
-    ObservationResult BuildLeaveObservation(const TickFeatures &feat, Relation rel, bool hasDist, double distM, double rIn,
+    ObservationResult BuildLeaveObservation(const Theta &effectiveTheta, const TickFeatures &feat, Relation rel, bool hasDist, double distM, double rIn,
         double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double wifiJaccard,
         bool wifiAttach, double centerHour, std::optional<double> prevDist, bool approaching,
         bool radioSuppressed, bool gpsDistUnreliable = false) const;
-    LeaveHsmmConfig HsmmConfig() const { return HsmmConfigFromTheta(theta_); }
-
     /** Seconds until dist reaches rOut; nullopt if not outbound / unknown. */
     std::optional<double> EstimateEtaOutS(bool hasDist, double distM, double rOut, bool walking, double pdrNetOut,
         std::optional<double> prevDist, std::optional<TickTsMs> prevT, TickTsMs tMs, bool gpsReliable) const;

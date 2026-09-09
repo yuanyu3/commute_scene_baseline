@@ -27,6 +27,7 @@ class Scene(str, Enum):
 
 
 DEFAULT_THETA: Dict[str, Any] = {
+    "evidence_strength_version": 1,
     "enter_leave": 0.58,
     # Predictive service gate: PRE_LEAVE plus independent evidence.
     "enter_preleave": 0.50,
@@ -40,13 +41,15 @@ DEFAULT_THETA: Dict[str, Any] = {
     "preleave_geo_memory_s": 30.0,
     "exit_leave": 0.45,
     "min_evidence": 2,
-    "w_walk": 0.25,
-    "w_pdr": 0.20,
-    "w_geo": 0.20,
-    "w_wifi": 0.12,
-    "w_cell": 0.08,
+    # Direct [0,1] HSMM evidence strengths. Names are retained internally
+    # during the compatibility window; no hidden 0.25 + 3*w mapping remains.
+    "w_walk": 1.00,
+    "w_pdr": 0.85,
+    "w_geo": 0.85,
+    "w_wifi": 0.61,
+    "w_cell": 0.49,
     "w_ble": 0.0,
-    "w_time": 0.20,
+    "w_time": 0.85,
     # Per-channel hit thresholds (score in [0,1] counts as evidence if >= thr).
     "thr_walk": 0.5,
     "thr_pdr": 0.5,
@@ -92,8 +95,42 @@ DEFAULT_THETA: Dict[str, Any] = {
     # building-specific floor count, so it transfers across buildings.
     "baro_gate_enabled": True,
     "baro_min_descent_m": 12.0,
-    "w_baro": 0.20,
+    "w_baro": 0.85,
 }
+
+
+def normalize_evidence_strength(theta: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize new nested strengths or migrate one legacy w_* configuration."""
+    out = dict(theta)
+    nested = out.get("evidence_strength")
+    key_map = {
+        "walking": "w_walk",
+        "pdr": "w_pdr",
+        "geo": "w_geo",
+        "wifi": "w_wifi",
+        "cell": "w_cell",
+        "ble": "w_ble",
+        "time": "w_time",
+        "baro": "w_baro",
+    }
+    if isinstance(nested, dict):
+        for external, internal in key_map.items():
+            if external in nested and nested[external] is not None:
+                out[internal] = max(0.0, min(1.0, float(nested[external])))
+        out["evidence_strength_version"] = 1
+    elif int(out.get("evidence_strength_version", 0)) < 1:
+        has_split_radio = any(key in out for key in ("w_wifi", "w_cell", "w_ble"))
+        if not has_split_radio and "w_radio" in out:
+            radio = float(out["w_radio"])
+            out["w_wifi"] = radio * 0.55
+            out["w_cell"] = radio * 0.30
+            out["w_ble"] = radio * 0.15
+        for internal in key_map.values():
+            if internal in out:
+                legacy = float(out[internal])
+                out[internal] = 0.0 if legacy <= 0.0 else min(1.0, 0.25 + 3.0 * legacy)
+        out["evidence_strength_version"] = 1
+    return out
 
 
 @dataclass
@@ -333,7 +370,7 @@ def score_leaving_anchor(
 class SceneEngine:
     def __init__(self, anchors: AnchorSet, theta: Optional[Dict[str, Any]] = None):
         self.anchors = anchors
-        self.theta = {**DEFAULT_THETA, **(theta or {})}
+        self.theta = {**DEFAULT_THETA, **normalize_evidence_strength(theta or {})}
         self.scene = Scene.UNKNOWN
         self.prev_dist_home: Optional[float] = None
         self.prev_dist_company: Optional[float] = None

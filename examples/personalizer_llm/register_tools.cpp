@@ -3,6 +3,7 @@
 #include "commute_sa/action_ops.h"
 #include "commute_sa/context_template.h"
 #include "commute_sa/evidence_query.h"
+#include "commute_sa/evidence_strength_profile.h"
 #include "commute_sa/personalization_optimizer.h"
 
 #include "ErrorCode.h"
@@ -260,6 +261,31 @@ std::vector<std::string> RegisterPersonalizerTools()
         &DiscardTemplate);
     Reg("get_active_context_template", "Return the currently persisted executable context template", {},
         &GetActiveTemplate);
+    Reg("get_current_user_anchor_profile", "Return committed anchor-specific evidence strengths or global fallback",
+        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true}},
+        &commute_sa::GetUserAnchorProfileAction);
+    Reg("estimate_evidence_strength",
+        "Deterministically fit selected channel strengths from labeled history and stage a replay-checked candidate",
+        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true},
+            {"families", "comma-separated walking,pdr,geo,wifi,cell,ble,time,baro; empty means all", "string", false}},
+        &commute_sa::EstimateEvidenceStrengthAction);
+    Reg("get_evidence_strength_trial", "Inspect the staged evidence-strength candidate", {},
+        &commute_sa::GetEvidenceStrengthTrialAction);
+    Reg("commit_evidence_strength_candidate", "Commit only a replay-safe anchor-specific candidate", {},
+        &commute_sa::CommitEvidenceStrengthCandidateAction);
+    Reg("discard_evidence_strength_candidate", "Discard the staged strength candidate", {},
+        &commute_sa::DiscardEvidenceStrengthCandidateAction);
+    Reg("fit_duration_prior",
+        "Robustly fit one HSMM state duration from labeled history and stage a replay-checked candidate",
+        {{"side", "company|home", "string", true}, {"anchor_id", "exact anchor id", "string", true},
+            {"state", "PRE_LEAVE|LEAVING", "string", true}},
+        &commute_sa::FitDurationPriorAction);
+    Reg("get_duration_prior_trial", "Inspect the staged duration candidate", {},
+        &commute_sa::GetDurationPriorTrialAction);
+    Reg("commit_duration_prior_candidate", "Commit only a replay-safe anchor-specific duration candidate", {},
+        &commute_sa::CommitDurationPriorCandidateAction);
+    Reg("discard_duration_prior_candidate", "Discard the staged duration candidate", {},
+        &commute_sa::DiscardDurationPriorCandidateAction);
     Reg("write_audit", "Append audit entry / no_op",
         {{"message", "text", "string", true}, {"changes", "object", "object", false}}, &WriteAudit);
     Reg("request_anchor_reestimate", "Queue anchor re-inference",
@@ -285,6 +311,10 @@ std::vector<std::string> RegisterPersonalizerTools()
         "get_context_template_catalog", "get_aborted_leave_candidates",
         "propose_aborted_leave_interpretation", "diagnose_context_template", "generate_context_template", "get_context_template_trial",
         "commit_context_template", "discard_context_template", "get_active_context_template",
+        "get_current_user_anchor_profile", "estimate_evidence_strength", "get_evidence_strength_trial",
+        "commit_evidence_strength_candidate", "discard_evidence_strength_candidate",
+        "fit_duration_prior", "get_duration_prior_trial", "commit_duration_prior_candidate",
+        "discard_duration_prior_candidate",
         "get_personalization_policy", "get_policy_catalog", "begin_policy_trial", "apply_policy_candidate",
         "evaluate_policy_on_history", "revert_policy_trial", "commit_policy_trial"};
 }

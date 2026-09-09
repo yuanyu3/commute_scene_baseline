@@ -129,6 +129,60 @@
     },
 
     {
+      "name": "get_current_user_anchor_profile",
+      "category": "profile",
+      "description": "Return the committed side/anchor evidence-strength profile, or explicit global fallback.",
+      "input_schema": {"side": "company|home", "anchor_id": "exact id from get_anchors"}
+    },
+    {
+      "name": "estimate_evidence_strength",
+      "category": "estimator",
+      "description": "Agent selects channel families; deterministic code computes Laplace-smoothed discrimination, coverage, sample shrinkage, bounded change and full HSMM replay. No numeric target is accepted.",
+      "input_schema": {"side": "company|home", "anchor_id": "exact id", "families": "optional comma-separated walking,pdr,geo,wifi,cell,ble,time,baro"}
+    },
+    {
+      "name": "get_evidence_strength_trial",
+      "category": "estimator",
+      "description": "Inspect the staged anchor-specific strength candidate and safety result.",
+      "input_schema": {}
+    },
+    {
+      "name": "commit_evidence_strength_candidate",
+      "category": "profile",
+      "description": "Persist only the currently staged replay-safe candidate.",
+      "input_schema": {}
+    },
+    {
+      "name": "discard_evidence_strength_candidate",
+      "category": "profile",
+      "description": "Discard the staged candidate without changing the committed profile.",
+      "input_schema": {}
+    },
+    {
+      "name": "fit_duration_prior",
+      "category": "estimator",
+      "description": "Agent selects PRE_LEAVE or LEAVING only; deterministic code infers uncensored positive posterior durations, applies robust statistics, sample shrinkage, a 50% change bound and full replay. No numeric target is accepted.",
+      "input_schema": {"side": "company|home", "anchor_id": "exact id", "state": "PRE_LEAVE|LEAVING"}
+    },
+    {
+      "name": "get_duration_prior_trial",
+      "category": "estimator",
+      "description": "Inspect duration sample statistics, candidate profile and replay safety result.",
+      "input_schema": {}
+    },
+    {
+      "name": "commit_duration_prior_candidate",
+      "category": "profile",
+      "description": "Persist only the currently staged replay-safe anchor duration candidate.",
+      "input_schema": {}
+    },
+    {
+      "name": "discard_duration_prior_candidate",
+      "category": "profile",
+      "description": "Discard the staged duration candidate without changing the committed profile.",
+      "input_schema": {}
+    },
+    {
 
       "name": "get_episode_semantic_timeline",
 
@@ -176,7 +230,7 @@
 
       "category": "action",
 
-      "description": "Apply one clipped theta delta and persist. enter_leave/exit_leave are HSMM P(LEAVING) thresholds; w_* are observation reliabilities.",
+      "description": "Legacy ablation tool. Apply one clipped theta delta and persist. enter_leave/exit_leave are HSMM P(LEAVING) thresholds; w_* names now carry direct [0,1] evidence strengths with no hidden mapping.",
 
       "input_schema": {
 

@@ -13,19 +13,23 @@ struct Theta {
     double enter_leave = 0.58;
     double exit_leave = 0.45;
     int min_evidence = 2;
-    double w_walk = 0.25;
-    double w_pdr = 0.20;
-    double w_geo = 0.20;
-    /** Split radio modalities (prefer these over legacy w_radio). */
-    double w_wifi = 0.12;
-    double w_cell = 0.08;
+    /**
+     * Direct HSMM evidence strengths in [0,1]. The w_* member names remain
+     * temporarily for source compatibility; they no longer use the historic
+     * 0.25 + 3*w mapping. New JSON is persisted under evidence_strength.
+     */
+    double w_walk = 1.00;
+    double w_pdr = 0.85;
+    double w_geo = 0.85;
+    double w_wifi = 0.61;
+    double w_cell = 0.49;
     double w_ble = 0.0;
     /**
      * Legacy combined radio weight. Load-only fallback when w_wifi/w_cell/w_ble absent:
      * split ≈ 0.55/0.30/0.15 into wifi/cell/ble.
      */
     double w_radio = 0.15;
-    double w_time = 0.20;
+    double w_time = 0.85;
     /** Per-channel hit thresholds (s_i counts toward min_evidence if s_i >= thr_i). */
     double thr_walk = 0.5;
     double thr_pdr = 0.5;
@@ -62,7 +66,7 @@ struct Theta {
      * r_in/r_out remain auxiliary; indoor network fixes are often hundreds of metres off.
      */
     double company_source_vicinity_m = 400.0;
-    double w_baro = 0.20;
+    double w_baro = 0.85;
     double baro_min_descent_m = 12.0;
     /**
      * Which leave flow is active: "company" | "home" | "both".
@@ -86,7 +90,7 @@ inline Theta DefaultTheta()
     return Theta {};
 }
 
-/** Map θ observation weights onto HSMM emission reliability. */
+/** Build HSMM emission reliability from direct [0,1] evidence strengths. */
 inline LeaveHsmmConfig HsmmConfigFromTheta(const Theta &theta)
 {
     LeaveHsmmConfig config;
@@ -97,9 +101,7 @@ inline LeaveHsmmConfig HsmmConfigFromTheta(const Theta &theta)
     config.leaving_mean_s = std::max(config.leaving_min_s, theta.hsmm_leaving_mean_s);
     config.leaving_max_s = std::max(config.leaving_mean_s, theta.hsmm_leaving_max_s);
     config.max_gap_s = std::max(1.0, theta.hsmm_max_gap_s);
-    const auto reliability = [](double weight) {
-        return weight <= 0.0 ? 0.0 : 0.25 + 3.0 * weight;
-    };
+    const auto reliability = [](double strength) { return std::clamp(strength, 0.0, 1.0); };
     config.reliability = {{reliability(theta.w_walk), reliability(theta.w_pdr), reliability(theta.w_geo),
         reliability(theta.w_wifi), reliability(theta.w_cell), reliability(theta.w_ble), reliability(theta.w_time),
         reliability(theta.w_baro), reliability(theta.w_baro)}};

@@ -645,6 +645,56 @@ bool PersistTheta(const Theta &t, std::string *err)
 
 }  // namespace
 
+std::vector<double> InferHsmmDurationSamples(const std::string &rootDir, const Theta &theta,
+    const std::string &side, const std::string &state, int maxEpisodes)
+{
+    std::vector<HsmmEpisode> episodes;
+    std::vector<double> samples;
+    if ((state != "PRE_LEAVE" && state != "LEAVING") ||
+        !LoadHsmmEpisodes(rootDir, 0, maxEpisodes, &episodes)) {
+        return samples;
+    }
+    const LeaveHsmmConfig cfg = HsmmConfigFromTheta(theta);
+    for (const auto &ep : episodes) {
+        if (ep.side != side || (ep.label != "CONFIRMED_LEAVE" && ep.label != "MISSED_LEAVE") ||
+            ep.ticks.size() < 3) {
+            continue;
+        }
+        LeaveHsmm hsmm;
+        int64_t preStart = 0;
+        int64_t leavingStart = 0;
+        int64_t outsideStart = 0;
+        for (const auto &tick : ep.ticks) {
+            const auto result = hsmm.Step(tick.obs, tick.t_ms, cfg);
+            const auto dominant = static_cast<int>(std::distance(result.probability.begin(),
+                std::max_element(result.probability.begin(), result.probability.end())));
+            if (dominant == static_cast<int>(LeavePhase::kPreLeave) && preStart == 0) {
+                preStart = tick.t_ms;
+            }
+            if (dominant == static_cast<int>(LeavePhase::kLeaving) && leavingStart == 0) {
+                leavingStart = tick.t_ms;
+            }
+            if (dominant == static_cast<int>(LeavePhase::kOutside) && outsideStart == 0) {
+                outsideStart = tick.t_ms;
+            }
+        }
+        if (state == "PRE_LEAVE") {
+            // A segment already active at the first stored tick is left-censored.
+            if (preStart > ep.ticks.front().t_ms && leavingStart > preStart) {
+                samples.push_back((leavingStart - preStart) / 1000.0);
+            }
+            continue;
+        }
+        if (leavingStart == 0) continue;
+        int64_t end = outsideStart > leavingStart ? outsideStart : ep.outcome_ms;
+        if (end <= leavingStart || end > ep.ticks.back().t_ms + static_cast<int64_t>(cfg.max_gap_s * 1000.0)) {
+            continue;
+        }
+        samples.push_back((end - leavingStart) / 1000.0);
+    }
+    return samples;
+}
+
 std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &theta, int64_t sinceMs,
     int maxEpisodes)
 {

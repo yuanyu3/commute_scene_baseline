@@ -27,7 +27,7 @@
 
 | Tool | 语义主题 |
 |------|----------|
-| `get_theta` | 当前 HSMM 观测可靠度、持续时间先验与门控参数 |
+| `get_theta` | 当前 HSMM evidence strength、持续时间先验与门控参数 |
 | `get_anchors` | 家/公司围栏中心与半径 |
 | `get_error_stats` | 推送对错与 lead 分布 |
 | `get_leave_episode` | 一次离开的 push + 自标注 |
@@ -45,7 +45,7 @@
 **语义：** 端上正在用的 θ（`theta.json`），例如：
 
 - 门控：`enter_leave` / `exit_leave` 是 `P(LEAVING)` 阈值；另有 `arm_delay_s`（`min_evidence` 仅诊断）
-- 观测可靠度：`w_walk` / `w_pdr` / `w_geo` / `w_wifi` / `w_cell` / `w_ble` / `w_time` / `w_baro`
+- Evidence strength：新配置使用 `evidence_strength` 对象；旧 `w_*` 名称仅作兼容
 - 持续时间先验：`hsmm_preleave_*` / `hsmm_leaving_*`（完整序列 replay 上线前不允许 Agent 直接修改）
 - 时段先验：`weekday_leave_home_hour` / `weekday_leave_company_hour` / `leave_window_min`
 - 预测窗口：`lead_min_s` / `lead_max_s` / `away_confirm_s` / `min_away_s`

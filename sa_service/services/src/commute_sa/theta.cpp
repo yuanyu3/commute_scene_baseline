@@ -44,6 +44,11 @@ bool ExtractString(const std::string &json, const std::string &key, std::string 
     return true;
 }
 
+double LegacyWeightToEvidenceStrength(double weight)
+{
+    return std::clamp(weight <= 0.0 ? 0.0 : 0.25 + 3.0 * weight, 0.0, 1.0);
+}
+
 }  // namespace
 
 bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
@@ -72,35 +77,41 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     if (ExtractNumber(json, "min_evidence", &v)) {
         t.min_evidence = static_cast<int>(v);
     }
-    if (ExtractNumber(json, "w_walk", &v)) {
-        t.w_walk = v;
-    }
-    if (ExtractNumber(json, "w_pdr", &v)) {
-        t.w_pdr = v;
-    }
-    if (ExtractNumber(json, "w_geo", &v)) {
-        t.w_geo = v;
+    const bool hasEvidenceStrength = json.find("\"evidence_strength\"") != std::string::npos;
+    if (hasEvidenceStrength) {
+        if (ExtractNumber(json, "walking", &v)) t.w_walk = std::clamp(v, 0.0, 1.0);
+        if (ExtractNumber(json, "pdr", &v)) t.w_pdr = std::clamp(v, 0.0, 1.0);
+        if (ExtractNumber(json, "geo", &v)) t.w_geo = std::clamp(v, 0.0, 1.0);
+        if (ExtractNumber(json, "wifi", &v)) t.w_wifi = std::clamp(v, 0.0, 1.0);
+        if (ExtractNumber(json, "cell", &v)) t.w_cell = std::clamp(v, 0.0, 1.0);
+        if (ExtractNumber(json, "ble", &v)) t.w_ble = std::clamp(v, 0.0, 1.0);
+        if (ExtractNumber(json, "time", &v)) t.w_time = std::clamp(v, 0.0, 1.0);
+        if (ExtractNumber(json, "baro", &v)) t.w_baro = std::clamp(v, 0.0, 1.0);
+    } else {
+        if (ExtractNumber(json, "w_walk", &v)) t.w_walk = LegacyWeightToEvidenceStrength(v);
+        if (ExtractNumber(json, "w_pdr", &v)) t.w_pdr = LegacyWeightToEvidenceStrength(v);
+        if (ExtractNumber(json, "w_geo", &v)) t.w_geo = LegacyWeightToEvidenceStrength(v);
     }
     bool hasSplitRadio = false;
-    if (ExtractNumber(json, "w_wifi", &v)) {
-        t.w_wifi = v;
+    if (!hasEvidenceStrength && ExtractNumber(json, "w_wifi", &v)) {
+        t.w_wifi = LegacyWeightToEvidenceStrength(v);
         hasSplitRadio = true;
     }
-    if (ExtractNumber(json, "w_cell", &v)) {
-        t.w_cell = v;
+    if (!hasEvidenceStrength && ExtractNumber(json, "w_cell", &v)) {
+        t.w_cell = LegacyWeightToEvidenceStrength(v);
         hasSplitRadio = true;
     }
-    if (ExtractNumber(json, "w_ble", &v)) {
-        t.w_ble = v;
+    if (!hasEvidenceStrength && ExtractNumber(json, "w_ble", &v)) {
+        t.w_ble = LegacyWeightToEvidenceStrength(v);
         hasSplitRadio = true;
     }
-    if (ExtractNumber(json, "w_radio", &v)) {
+    if (!hasEvidenceStrength && ExtractNumber(json, "w_radio", &v)) {
         t.w_radio = v;
         if (!hasSplitRadio) {
             // Legacy single radio weight → split across modalities.
-            t.w_wifi = v * 0.55;
-            t.w_cell = v * 0.30;
-            t.w_ble = v * 0.15;
+            t.w_wifi = LegacyWeightToEvidenceStrength(v * 0.55);
+            t.w_cell = LegacyWeightToEvidenceStrength(v * 0.30);
+            t.w_ble = LegacyWeightToEvidenceStrength(v * 0.15);
         }
     }
     if (ExtractNumber(json, "thr_walk", &v)) {
@@ -130,8 +141,8 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     if (ExtractNumber(json, "radio_suppress_after_approach_s", &v)) {
         t.radio_suppress_after_approach_s = v;
     }
-    if (ExtractNumber(json, "w_time", &v)) {
-        t.w_time = v;
+    if (!hasEvidenceStrength && ExtractNumber(json, "w_time", &v)) {
+        t.w_time = LegacyWeightToEvidenceStrength(v);
     }
     if (ExtractNumber(json, "weekday_leave_home_hour", &v)) {
         t.weekday_leave_home_hour = v;
@@ -190,8 +201,8 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     if (ExtractNumber(json, "company_source_vicinity_m", &v)) {
         t.company_source_vicinity_m = v;
     }
-    if (ExtractNumber(json, "w_baro", &v)) {
-        t.w_baro = v;
+    if (!hasEvidenceStrength && ExtractNumber(json, "w_baro", &v)) {
+        t.w_baro = LegacyWeightToEvidenceStrength(v);
     }
     if (ExtractNumber(json, "baro_min_descent_m", &v)) {
         t.baro_min_descent_m = v;

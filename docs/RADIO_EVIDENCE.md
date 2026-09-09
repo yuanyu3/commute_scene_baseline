@@ -30,7 +30,9 @@ leave_cand =
 | time | 离开时刻 prior | `w_time` 0.20 | `thr_time` 0.5 |
 | baro | 气压下行 / 更低平台（HSMM 两项共用） | `w_baro` 0.20 | （由 HSMM 发射项使用） |
 
-`w_*` 现在控制观测似然的可靠度，不再直接求和。可调 `enter_leave` 与各 `w_*`（见 `config/theta_default.json`）。`min_evidence` 不再作为推送硬门控。
+`evidence_strength` 以 [0,1] 直接控制观测的发射对数似然，不再经过隐藏映射，也不直接求和。
+旧 C++ 字段名 `w_*` 仅作源码兼容（见 `config/theta_default.json` 和 `EVIDENCE_STRENGTH.md`）。
+`min_evidence` 不再作为推送硬门控。
 
 **不是** `rising OR wifi_detach` 这类布尔 OR 门控，也不是单 tick 加权总分。
 

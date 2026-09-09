@@ -26,7 +26,7 @@
 ```text
 sPdr = clip01( pdr_net_out / max(15, r_in × 0.3) )
 pdr_outbound = sPdr
-reliability = 0.25 + 3 × w_pdr # 默认 w_pdr=0.20
+evidence_strength_pdr = 0.85 # 直接乘发射对数似然；0表示完全忽略
 hit   += 1  if sPdr ≥ 0.5      # 约 ≥7.5 m 或 0.15×r_in
 ```
 

@@ -38,7 +38,10 @@ AT_ANCHOR -> PRE_LEAVE -> LEAVING -> OUTSIDE
 | cancel_sequence_match | 正向前缀启动后，有序返回序列已经完成；与负向交互项一起抑制 LEAVING |
 | sequence_reliability | 经确定性验证器选定的模板可靠度/作用强度 |
 
-各状态对上述观测有不同的初始期望，使用分数型 Bernoulli 似然更新后验。`w_walk`、`w_pdr`、`w_geo`、`w_wifi`、`w_cell`、`w_ble`、`w_time`、`w_baro` 现在控制对应观测的可靠度（`w_baro` 同时作用于 descending / lower_platform 两项），不再直接相加产生离家分数。
+各状态对上述观测有不同的初始期望，使用分数型 Bernoulli 似然更新后验。配置中的
+`evidence_strength` 直接以 [0,1] 系数控制对应观测的发射似然（baro 同时作用于
+descending / lower_platform 两项），不再经过 `0.25 + 3*w` 隐藏映射，也不直接相加产生离家分数。
+旧 `w_*` 配置仅在读取时做一次等效迁移，详见 [EVIDENCE_STRENGTH.md](EVIDENCE_STRENGTH.md)。
 
 `w_x=0` 的语义是“该原子观测通道对决策不可用”，而不是“观测值恰好为 0”。该通道会从 evidence hits、HSMM 发射似然、传感器派生 attach 门控和工作场所气压基线初始化中移除；上下文模板也不能重新注入它。原始传感器数据仍可采集和落盘，供诊断或以后重新启用。GPS 的 `INSIDE/OUTSIDE` 场景关系、OUTSIDE 禁推、冷却和一次一推属于独立的产品安全事实，不由 `w_geo` 关闭。
 

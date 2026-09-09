@@ -35,6 +35,7 @@
       "get_episode_dynamic_diagnostics",
 
       "diagnose_context_template"
+      ,"get_current_user_anchor_profile"
 
     ],
 
@@ -54,6 +55,22 @@
       "commit_context_template",
 
       "discard_context_template",
+
+      "estimate_evidence_strength",
+
+      "get_evidence_strength_trial",
+
+      "commit_evidence_strength_candidate",
+
+      "discard_evidence_strength_candidate",
+
+      "fit_duration_prior",
+
+      "get_duration_prior_trial",
+
+      "commit_duration_prior_candidate",
+
+      "discard_duration_prior_candidate",
 
       "write_audit",
 

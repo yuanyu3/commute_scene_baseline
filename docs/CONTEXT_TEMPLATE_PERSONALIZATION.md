@@ -30,7 +30,10 @@ Agent 可填写：
 
 `departure_time` 暂时关闭。当前数据集包含刻意安排在非正常时间的采集过程，启用它会学习采集计划而非真实通勤习惯。代码仍可读取旧 schema 中的时间画像，但 catalog 和生成接口不再允许新模板申请该参数族。
 
-暂不开放传感器权重、`enter_leave` 和 HSMM 时长边界：在少量 episode 上这些参数高度可替代，容易出现多组参数同分但语义完全不同，无法证明真正学到了个人规律。
+全局传感器系数已经重构为直接 [0,1] 的 `evidence_strength`。Agent可以选择需要重估的
+通道族，确定性估计器负责数值、回放与锚点级提交；模板本身仍只处理结构。旧 `w_*` 配置兼容、
+默认值迁移和强度工具见 [EVIDENCE_STRENGTH.md](EVIDENCE_STRENGTH.md)。
+`enter_leave` 和 HSMM 时长边界仍不由模板 Agent 修改。
 
 ### 默认 Prompt 策略
 

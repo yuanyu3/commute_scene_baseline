@@ -24,6 +24,17 @@
 5. 形成一至三个可证伪假设。每个假设包含：支持证据、反证、缺失证据、在线可计算条件、适用范围和可能失败的场景。
 6. 置信度必须受样本量和反证约束。只有单个确认样本时必须明确高泛化风险，不得宣称已发现稳定个人规律或给出无反证的高置信结论。
 7. 已有活动模板时，可调用 `diagnose_context_template`，选择关闭 positive、negative 或 both，检验自己的序列贡献假设。比较同一 episode 的就绪/完成/概率越线时间、门控和推送结果；区分“匹配了模式”和“实际改变了推送”。这只是模型内部干预，不是物理因果证明。无收益、出现反证或缺少真值时可保留现状/no-op，不必生成新模板。
+8. 读取 `get_current_user_anchor_profile`。如果跨 episode 事实显示问题主要是各原子 evidence
+   对正负结果的长期区分能力，而不是事件顺序，则选择 Evidence Strength intervention：
+   调用 `estimate_evidence_strength`，只填写 anchor 和需要重新拟合的通道族，不得填写目标数值。
+   读取确定性统计与完整HSMM回放；只有 eligible=true 才能提交，否则必须丢弃或 no-op。
+   不得根据单条 episode 判断某通道应升高或降低，也不得用 strength 拟合替代明确的顺序/返回结构问题。
+9. 如果正例的事件证据与顺序本身稳定，但 HSMM 的 `PRE_LEAVE` 或 `LEAVING` 占用时长持续偏离全局先验，
+   才选择 Duration intervention。调用 `fit_duration_prior` 时只填写真实 anchor 与一个状态
+   `PRE_LEAVE|LEAVING`，不得给均值、边界或变化方向。确定性工具从正例后验路径提取未截断时长，
+   使用 median、trimmed mean、MAD、样本量收缩和 ±50% 硬限制，再做完整历史回放。
+   少于3条有效样本、离群严重、候选导致新增误推/漏报/正例延后时必须接受 reject 或 no-op；
+   不得同时在一次 trial 中修改 sequence、strength 和 duration。
 
 ## 模板工具协议
 

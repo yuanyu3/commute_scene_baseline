@@ -1,6 +1,7 @@
 #include "commute_sa/scene_engine.h"
 
 #include "commute_sa/context_template.h"
+#include "commute_sa/evidence_strength_profile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -208,7 +209,7 @@ bool SceneEngine::LeadWindowOk(const std::optional<double> &etaS, std::string *b
     return true;
 }
 
-SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeatures &feat, Relation rel, bool hasDist, double distM,
+SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const Theta &effectiveTheta, const TickFeatures &feat, Relation rel, bool hasDist, double distM,
     double rIn, double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double wifiJaccard,
     bool wifiAttach, double centerHour, std::optional<double> prevDist, bool approaching,
     bool radioSuppressed, bool gpsDistUnreliable) const
@@ -216,23 +217,23 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
     ObservationResult out;
     int hits = 0;
 
-    const bool useWalk = theta_.w_walk > 0.0;
-    const bool usePdr = theta_.w_pdr > 0.0;
-    const bool useGeo = theta_.w_geo > 0.0;
-    const bool useWifi = theta_.w_wifi > 0.0;
-    const bool useCell = theta_.w_cell > 0.0;
-    const bool useBle = theta_.w_ble > 0.0;
-    const bool useTime = theta_.w_time > 0.0;
-    const bool useBaro = theta_.w_baro > 0.0;
+    const bool useWalk = effectiveTheta.w_walk > 0.0;
+    const bool usePdr = effectiveTheta.w_pdr > 0.0;
+    const bool useGeo = effectiveTheta.w_geo > 0.0;
+    const bool useWifi = effectiveTheta.w_wifi > 0.0;
+    const bool useCell = effectiveTheta.w_cell > 0.0;
+    const bool useBle = effectiveTheta.w_ble > 0.0;
+    const bool useTime = effectiveTheta.w_time > 0.0;
+    const bool useBaro = effectiveTheta.w_baro > 0.0;
 
     const double sWalk = useWalk && feat.walking ? 1.0 : 0.0;
-    if (useWalk && sWalk >= theta_.thr_walk) {
+    if (useWalk && sWalk >= effectiveTheta.thr_walk) {
         ++hits;
     }
 
     const double pdrEff = approaching ? 0.0 : pdrNetOut;
     const double sPdr = usePdr ? Clip01(pdrEff / std::max(15.0, rIn * 0.3)) : 0.0;
-    if (usePdr && sPdr >= theta_.thr_pdr) {
+    if (usePdr && sPdr >= effectiveTheta.thr_pdr) {
         ++hits;
     }
 
@@ -252,7 +253,7 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
         // source_type 2→1 (or GNSS while near company) is the precise gate-leave.
         sGeo = 1.0;
     }
-    if (useGeo && sGeo >= theta_.thr_geo) {
+    if (useGeo && sGeo >= effectiveTheta.thr_geo) {
         ++hits;
     }
 
@@ -261,7 +262,7 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
     // hysteresis band is zero evidence.
     double sWifi = 0.0;
     if (useWifi && !(wifiAttach || approaching || radioSuppressed)) {
-        const double thrJ = std::max(1e-3, std::min(0.99, theta_.thr_wifi_jaccard));
+        const double thrJ = std::max(1e-3, std::min(0.99, effectiveTheta.thr_wifi_jaccard));
         const double attachJ = std::min(1.0, thrJ + 0.25);
         if (wifiJaccard <= thrJ) {
             sWifi = 1.0;
@@ -272,21 +273,21 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const TickFeat
             sWifi = 1.0;
         }
     }
-    if (useWifi && sWifi >= theta_.thr_wifi) {
+    if (useWifi && sWifi >= effectiveTheta.thr_wifi) {
         ++hits;
     }
 
     const double sCell = !useCell || radioSuppressed || approaching || wifiAttach ? 0.0 : (cellLeave ? 1.0 : 0.0);
-    if (useCell && sCell >= theta_.thr_cell) {
+    if (useCell && sCell >= effectiveTheta.thr_cell) {
         ++hits;
     }
     const double sBle = !useBle || radioSuppressed || approaching ? 0.0 : (bleDetach ? 1.0 : 0.0);
-    if (useBle && sBle >= theta_.thr_ble) {
+    if (useBle && sBle >= effectiveTheta.thr_ble) {
         ++hits;
     }
 
-    const double sTime = useTime ? TimePrior(feat.t_ms, centerHour, theta_.leave_window_min) : 0.0;
-    if (useTime && sTime >= theta_.thr_time) {
+    const double sTime = useTime ? TimePrior(feat.t_ms, centerHour, effectiveTheta.leave_window_min) : 0.0;
+    if (useTime && sTime >= effectiveTheta.thr_time) {
         ++hits;
     }
 
@@ -328,8 +329,10 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         lastWalkStopMs_ = feat.t_ms;
     }
     wasWalking_ = feat.walking;
-    const bool wifiHomeAttach = theta_.w_wifi > 0.0 && feat.wifi_home_attach;
-    const bool wifiCompanyAttach = theta_.w_wifi > 0.0 && feat.wifi_company_attach;
+    const Theta homeTheta = ApplyCommittedUserAnchorProfile(theta_, "home", anchors_.home.id);
+    const Theta companyTheta = ApplyCommittedUserAnchorProfile(theta_, "company", anchors_.company.id);
+    const bool wifiHomeAttach = homeTheta.w_wifi > 0.0 && feat.wifi_home_attach;
+    const bool wifiCompanyAttach = companyTheta.w_wifi > 0.0 && feat.wifi_company_attach;
     double dHome = 0.0;
     double dCo = 0.0;
     bool nearCompany = false;
@@ -401,11 +404,11 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const bool radioSupCo =
         noteApproachEdge(approachCo, &wasApproachCompany_, &returnFromOutsideCompany_, &radioSuppressCompanyUntil_);
 
-    auto sh = BuildLeaveObservation(feat, hRel, hasHome, dHome, anchors_.home.r_in_m, anchors_.home.r_out_m,
+    auto sh = BuildLeaveObservation(homeTheta, feat, hRel, hasHome, dHome, anchors_.home.r_in_m, anchors_.home.r_out_m,
         feat.pdr_net_out_home_m, feat.wifi_home_detach, feat.cell_leave_home, feat.ble_home_detach,
         feat.wifi_jaccard_home, wifiHomeAttach, theta_.weekday_leave_home_hour, prevDistHome_, approachHome,
         radioSupHome);
-    auto sc = BuildLeaveObservation(feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
+    auto sc = BuildLeaveObservation(companyTheta, feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
         feat.pdr_net_out_company_m, feat.wifi_company_detach, feat.cell_leave_company, feat.ble_company_detach,
         feat.wifi_jaccard_company, wifiCompanyAttach, theta_.weekday_leave_company_hour, prevDistCompany_,
         approachCo, radioSupCo, companySourceGate);
@@ -413,18 +416,18 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     ApplyActiveContextTemplateObservation("company", anchors_.company.id, feat.t_ms, &sc.observation);
     // A zero weight means the channel is unavailable, including values added
     // by a context template. Structural relation/inside/outside facts remain.
-    auto applyChannelMask = [&](LeaveObservation *obs) {
-        if (theta_.w_walk <= 0.0) obs->walking = 0.0;
-        if (theta_.w_pdr <= 0.0) obs->pdr_outbound = 0.0;
-        if (theta_.w_geo <= 0.0) obs->geo_outbound = 0.0;
-        if (theta_.w_wifi <= 0.0) {
+    auto applyChannelMask = [&](const Theta &effectiveTheta, LeaveObservation *obs) {
+        if (effectiveTheta.w_walk <= 0.0) obs->walking = 0.0;
+        if (effectiveTheta.w_pdr <= 0.0) obs->pdr_outbound = 0.0;
+        if (effectiveTheta.w_geo <= 0.0) obs->geo_outbound = 0.0;
+        if (effectiveTheta.w_wifi <= 0.0) {
             obs->wifi_detach = 0.0;
             obs->attached = false;
         }
-        if (theta_.w_cell <= 0.0) obs->cell_detach = 0.0;
-        if (theta_.w_ble <= 0.0) obs->ble_detach = 0.0;
-        if (theta_.w_time <= 0.0) obs->time_prior = 0.0;
-        if (theta_.w_baro <= 0.0) {
+        if (effectiveTheta.w_cell <= 0.0) obs->cell_detach = 0.0;
+        if (effectiveTheta.w_ble <= 0.0) obs->ble_detach = 0.0;
+        if (effectiveTheta.w_time <= 0.0) obs->time_prior = 0.0;
+        if (effectiveTheta.w_baro <= 0.0) {
             obs->baro_descending = 0.0;
             obs->baro_lower_platform = 0.0;
             obs->baro_ascending = 0.0;
@@ -432,11 +435,10 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
             obs->baro_available = false;
         }
     };
-    applyChannelMask(&sh.observation);
-    applyChannelMask(&sc.observation);
-    const LeaveHsmmConfig hsmmConfig = HsmmConfig();
-    const auto hsmmHome = home_hsmm_.Step(sh.observation, feat.t_ms, hsmmConfig);
-    const auto hsmmCompany = company_hsmm_.Step(sc.observation, feat.t_ms, hsmmConfig);
+    applyChannelMask(homeTheta, &sh.observation);
+    applyChannelMask(companyTheta, &sc.observation);
+    const auto hsmmHome = home_hsmm_.Step(sh.observation, feat.t_ms, HsmmConfigFromTheta(homeTheta));
+    const auto hsmmCompany = company_hsmm_.Step(sc.observation, feat.t_ms, HsmmConfigFromTheta(companyTheta));
 
     const bool gpsReliable = feat.acc <= 50.0;
     const auto etaHome = EstimateEtaOutS(hasHome, dHome, anchors_.home.r_out_m, feat.walking, feat.pdr_net_out_home_m,

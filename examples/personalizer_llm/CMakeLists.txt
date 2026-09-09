@@ -35,6 +35,7 @@ add_library(commute_sa_host STATIC
   "${COMMUTE_SA_ROOT}/src/baro_evidence.cpp"
   "${COMMUTE_SA_ROOT}/src/personalization.cpp"
   "${COMMUTE_SA_ROOT}/src/personalization_optimizer.cpp"
+  "${COMMUTE_SA_ROOT}/src/evidence_strength_profile.cpp"
   "${COMMUTE_SA_ROOT}/src/context_template.cpp"
   "${COMMUTE_SA_ROOT}/src/personalization_policy.cpp"
   "${COMMUTE_SA_ROOT}/src/product_store.cpp"
@@ -44,6 +45,7 @@ add_library(commute_sa_host STATIC
   "${COMMUTE_SA_ROOT}/src/anchor_reestimate.cpp"
 )
 target_include_directories(commute_sa_host PUBLIC "${COMMUTE_SA_ROOT}/include")
+target_compile_options(commute_sa_host PRIVATE -stdlib=libc++)
 
 add_executable(personalizer_llm
   main.cpp

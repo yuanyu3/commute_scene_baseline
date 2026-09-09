@@ -45,6 +45,14 @@ std::string EvaluateThetaOnHistoryWithAdapterJson(const std::string &rootDir, co
     bool includePrefixTrace = false, int64_t cutoffMs = 0,
     std::vector<ReplayEpisodeSummary> *summaries = nullptr);
 
+/**
+ * Infer uncensored PRE_LEAVE/LEAVING dwell samples from labeled positive
+ * episode posterior paths. The returned values are seconds and are intended
+ * for robust, low-frequency personalization rather than online inference.
+ */
+std::vector<double> InferHsmmDurationSamples(const std::string &rootDir, const Theta &theta,
+    const std::string &side, const std::string &state, int maxEpisodes = 100);
+
 /** Snapshot / restore live θ for agent trial loops (in-memory + file persist on revert). */
 bool BeginThetaTrial(std::string *err = nullptr);
 bool RevertThetaTrial(std::string *err = nullptr);

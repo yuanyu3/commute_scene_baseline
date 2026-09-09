@@ -5,6 +5,7 @@
 #include "commute_sa/action_ops.h"
 #include "commute_sa/context_template.h"
 #include "commute_sa/evidence_query.h"
+#include "commute_sa/evidence_strength_profile.h"
 #include "commute_sa/personalization_optimizer.h"
 #include "commute_sa/product_store.h"
 #include "commute_sa/theta_eval.h"
@@ -68,6 +69,24 @@ int main(int argc, char **argv)
             std::cout << commute_sa::RunConstrainedThetaOptimizerAction(params) << "\n";
         } else if (command == "profile") {
             std::cout << commute_sa::GetPersonalizationProfileAction(params) << "\n";
+        } else if (command == "anchor_profile") {
+            std::cout << commute_sa::GetUserAnchorProfileAction(params) << "\n";
+        } else if (command == "strength_estimate") {
+            std::cout << commute_sa::EstimateEvidenceStrengthAction(params) << "\n";
+        } else if (command == "strength_trial") {
+            std::cout << commute_sa::GetEvidenceStrengthTrialAction(params) << "\n";
+        } else if (command == "strength_commit") {
+            std::cout << commute_sa::CommitEvidenceStrengthCandidateAction(params) << "\n";
+        } else if (command == "strength_discard") {
+            std::cout << commute_sa::DiscardEvidenceStrengthCandidateAction(params) << "\n";
+        } else if (command == "duration_fit") {
+            std::cout << commute_sa::FitDurationPriorAction(params) << "\n";
+        } else if (command == "duration_trial") {
+            std::cout << commute_sa::GetDurationPriorTrialAction(params) << "\n";
+        } else if (command == "duration_commit") {
+            std::cout << commute_sa::CommitDurationPriorCandidateAction(params) << "\n";
+        } else if (command == "duration_discard") {
+            std::cout << commute_sa::DiscardDurationPriorCandidateAction(params) << "\n";
         } else if (command == "template_catalog") {
             std::cout << commute_sa::GetContextTemplateCatalogAction(params) << "\n";
         } else if (command == "semantic_timeline") {

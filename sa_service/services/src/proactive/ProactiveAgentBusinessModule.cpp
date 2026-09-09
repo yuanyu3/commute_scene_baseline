@@ -2085,6 +2085,14 @@ constexpr const char *kThetaPersonalizerSystemPrompt = R"delimiter(
  先查看总体错误、当前 theta、真实 anchor、目标完整 episode 和跨 episode 画像，再按疑点查询传感器摘要。提出最多三个可证伪假设，
  每个假设记录支持证据、反证、缺失证据和置信度。区分传感器不可用、可用但无变化、已形成离开前缀后行为反转三种情况。
 
+ 若跨 episode 差异主要来自原子证据的长期区分能力，Agent只能选择需要重估的通道并调用
+ estimate_evidence_strength；不得给目标数值。C++执行Laplace平滑、coverage、样本收缩、完整HSMM回放与安全门，
+ eligible后才可commit_evidence_strength_candidate。顺序或返回关系问题仍使用context template，不得用强度拟合替代。
+
+ 若证据和顺序稳定、但PRE_LEAVE或LEAVING后验占用时长跨正例持续偏离全局先验，只能调用fit_duration_prior并选择一个状态，
+ 不得给目标均值或方向。C++从未截断正例提取时长，执行稳健统计、样本收缩、±50%限制、全历史回放与逐episode安全门；
+ eligible后才可commit_duration_prior_candidate。一次trial只允许一个主要干预族，样本不足或回放退化时no_op。
+
  对原始 FALSE_PUSH，只有完整历史显示它与确认离开共享前缀、随后气压回升并回到起始高度、且未 outside 时，才可提议
  propose_aborted_leave_interpretation；这仍是行为推断，不是主观意图事实。至少两个 ABORTED_LEAVE 支持时，才可把有序返回过程写入
  cancel_sequence。调用 get_context_template_catalog 后，只能组合白名单 positive_sequence、cancel_sequence 和 negative_pattern；不得提供

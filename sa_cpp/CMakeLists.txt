@@ -19,6 +19,7 @@ add_library(commute_sa
     src/anchor_reestimate.cpp
     src/personalization.cpp
     src/personalization_optimizer.cpp
+    src/evidence_strength_profile.cpp
     src/context_template.cpp
     src/personalization_policy.cpp
     src/product_store.cpp
@@ -64,6 +65,9 @@ if(COMMUTE_SA_BUILD_SMOKE)
 
     add_executable(commute_personalization_optimizer_smoke tests/smoke_personalization_optimizer.cpp)
     target_link_libraries(commute_personalization_optimizer_smoke PRIVATE commute_sa)
+
+    add_executable(commute_evidence_strength_smoke tests/smoke_evidence_strength.cpp)
+    target_link_libraries(commute_evidence_strength_smoke PRIVATE commute_sa)
 
     add_executable(commute_offline_tools tests/offline_tools_harness.cpp)
     target_link_libraries(commute_offline_tools PRIVATE commute_sa)

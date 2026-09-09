@@ -187,27 +187,27 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
         return true;
     }
     if (param == "w_walk") {
-        *lim = {0.0, 0.50, 0.05};
+        *lim = {0.0, 1.0, 0.05};
         return true;
     }
     if (param == "w_pdr") {
-        *lim = {0.0, 0.40, 0.05};
+        *lim = {0.0, 1.0, 0.05};
         return true;
     }
     if (param == "w_geo") {
-        *lim = {0.05, 0.40, 0.05};
+        *lim = {0.0, 1.0, 0.05};
         return true;
     }
     if (param == "w_wifi") {
-        *lim = {0.0, 0.40, 0.02};
+        *lim = {0.0, 1.0, 0.05};
         return true;
     }
     if (param == "w_cell") {
-        *lim = {0.0, 0.30, 0.02};
+        *lim = {0.0, 1.0, 0.05};
         return true;
     }
     if (param == "w_ble") {
-        *lim = {0.0, 0.20, 0.02};
+        *lim = {0.0, 1.0, 0.05};
         return true;
     }
     if (param == "w_radio") {
@@ -215,11 +215,11 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
         return true;
     }
     if (param == "w_time") {
-        *lim = {0.05, 0.35, 0.05};
+        *lim = {0.0, 1.0, 0.05};
         return true;
     }
     if (param == "w_baro") {
-        *lim = {0.0, 0.40, 0.05};
+        *lim = {0.0, 1.0, 0.05};
         return true;
     }
     if (param == "weekday_leave_home_hour") {
@@ -442,11 +442,11 @@ std::string GetParamLimitsJson()
 {
     return R"({"range":"bounded","note":"each apply is clipped to ±step and absolute min/max",)"
            R"("enter_leave":{"min":0.40,"max":0.85,"step":0.03},"exit_leave":{"min":0.20,"max":0.70,"step":0.03},)"
-           R"("w_walk":{"min":0,"max":0.50,"step":0.05},"w_pdr":{"min":0,"max":0.40,"step":0.05},)"
-           R"("w_geo":{"min":0.05,"max":0.40,"step":0.05},"w_wifi":{"min":0,"max":0.40,"step":0.02},)"
-           R"("w_cell":{"min":0,"max":0.30,"step":0.02},"w_ble":{"min":0,"max":0.20,"step":0.02},)"
+           R"("w_walk":{"min":0,"max":1.0,"step":0.05},"w_pdr":{"min":0,"max":1.0,"step":0.05},)"
+           R"("w_geo":{"min":0,"max":1.0,"step":0.05},"w_wifi":{"min":0,"max":1.0,"step":0.05},)"
+           R"("w_cell":{"min":0,"max":1.0,"step":0.05},"w_ble":{"min":0,"max":1.0,"step":0.05},)"
            R"("w_radio":{"min":0,"max":0.90,"step":0.05,"note":"legacy; prefer split channels"},)"
-           R"("w_time":{"min":0.05,"max":0.35,"step":0.05},"w_baro":{"min":0,"max":0.40,"step":0.05},)"
+           R"("w_time":{"min":0,"max":1.0,"step":0.05},"w_baro":{"min":0,"max":1.0,"step":0.05},)"
            R"("weekday_leave_home_hour":{"min":0,"max":24,"step":0.10},)"
            R"("weekday_leave_company_hour":{"min":11,"max":21,"step":0.10},"arm_delay_s":{"min":0,"max":90,"step":5},)"
            R"("hsmm_preleave_min_s":{"min":0,"max":120,"step":5},"hsmm_preleave_mean_s":{"min":20,"max":240,"step":10},)"
