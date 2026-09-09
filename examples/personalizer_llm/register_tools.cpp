@@ -75,49 +75,10 @@ std::string GetDynamicDiagnostics(const std::string &p)
 {
     return commute_sa::EvidenceQuery::GetInstance().GetEpisodeDynamicDiagnosticsJson(p);
 }
-std::string ApplyDelta(const std::string &p)
-{
-    return commute_sa::ApplyThetaDeltaAction(p);
-}
-std::string WriteAudit(const std::string &p)
-{
-    return commute_sa::WriteAuditAction(p);
-}
 std::string ReqAnchor(const std::string &p)
 {
     return commute_sa::RequestAnchorReestimateAction(p);
 }
-std::string GetLimits(const std::string &)
-{
-    return std::string("{\"ok\":true,\"param_limits\":") + commute_sa::GetParamLimitsJson() + "}";
-}
-std::string EvalHistory(const std::string &p)
-{
-    return commute_sa::EvaluateThetaOnHistoryAction(p);
-}
-std::string BeginTrial(const std::string &p)
-{
-    return commute_sa::BeginThetaTrialAction(p);
-}
-std::string RevertTrial(const std::string &p)
-{
-    return commute_sa::RevertThetaTrialAction(p);
-}
-std::string CommitTrial(const std::string &p)
-{
-    return commute_sa::CommitThetaTrialAction(p);
-}
-std::string AnalyzeRules(const std::string &p) { return commute_sa::AnalyzePersonalizationRulesAction(p); }
-std::string OptimizeSemanticPlan(const std::string &p)
-{
-    return commute_sa::RunConstrainedThetaOptimizerAction(p);
-}
-std::string RunRuleOptimizer(const std::string &p) { return commute_sa::RunRulePersonalizationAction(p); }
-std::string GetOptimizerTrial(const std::string &p) { return commute_sa::GetOptimizationTrialAction(p); }
-std::string CommitOptimizerTrial(const std::string &p) { return commute_sa::CommitOptimizedThetaAction(p); }
-std::string DiscardOptimizerTrial(const std::string &p) { return commute_sa::DiscardOptimizationTrialAction(p); }
-std::string GetProfile(const std::string &p) { return commute_sa::GetPersonalizationProfileAction(p); }
-std::string ProposeProfile(const std::string &p) { return commute_sa::ProposeContextProfileUpdateAction(p); }
 std::string SubmitAnalysis(const std::string &p) { return commute_sa::SubmitAgentAnalysisAction(p); }
 std::string GetTemplateCatalog(const std::string &p) { return commute_sa::GetContextTemplateCatalogAction(p); }
 std::string GetAbortedCandidates(const std::string &p)
@@ -133,14 +94,6 @@ std::string GetTemplateTrial(const std::string &p) { return commute_sa::GetConte
 std::string CommitTemplate(const std::string &p) { return commute_sa::CommitContextTemplateAction(p); }
 std::string DiscardTemplate(const std::string &p) { return commute_sa::DiscardContextTemplateAction(p); }
 std::string GetActiveTemplate(const std::string &p) { return commute_sa::GetActiveContextTemplateAction(p); }
-std::string GetPolicy(const std::string &p) { return commute_sa::GetPersonalizationPolicyAction(p); }
-std::string GetPolicyCatalog(const std::string &p) { return commute_sa::GetPolicyCatalogAction(p); }
-std::string BeginPolicyTrial(const std::string &p) { return commute_sa::BeginPolicyTrialAction(p); }
-std::string ApplyPolicy(const std::string &p) { return commute_sa::ApplyPolicyCandidateAction(p); }
-std::string EvalPolicy(const std::string &p) { return commute_sa::EvaluatePolicyOnHistoryAction(p); }
-std::string RevertPolicy(const std::string &p) { return commute_sa::RevertPolicyTrialAction(p); }
-std::string CommitPolicy(const std::string &p) { return commute_sa::CommitPolicyTrialAction(p); }
-
 }  // namespace
 
 std::vector<std::string> RegisterPersonalizerTools()
@@ -173,47 +126,6 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"anchor_id", "anchor id from anchors.json", "string", true}, {"outcome_t_ms", "required if id ambiguous", "integer", false},
             {"start_ms", "optional inclusive window start", "integer", false},
             {"end_ms", "optional inclusive window end", "integer", false}}, &GetDynamicDiagnostics);
-    Reg("get_param_limits", "Param min/max/step", {}, &GetLimits);
-    Reg("evaluate_theta_on_history", "Replay LeaveHsmm on stored leave-window obs (can evaluate w_*)",
-        {{"since_ms", "optional", "integer", false}, {"limit", "optional", "integer", false}}, &EvalHistory);
-    Reg("begin_theta_trial", "Snapshot θ before try/eval loop", {}, &BeginTrial);
-    Reg("revert_theta_trial", "Restore θ snapshot", {}, &RevertTrial);
-    Reg("commit_theta_trial", "Keep current θ only if the C++ replay commit guard passes", {}, &CommitTrial);
-    Reg("apply_theta_delta", "Apply one clipped theta delta",
-        {{"param", "name", "string", true}, {"delta", "signed", "number", true},
-            {"reason", "evidence reason", "string", false}},
-        &ApplyDelta);
-    Reg("analyze_personalization_rules",
-        "Deterministic ES-CRO error-signature diagnosis and ranked semantic intervention plan",
-        {{"limit", "max historical episodes", "integer", false}}, &AnalyzeRules);
-    Reg("run_constrained_theta_optimizer",
-        "Generate bounded numeric candidates from semantic blocks, replay HSMM history, and stage the best eligible candidate",
-        {{"primary_block", "radio_reliability|motion_reliability|geo_reliability|baro_reliability|time_prior|preleave_duration|leaving_duration|trigger_threshold|arm_timing", "string", true},
-            {"primary_direction", "increase|decrease", "string", true},
-            {"secondary_block", "optional second semantic block", "string", false},
-            {"secondary_direction", "increase|decrease", "string", false},
-            {"objective", "balanced|false_push|missed_leave|lead", "string", false},
-            {"max_candidates", "1..20, default 12", "integer", false},
-            {"min_improvement", "hard minimum score gain", "number", false}},
-        &OptimizeSemanticPlan);
-    Reg("run_rule_personalization",
-        "Non-Agent baseline: deterministic diagnosis plus the same constrained replay optimizer",
-        {{"limit", "max historical episodes", "integer", false}}, &RunRuleOptimizer);
-    Reg("get_optimization_trial", "Inspect staged candidates and hard-guard results", {}, &GetOptimizerTrial);
-    Reg("commit_optimized_theta", "Commit only the deterministic best candidate that passed all C++ guards", {},
-        &CommitOptimizerTrial);
-    Reg("discard_optimization_trial", "Discard staged optimizer candidates without changing live theta", {},
-        &DiscardOptimizerTrial);
-    Reg("get_personalization_profile",
-        "Return deterministic cross-episode sensor applicability plus validated context memory",
-        {{"limit", "max episodes", "integer", false}}, &GetProfile);
-    Reg("propose_context_profile_update",
-        "Propose deterministic context memory; code accepts only with enough positive support and few contradictions",
-        {{"context_name", "short context name", "string", true},
-            {"context_signature", "online-computable boolean signature", "string", true},
-            {"support_count", ">=3", "integer", true}, {"positive_count", ">=1", "integer", true},
-            {"contradiction_count", "<=50% support", "integer", true},
-            {"confidence", "0..1", "number", true}}, &ProposeProfile);
     Reg("submit_agent_analysis", "Persist the final typed Agent intervention decision for auditable ablation",
         {{"intervention_type", "STRUCTURE|EVIDENCE_STRENGTH|DURATION|NO_OP", "string", true},
             {"anchor_id", "exact anchor id", "string", true},
@@ -298,28 +210,12 @@ std::vector<std::string> RegisterPersonalizerTools()
         &commute_sa::CommitDurationPriorCandidateAction);
     Reg("discard_duration_prior_candidate", "Discard the staged duration candidate", {},
         &commute_sa::DiscardDurationPriorCandidateAction);
-    Reg("write_audit", "Append audit entry / no_op",
-        {{"message", "text", "string", true}, {"changes", "object", "object", false}}, &WriteAudit);
     Reg("request_anchor_reestimate", "Queue anchor re-inference",
         {{"which", "home|company|both", "string", true}}, &ReqAnchor);
-    Reg("get_personalization_policy", "Return active bounded high-level strategy", {}, &GetPolicy);
-    Reg("get_policy_catalog", "Return allowed strategy templates and bounds", {}, &GetPolicyCatalog);
-    Reg("begin_policy_trial", "Snapshot active policy before a strategy experiment", {}, &BeginPolicyTrial);
-    Reg("apply_policy_candidate", "Apply one validated policy template candidate",
-        {{"template_name", "catalog template", "string", true},
-            {"probability_threshold", "optional bounded override", "number", false}}, &ApplyPolicy);
-    Reg("evaluate_policy_on_history", "Counterfactual replay on semantic policy_history",
-        {{"limit", "max semantic samples", "integer", false}}, &EvalPolicy);
-    Reg("revert_policy_trial", "Restore policy snapshot", {}, &RevertPolicy);
-    Reg("commit_policy_trial", "Activate candidate and clear trial", {}, &CommitPolicy);
 
     return {"get_theta", "get_anchors", "get_error_stats", "get_leave_episode", "get_leave_window_samples",
         "get_leave_sensor_summary", "get_episode_semantic_timeline", "get_episode_dynamic_diagnostics",
-        "get_param_limits", "evaluate_theta_on_history", "begin_theta_trial",
-        "revert_theta_trial", "commit_theta_trial", "apply_theta_delta", "write_audit", "request_anchor_reestimate",
-        "analyze_personalization_rules", "run_constrained_theta_optimizer", "run_rule_personalization",
-        "get_optimization_trial", "commit_optimized_theta", "discard_optimization_trial",
-        "get_personalization_profile", "propose_context_profile_update", "submit_agent_analysis",
+        "request_anchor_reestimate", "submit_agent_analysis",
         "get_context_template_catalog", "get_aborted_leave_candidates",
         "propose_aborted_leave_interpretation", "diagnose_context_template", "generate_context_template", "get_context_template_trial",
         "commit_context_template", "discard_context_template", "get_active_context_template",
@@ -327,9 +223,7 @@ std::vector<std::string> RegisterPersonalizerTools()
         "estimate_evidence_strength", "get_evidence_strength_trial",
         "commit_evidence_strength_candidate", "discard_evidence_strength_candidate",
         "fit_duration_prior", "get_duration_prior_trial", "commit_duration_prior_candidate",
-        "discard_duration_prior_candidate",
-        "get_personalization_policy", "get_policy_catalog", "begin_policy_trial", "apply_policy_candidate",
-        "evaluate_policy_on_history", "revert_policy_trial", "commit_policy_trial"};
+        "discard_duration_prior_candidate"};
 }
 
 }  // namespace personalizer

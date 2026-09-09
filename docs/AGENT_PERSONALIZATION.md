@@ -1,93 +1,59 @@
-# Jiuwen 策略个性化 Agent
+# Jiuwen 受约束个性化 Agent
 
-> 旧方案/消融对照：本文描述 Agent 直接改 θ 的实验链路。当前普通宿主隐藏这些写工具，生产方向见 [CONTEXT_TEMPLATE_PERSONALIZATION.md](CONTEXT_TEMPLATE_PERSONALIZATION.md)。
+当前 Agent 不参与每 tick 判定，也不能直接写任意 HSMM 参数。实时离家识别始终由端侧 C++ 基线完成；Agent 只在 episode 结算或日终低频运行。
 
-## 定位
+## 职责边界
 
-- **不做**每 tick 场景推理（由基线完成）。
-- **只在**误差门控 / 日终 / 锚点重估时 `Invoke`。
-- 使用 Jiuwen `AgentType::REACT` 或 `PLAN_EXECUTE`，`maxTurn≥3`，**启用 Tool**。
-- 优先生成受约束策略并做反事实回放；策略结构不需重新编译 HAP。
+Agent 负责：
 
-## 高层策略 API
+- 跨 episode 阅读语义证据，区分结构缺失、证据可靠度不匹配、持续时间先验不匹配和无需修改。
+- 每次只选择一个干预类型：`STRUCTURE`、`EVIDENCE_STRENGTH`、`DURATION` 或 `NO_OP`。
+- 在白名单原语中组织正向、负向和取消序列；或请求受约束工具估计证据强度/持续时间候选。
+- 根据工具返回的历史回放结果决定提交或放弃，并用 `submit_agent_analysis` 留下唯一的最终审计。
 
-| Tool | 用途 |
-|------|------|
-| `get_personalization_policy` | 当前生效的 `policy.json` |
-| `get_policy_catalog` | 端侧预编译模板与可覆盖字段边界 |
-| `begin_policy_trial` | 快照当前策略 |
-| `apply_policy_candidate` | 应用经校验的候选模板 |
-| `evaluate_policy_on_history` | 用 `policy_history.jsonl` 语义样本做反事实评分 |
-| `revert_policy_trial` / `commit_policy_trial` | 回滚或原子接受候选 |
+Agent 不负责：
 
-内置模板：仅 `confirmed_leaving`。实时引擎用 HSMM `P(LEAVING)` 推送，忽略 policy 菜谱；Agent 不要发明硬门控目录。气压自动进入 HSMM，重要性由 `w_baro` 调节。
+- 实时分类和推送。
+- 直接指定任意浮点参数。
+- 绕过候选范围、历史回放、产品安全门控或原子提交。
 
-`policy_history.jsonl` 每行是已标注的候选时刻，包含 PRE_LEAVE/LEAVING 概率、walking、WiFi/Cell/BLE、PDR、有效 GPS 和 lead。端侧只缓冲最近 30 分钟语义 tick，episode settle 时落盘最近 10 分钟；评估器按连续 tick 重建证据持续时间。
+## 工具分组
 
-## 与场景 Agent 分离
+| 分组 | 主要工具 | 作用 |
+|------|----------|------|
+| 证据 | `get_error_stats`、`get_leave_episode`、`get_semantic_timeline`、`get_anchor_history_summary` | 获取当前 episode 与 anchor 级历史事实 |
+| 结构 | `get_context_template_catalog`、`generate_context_template`、`begin_context_template_trial`、`commit_context_template_trial`、`discard_context_template_trial` | 在白名单原语中生成并验证序列模板 |
+| 强度 | `estimate_evidence_strength_profile`、`begin_evidence_strength_trial`、`commit_evidence_strength_trial`、`discard_evidence_strength_trial` | 由历史统计生成离散可靠度候选并验证 |
+| 时长 | `fit_hsmm_duration_profile`、`begin_hsmm_duration_trial`、`commit_hsmm_duration_trial`、`discard_hsmm_duration_trial` | 由标注 episode 拟合受限 duration 候选并验证 |
+| 审计 | `submit_agent_analysis` | 记录唯一的最终类型化决策 |
 
-| | 场景基线 | 本改参 Agent |
-|--|----------|--------------|
-| 频率 | 每 tick | 天级或事件 |
-| LLM | 否（默认可关） | 是 |
-| Tool | 无 | 必须 |
-| 输出 | scene + 推送 | Δθ + audit |
+## 单次调用流程
 
-参照：`bbpjiuwen-linux` 的 `Agent` / `RegisterTool` / `examples/hello_jiuwen`。
+```text
+读取 anchor 级历史与当前 episode
+        ↓
+提出可证伪的错误归因
+        ↓
+选择一个干预族或 NO_OP
+        ↓
+受约束 trial → 历史前缀回放
+        ↓
+commit / discard
+        ↓
+submit_agent_analysis
+```
 
-## Tools
+结构、强度和时长不能在同一轮混改，以便审计能够把效果归因到一种变化。`submit_agent_analysis` 必须记录 `anchor_id`、干预类型、证据引用、候选/工具结果和最终 `decision`；`NO_OP` 也必须说明为什么没有足够证据修改。
 
-### 证据（已注册）
+## 实现位置
 
-| Tool | 入参 | 出参 |
-|------|------|------|
-| `get_theta` | — | 当前 θ JSON |
-| `get_anchors` | — | home/company 锚点 |
-| `get_error_stats` | `since_ms`, `scene` | n_push / false_push / confirmed_leave |
-| `get_leave_episode` | `t_push_ms?` | push+label 行 |
-| `get_leave_window_samples` | `t_push_ms?`, `limit?` | 稀疏 GPS/行走 |
-| `get_leave_sensor_summary` | `t_push_ms?`, `before_s`, `after_s` | WiFi/CELL/GPS/**PDR**/磁**语义摘要**（非 raw CSV） |
+- Prompt：`jiuwen_agent/system_prompt.md`
+- 工具契约：`jiuwen_agent/tools_contract.json`
+- 端侧注册：`sa_service/services/src/sa_agent/ActionTools.cpp`
+- 主机试跑注册：`examples/personalizer_llm/register_tools.cpp`
+- 确定性候选与回放：`sa_cpp/src/personalization_optimizer.cpp`
+- 结构模板：`sa_cpp/src/context_template.cpp`
 
-实现：`sa_agent::RegisterEvidenceTools` → `commute_sa::EvidenceQuery`。  
-原始 `get_*_window` 仅保留 C++ API 供调试，**不注册给 Agent**。
+直接 θ 修改和旧策略 API 只保留为底层离线消融实现，不注册给生产 Agent，也不出现在当前工具契约中。
 
-### 动作（已注册）
-
-| Tool | 入参 | 出参 |
-|------|------|------|
-| `get_param_limits` | — | min/max/step |
-| `begin_theta_trial` | — | 快照 θ |
-| `apply_theta_delta` | `{param, delta, reason}` | old/new；按 step 裁剪并落盘 |
-| `evaluate_theta_on_history` | `since_ms?`, `limit?` | 历史反事实 score（越高越好） |
-| `revert_theta_trial` / `commit_theta_trial` | — | 回滚或接受试验 |
-| `write_audit` | `message`, `changes?` | `audit_id` → `audit.jsonl` |
-| `request_anchor_reestimate` | `which: home\|company\|both` | `job_id` → `anchor_reestimate_jobs.jsonl` |
-
-实现：`sa_agent::RegisterActionTools` → `commute_sa::ApplyThetaDeltaAction` / `EvaluateThetaOnHistoryAction` / trial helpers。
-
-推荐闭环：`begin_theta_trial` → eval baseline → `apply_theta_delta` → eval → 变差则 `revert` → 最终 `commit` + `write_audit`。
-
-## 系统提示要点
-
-1. 只改 θ 与触发重估，不直接改业务代码。
-2. 每参有 `min/max/step`；单次 Invoke 最多改 K 个参。
-3. 必须引用 `get_error_stats` 中的证据。
-4. 稳态（连续 N 天达标）建议 `no_op`。
-
-## 自标注（无天天真值）
-
-| 标签 | 定义 |
-|------|------|
-| `t*_leave_home` | HOME OUTSIDE 持续 `away_confirm_s` 且在外 ≥ `min_away_s` |
-| `t*_leave_company` | COMPANY 侧同上 |
-| `false_push` | 推送后未确认离开 / 用户关闭 |
-| `missed_leave` | 持续 OUTSIDE ≥ `away_confirm_s`，且 lookback 内无对应侧 push |
-| `lead` | `t* - t_push` |
-
-`missed_leave` 由 `ProductStore::ObserveMissedLeave` 每 tick 自标注，写入 `leave_episodes.jsonl`，并触发 `MISSED_LEAVE` 改参任务（绕过 6h cooldown）。
-
-## 配置文件
-
-见 `jiuwen_agent/agent_config.json` 与 `jiuwen_agent/tools_contract.json`。
-
-**Agent 能读到哪些语义：** 见 [AGENT_SEMANTICS.md](AGENT_SEMANTICS.md)。
+更多语义输入见 [AGENT_SEMANTICS.md](AGENT_SEMANTICS.md)，结构模板细节见 [CONTEXT_TEMPLATE_PERSONALIZATION.md](CONTEXT_TEMPLATE_PERSONALIZATION.md)。

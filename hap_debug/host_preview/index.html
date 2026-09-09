@@ -63,19 +63,11 @@
     function esc(s){ return String(s??'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function openResult(ev){
       const r = ev.result || {};
-      const changes = [...(r.changes||[])].reverse();
       const audits = [...(r.audits||[])].reverse();
-      let html = `<div style="display:flex;align-items:center"><b>LLM 改参结果</b><button style="margin-left:auto" onclick="closeSheet()">关闭</button></div>`;
+      let html = `<div style="display:flex;align-items:center"><b>Agent 个性化结果</b><button style="margin-left:auto" onclick="closeSheet()">关闭</button></div>`;
       html += `<div class="meta" style="margin-top:8px">状态 ${esc(r.status||ev.title)} · 触发 ${esc(r.reason||'')} / ${esc(r.settle_label||'')}</div>`;
-      html += `<h3>参数变更</h3>`;
-      if (!changes.length) html += `<div class="meta">本次无 apply_theta_delta</div>`;
-      changes.forEach(c=>{
-        const d=(c.new??0)-(c.old??0);
-        const sign=d>=0?'+':'';
-        html += `<div class="change"><div>${esc(c.param)}: ${c.old} → ${c.new} (${sign}${d.toFixed(4)})</div><div class="reason">${esc(c.reason)}</div></div>`;
-      });
-      html += `<h3>Audit</h3>`;
-      if (!audits.length) html += `<div class="meta">无 write_audit</div>`;
+      html += `<h3>结构化决策审计</h3>`;
+      if (!audits.length) html += `<div class="meta">本次没有 submit_agent_analysis 记录</div>`;
       audits.forEach(a => { html += `<div class="change">${esc(a.message)}</div>`; });
       html += `<h3>模型回复摘要</h3><div class="meta">${esc(r.response_summary||ev.detail||'—')}</div>`;
       document.getElementById('sheetBody').innerHTML = html;
@@ -99,7 +91,7 @@
           <div class="type" style="color:${colors[ev.type]||'#94a3b8'}">${esc(ev.type)}</div>
           <div class="title">${esc(ev.title||'')}</div>
           <div class="detail">${esc(ev.detail||'')}</div>
-          ${ev.type==='LLM_DONE'?'<div class="hint">点击查看改参明细 ›</div>':''}</div>`;
+          ${ev.type==='LLM_DONE'?'<div class="hint">点击查看个性化决策 ›</div>':''}</div>`;
         if (ev.type==='LLM_DONE') div.onclick = () => openResult(ev);
         list.appendChild(div);
       });
@@ -118,17 +110,13 @@
         {wait:400, status:{scene:'LEAVING_HOME',home_relation:'NEAR',score_home:0.78,eta_leave_s:95,should_service:true,last_intent:'DEPARTURE_NOTIFICATION'}, ev:{type:'PUSH',title:'记得带钥匙',detail:'intent=DEPARTURE_NOTIFICATION'}},
         {wait:600, status:{scene:'LEAVING_HOME',home_relation:'OUTSIDE',score_home:0.6,eta_leave_s:0,dist_home_m:90}, ev:{type:'OUTSIDE',title:'first OUTSIDE after push',detail:'t* recorded'}},
         {wait:300, status:{scene:'COMMUTE',home_relation:'OUTSIDE'}, ev:{type:'LABEL',title:'CONFIRMED_LEAVE',detail:'reason=AFTER_PUSH'}},
-        {wait:300, status:{last_llm_status:'PersonalizeInvoke',last_llm_at_ms:Date.now()}, ev:{type:'LLM_START',title:'AFTER_PUSH',detail:'invoke θ personalizer'}},
+        {wait:300, status:{last_llm_status:'PersonalizeInvoke',last_llm_at_ms:Date.now()}, ev:{type:'LLM_START',title:'AFTER_PUSH',detail:'invoke constrained personalizer'}},
         {wait:700, status:{last_llm_status:'PersonalizeInvoke',last_llm_at_ms:Date.now()}, ev:{
-          type:'LLM_DONE', title:'PersonalizeInvoke', detail:'tap for θ changes; has param deltas',
+          type:'LLM_DONE', title:'PersonalizeInvoke', detail:'tap for personalization decision; typed audit available',
           result:{
             status:'PersonalizeInvoke', reason:'AFTER_PUSH', settle_label:'CONFIRMED_LEAVE',
-            response_summary:'lead 偏小，略降 enter_leave；保留 radio 权重。',
-            changes:[
-              {t_ms:t0, param:'enter_leave', old:0.58, new:0.55, reason:'CONFIRMED_LEAVE but lead_s≈20s < lead_min; lower threshold'},
-              {t_ms:t0+1, param:'arm_delay_s', old:30, new:20, reason:'push late relative to OUTSIDE'}
-            ],
-            audits:[{t_ms:t0, message:'Adjusted enter_leave and arm_delay after short lead', changes:{}}]
+            response_summary:'提交了经过历史回放验收的 STRUCTURE 个性化决策。',
+            audits:[{t_ms:t0, message:'structured_agent_analysis type=STRUCTURE anchor=company_001 decision=COMMITTED', changes:{schema_version:2, intervention_type:'STRUCTURE', anchor_id:'company_001', decision:'COMMITTED'}}]
           }
         }},
       ];

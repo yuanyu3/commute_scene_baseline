@@ -395,7 +395,7 @@ def main() -> int:
     ap.add_argument(
         "--system-prompt",
         default="",
-        help="optional system prompt md path (e.g. jiuwen_agent/system_prompt_explore.md)",
+        help="optional system prompt md path (default production protocol: jiuwen_agent/system_prompt.md)",
     )
     ap.add_argument(
         "--seed-theta",

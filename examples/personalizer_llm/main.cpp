@@ -520,26 +520,12 @@ int main(int argc, char **argv)
     if (diagnosticOnly) {
         const std::unordered_set<std::string> allowed = {"get_theta", "get_anchors", "get_error_stats",
             "get_leave_episode", "get_leave_window_samples", "get_leave_sensor_summary",
-            "get_episode_semantic_timeline", "get_episode_dynamic_diagnostics", "get_param_limits",
-            "evaluate_theta_on_history", "analyze_personalization_rules", "get_personalization_profile",
-            "submit_agent_analysis", "write_audit", "get_active_context_template", "diagnose_context_template"};
+            "get_episode_semantic_timeline", "get_episode_dynamic_diagnostics",
+            "submit_agent_analysis", "get_active_context_template", "diagnose_context_template"};
         tools.erase(std::remove_if(tools.begin(), tools.end(),
                         [&](const std::string &name) { return allowed.count(name) == 0; }),
             tools.end());
         std::cout << "diagnostic-only tool gate enabled\n";
-    } else {
-        // Normal demo flow exposes Agent-composed context templates. Numeric
-        // theta optimizers and legacy direct mutation tools are hidden so the
-        // boundary is enforced by the host rather than only by the prompt.
-        const std::unordered_set<std::string> forbidden = {"begin_theta_trial", "revert_theta_trial",
-            "commit_theta_trial", "apply_theta_delta", "begin_policy_trial", "apply_policy_candidate",
-            "revert_policy_trial", "commit_policy_trial", "run_constrained_theta_optimizer",
-            "commit_optimized_theta", "discard_optimization_trial", "run_rule_personalization",
-            "propose_context_profile_update"};
-        tools.erase(std::remove_if(tools.begin(), tools.end(),
-                        [&](const std::string &name) { return forbidden.count(name) != 0; }),
-            tools.end());
-        std::cout << "constrained-context-template tool gate enabled\n";
     }
     if (noTools) {
         tools.clear();
@@ -559,7 +545,7 @@ int main(int argc, char **argv)
     cfg->version = "1.0.0";
     cfg->mode = AgentType::REACT;
     // Evidence + trial/eval/apply easily exceeds 16 ReAct turns; 16 caused TaskStatus::FAILED
-    // with the misleading "maximum number of retries" tip even after write_audit succeeded.
+    // with the misleading "maximum number of retries" tip even after the typed audit succeeded.
     // Default 80; override with PERSONALIZER_MAX_TURN (or --max-turn N).
     cfg->maxTurn = 80;
     if (const char *mt = std::getenv("PERSONALIZER_MAX_TURN")) {
@@ -701,7 +687,7 @@ int main(int argc, char **argv)
     std::cout << "=== agent_trace.jsonl ===\n" << tracePath
               << " (stream_events=" << streamEvents << "; final_response always appended)\n";
 
-    const bool toolsFinished = resp.message.find("\"name\":\"write_audit\"") != std::string::npos;
+    const bool toolsFinished = resp.message.find("\"name\":\"submit_agent_analysis\"") != std::string::npos;
     // Jiuwen maps maxTurn exhaustion to TaskStatus::FAILED with a "retries exceeded" tip,
     // even when every tool succeeded. Match the device SA: errorCode is the real failure bit.
     if (resp.errorCode != ErrorCode::SUCCESS) {
@@ -711,7 +697,7 @@ int main(int argc, char **argv)
         return 2;
     }
     if (resp.status == jiuwen::TaskStatus::FAILED && toolsFinished) {
-        std::cout << "WARN: Jiuwen TaskStatus=FAILED after write_audit (usually maxTurn); treating as success\n";
+        std::cout << "WARN: Jiuwen TaskStatus=FAILED after submit_agent_analysis (usually maxTurn); treating as success\n";
     }
     return 0;
 }

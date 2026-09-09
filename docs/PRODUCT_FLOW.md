@@ -35,7 +35,7 @@
 | `leave_window_samples.jsonl` | 推送后离开窗口内稀疏 GPS/行走 |
 | `param_changes.jsonl` | θ 变更审计 |
 | `personalize_jobs.jsonl` | 改参任务 |
-| `audit.jsonl` | Agent write_audit（含 no_op） |
+| `audit.jsonl` | `submit_agent_analysis` 类型化决策审计（含 `NO_OP`） |
 | `anchor_reestimate_jobs.jsonl` | 锚点重估队列 |
 
 默认**不写**每 tick 的 `sensor_events` / `sa_perception_ticks` / `semantic_snapshots` / `baseline_decisions`。  

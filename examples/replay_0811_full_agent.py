@@ -6,7 +6,7 @@ Steps:
   2) run_real_flow.py each with --tick-s 5
   3) Merge leave_episodes / policy_history / samples into one product root
   4) Seed AFTER_PUSH job from last company push; reset theta to defaults
-  5) Optionally invoke personalizer_llm (WSL) so evaluate_theta_on_history sees the full set
+  5) Optionally invoke personalizer_llm (WSL) so constrained replay tools see the full set
 """
 from __future__ import annotations
 

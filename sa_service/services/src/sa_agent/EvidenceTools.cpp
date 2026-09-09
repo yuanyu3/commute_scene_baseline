@@ -135,14 +135,16 @@ std::vector<std::string> RegisterEvidenceTools()
     RegisterOne("get_episode_semantic_timeline",
         "Bounded aligned semantic timeline; missing values remain distinct from observed zero",
         {{"episode_id", "Exact episode identifier", "string", true},
-            {"side", "company|home", "string", false}, {"outcome_t_ms", "Required if id ambiguous", "integer", false},
+            {"anchor_id", "Exact anchor id from get_anchors", "string", true},
+            {"outcome_t_ms", "Required if id ambiguous", "integer", false},
             {"bin_s", "5..60 seconds", "integer", false}, {"start_ms", "Optional window start", "integer", false},
             {"end_ms", "Optional window end", "integer", false}, {"max_bins", "1..120", "integer", false}},
         &CallGetSemanticTimeline);
     RegisterOne("get_episode_dynamic_diagnostics",
         "Semantic event intervals, vertical recovery descriptors and cross-sensor lags",
         {{"episode_id", "Exact episode identifier", "string", true},
-            {"side", "company|home", "string", false}, {"outcome_t_ms", "Required if id ambiguous", "integer", false},
+            {"anchor_id", "Exact anchor id from get_anchors", "string", true},
+            {"outcome_t_ms", "Required if id ambiguous", "integer", false},
             {"start_ms", "Optional window start", "integer", false}, {"end_ms", "Optional window end", "integer", false}},
         &CallGetDynamicDiagnostics);
 

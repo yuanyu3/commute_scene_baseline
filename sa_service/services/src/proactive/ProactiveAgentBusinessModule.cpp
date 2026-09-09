@@ -1678,8 +1678,6 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                     summary.resize(1200);
                     summary.append("...");
                 }
-                const std::string changesJson =
-                    commute_sa::ProductStore::GetInstance().GetRecentParamChangesJson(invokeSinceMs - 2000, 10);
                 const std::string auditsJson =
                     commute_sa::ProductStore::GetInstance().GetRecentAuditsJson(invokeSinceMs - 2000, 8);
                 std::ostringstream resultOss;
@@ -1687,17 +1685,15 @@ void ProactiveAgentBusinessModule::ProcessTickAtInner(Timestamp windowEndMs)
                           << ",\"reason\":\"" << EscapeJson(job.reason) << "\""
                           << ",\"settle_label\":\"" << EscapeJson(job.settle_label) << "\""
                           << ",\"response_summary\":\"" << EscapeJson(summary) << "\""
-                          << ",\"changes\":" << changesJson
                           << ",\"audits\":" << auditsJson << "}";
                 std::ostringstream detailOss;
-                detailOss << "tap for θ changes; status=" << invokeResult.status;
-                if (changesJson != "[]") {
-                    detailOss << " (has param deltas)";
-                } else if (auditsJson.find("no_op") != std::string::npos ||
-                    auditsJson.find("noop") != std::string::npos) {
-                    detailOss << " (audit no_op)";
+                detailOss << "tap for personalization decision; status=" << invokeResult.status;
+                if (auditsJson.find("\"intervention_type\":\"NO_OP\"") != std::string::npos) {
+                    detailOss << " (NO_OP)";
+                } else if (auditsJson != "[]") {
+                    detailOss << " (typed audit available)";
                 } else {
-                    detailOss << " (no apply_theta_delta recorded)";
+                    detailOss << " (no typed audit recorded)";
                 }
                 PublishProductDebugEvent("LLM_DONE", tick.observed_at, invokeResult.status, detailOss.str(),
                     resultOss.str());
@@ -2102,7 +2098,8 @@ constexpr const char *kThetaPersonalizerSystemPrompt = R"delimiter(
  每次任务最多生成一次模板。只有 best_candidate_id 非空且所有硬门通过时才提交，否则丢弃或 no_op。禁止把单个传感器当作充分条件，
  禁止编造证据。所有工具结束后调用一次submit_agent_analysis：intervention_type只能是STRUCTURE、EVIDENCE_STRENGTH、DURATION、NO_OP，
  decision只能是COMMITTED、REJECTED、DISCARDED、NO_OP。前三类记录匹配的目标结构/通道/状态、最终工具、工具结果和回放结果；
- NO_OP必须同时作为type和decision。所有类型记录真实anchor_id、支持、反证、缺失证据、置信度和决策理由。最后write_audit补充人工可读过程。
+ NO_OP必须同时作为type和decision。所有类型记录真实anchor_id、支持、反证、缺失证据、置信度和决策理由。
+ submit_agent_analysis是唯一最终审计入口；调用后停止，不再调用其他审计或直接数值修改工具。
 )delimiter";
 } // namespace
 #endif

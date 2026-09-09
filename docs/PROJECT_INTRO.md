@@ -1,8 +1,8 @@
 # Commute Scene Baseline — 项目介绍
 
-> 状态说明：本文保留早期“Agent 直接微调 θ”的项目背景。当前默认实现已经切换为“Agent 组合模板结构、C++ 选择强度并回放验收”，请以 [CONTEXT_TEMPLATE_PERSONALIZATION.md](CONTEXT_TEMPLATE_PERSONALIZATION.md) 为准；直接改参代码仅用于消融对照。
+> 当前默认实现采用“Agent 选择干预类型并组织语义结构、确定性工具生成受约束候选并回放验收”。
 
-面向通勤场景的**端侧实时场景基线** + **低频 θ 个性化**。在用户**尚未完全离家**时预测出门意图，触发「带钥匙」等主动服务；平时不调大模型，仅在推送复盘 / 日终用 Jiuwen Agent 微调参数。
+面向通勤场景的**端侧实时场景基线** + **低频受约束个性化**。在用户**尚未完全离家**时预测出门意图，触发「带钥匙」等主动服务；平时不调大模型，仅在推送复盘 / 日终调用 Jiuwen Agent。
 
 本仓库**独立**，不依赖 `helloworld_agent`。坐标全链路 **WGS84**。
 
@@ -13,9 +13,9 @@
 | 问题 | 做法 |
 |------|------|
 | 何时提醒带钥匙 / 下班？ | 规则化 SceneEngine 在仍 **INSIDE/NEAR** 家或公司时预测推送 |
-| 如何避免每秒调 LLM？ | 实时环纯 C++；LLM 只改 θ，且由流程门控 |
-| 如何适应用户习惯？ | 推送后 settle + 证据工具 → Agent 小步改 `theta.json` |
-| 误推 / 偏晚怎么收敛？ | `FALSE_PUSH` / `lead_s` 统计驱动改参 |
+| 如何避免每秒调 LLM？ | 实时环纯 C++；Agent 只在事件结算或日终低频运行 |
+| 如何适应用户习惯？ | 推送后 settle + 证据工具 → Agent 选择结构/强度/时长干预 |
+| 误推 / 偏晚怎么收敛？ | 确定性历史回放同时优化正确率与提前量 |
 
 **不做：** 用大模型做每 tick 场景分类；不把「回家过程」做成独立推送态（到达落成 `AT_HOME` / `AT_COMPANY`）。
 
@@ -31,9 +31,9 @@
                             │ 首次 OUTSIDE / 误推超时 / 日终
                             ▼
 ┌──────────────────────────────────────────────────────────┐
-│ ② 改参环（在线 LLM，低频）                                 │
+│ ② 个性化环（在线 LLM，低频）                               │
 │ PersonalizationController → Jiuwen ReAct Agent            │
-│ Evidence / Action Tools → 更新 θ / audit                  │
+│ Evidence → 受约束 trial / 回放 → 类型化 audit             │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -79,16 +79,17 @@
 |------|------|
 | 每个 tick | 不调 LLM |
 | `should_service` | 本地推送，不调 LLM |
-| 推送后首次 `OUTSIDE` | 标 `CONFIRMED_LEAVE`，**立刻**调 θ LLM |
-| 推送后约 20 min 仍未离开 | 标 `FALSE_PUSH`，调 θ LLM |
-| `DAY_END`（≥22 点） | 调 θ LLM |
+| 推送后首次 `OUTSIDE` | 标 `CONFIRMED_LEAVE`，**立刻**调 Agent |
+| 推送后约 20 min 仍未离开 | 标 `FALSE_PUSH`，调 Agent |
+| `DAY_END`（≥22 点） | 调 Agent |
 
-工具分两类：
+工具分三类：
 
 - **Evidence**：`get_theta` / `get_error_stats` / `get_leave_episode` / sensor windows …
-- **Action**：`apply_theta_delta` / `write_audit` / `request_anchor_reestimate` …
+- **受约束干预**：上下文模板、evidence strength 和 HSMM duration 的 trial / commit / discard
+- **审计**：`submit_agent_analysis` 明确记录 `STRUCTURE` / `EVIDENCE_STRENGTH` / `DURATION` / `NO_OP`
 
-策略示例：误推提高 `enter_leave` 或降低噪声通道 `w_*`；确认离开但 lead 偏小则略降阈值或 `arm_delay`。改参后应用 `evaluate_theta_on_history` 在历史离开窗口上回放 HSMM，变差则 `revert_theta_trial`。
+Agent 负责跨 episode 解释证据、选择一个干预族并说明理由；工具只允许白名单候选，并在历史前缀上评估正确率、误推与提前量。只有验收通过的候选才会提交。
 
 ---
 
@@ -119,7 +120,7 @@
 | `theta.json` | SceneEngine 参数 |
 | `leave_episodes.jsonl` | push + label（含 `eta_leave_s` / `t_star_ms` / `lead_s`） |
 | `leave_window_samples.jsonl` | 推送后稀疏 GPS/行走 |
-| `param_changes.jsonl` / `audit.jsonl` | 改参与审计 |
+| `param_changes.jsonl` / `audit.jsonl` | 受约束候选变更与类型化审计 |
 | `personalize_jobs.jsonl` | 改参任务队列 |
 
 默认不写每 tick 的 verbose dump；排查时设 `SA_AGENT_DEBUG_SINKS=1`。凭证见 `sa_service/etc/agent.env`（勿提交密钥）。
@@ -153,7 +154,7 @@ bash examples/personalizer_llm/run.sh --debug
 
 1. **实时可解释、可测**：规则 + θ，不用黑盒场景 LLM。  
 2. **服务时机**：预测离家，人还在家时提醒。  
-3. **LLM 只调参**：证据工具约束，单次最多少量 `apply_theta_delta`。  
+3. **Agent 不直接写数值**：只选择干预族、组合结构和解释证据；候选值与验收由确定性工具控制。
 4. **坐标统一 WGS84**：见 [`CRS_UNIFICATION.md`](CRS_UNIFICATION.md)。  
 5. **与 helloworld 解耦**：产品流是 SceneEngine 主导，不是每 tick Agent。
 
@@ -166,7 +167,7 @@ bash examples/personalizer_llm/run.sh --debug
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | 双环、状态机、预测推送时序 |
 | [`PRODUCT_FLOW.md`](PRODUCT_FLOW.md) | 采集 → 判定 → 改参、落盘 |
 | [`CPP_BASELINE.md`](CPP_BASELINE.md) | C++ 模块与 SA 接线 |
-| [`AGENT_PERSONALIZATION.md`](AGENT_PERSONALIZATION.md) | 改参 Agent |
+| [`AGENT_PERSONALIZATION.md`](AGENT_PERSONALIZATION.md) | 当前受约束个性化 Agent |
 | [`ON_DEVICE_TICK.md`](ON_DEVICE_TICK.md) | 端上 tick 路径 |
 | [`SA_COLLECTION.md`](SA_COLLECTION.md) | 采集与 DEBUG sinks |
 | [`examples/personalizer_llm/README.md`](../examples/personalizer_llm/README.md) | 主机 LLM DEBUG / 导出 |

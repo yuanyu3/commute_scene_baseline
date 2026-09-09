@@ -62,22 +62,15 @@
 
 `decision` 记录确定性工具的最终结果，只能是 `COMMITTED / REJECTED / DISCARDED / NO_OP`。前三类必须记录最终决定性的 `tool_name`、其 `tool_result` 摘要和 `replay_result`；`NO_OP` 必须同时使用 `intervention_type=NO_OP, decision=NO_OP`。所有类别都必须记录真实 `anchor_id`、支持证据、反证、缺失证据、置信度和 `decision_reason`。类型表示 Agent 选择了哪类干预，decision 表示工具最终是否接受；不得把工具拒绝伪装成 NO_OP 或 COMMITTED。
 
-最后调用 `write_audit` 补充便于人工阅读的完整过程，至少记录：
+`submit_agent_analysis` 是唯一的最终审计入口。调用参数必须完整包含：
 
 ```text
-target_episode
-target_anchor_and_direction_check
-context_hypotheses
-supporting_evidence
-contradicting_evidence
-missing_evidence
-candidate_dispositions (每个返回候选的 episode_id、处理状态、支持/反证/未知字段；遗漏必须说明)
-path_hypotheses_and_counterexamples
-generated_template_or_no_op
-template_replay_result
-sample_count_and_generalization_risk
-decision
-required_more_data
+intervention_type, anchor_id, decision
+context_name, primary_cause, confidence
+supporting_evidence, contradicting_evidence, missing_evidence
+decision_reason
 ```
 
-完成审计后停止。不要输出推荐模板示例，也不要预设任何传感器、建筑或用户习惯是答案。
+类型专属字段：`STRUCTURE` 填 `structure_summary`；`EVIDENCE_STRENGTH` 填 `target_families`；`DURATION` 填 `target_state`。非 `NO_OP` 还必须填写最终决定性的 `tool_name`、`tool_result` 和 `replay_result`。把目标 episode、候选处置、反例、样本量、泛化风险和待收集数据压缩到上述证据及理由字段中，不另写第二套旧审计协议。
+
+调用 `submit_agent_analysis` 后停止。不要输出推荐模板示例，也不要预设任何传感器、建筑或用户习惯是答案。

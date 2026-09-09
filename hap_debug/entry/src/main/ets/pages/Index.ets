@@ -15,14 +15,6 @@ interface DebugStatus {
   last_llm_at_ms?: number;
 }
 
-interface ParamChange {
-  t_ms?: number;
-  param?: string;
-  old?: number;
-  new?: number;
-  reason?: string;
-}
-
 interface AuditItem {
   t_ms?: number;
   audit_id?: string;
@@ -35,7 +27,6 @@ interface LlmResult {
   reason?: string;
   settle_label?: string;
   response_summary?: string;
-  changes?: ParamChange[];
   audits?: AuditItem[];
 }
 
@@ -73,7 +64,6 @@ struct Index {
   @State detailReason: string = '';
   @State detailLabel: string = '';
   @State detailSummary: string = '';
-  @State detailChanges: ParamChange[] = [];
   @State detailAudits: AuditItem[] = [];
   private timerId: number = -1;
 
@@ -128,9 +118,7 @@ struct Index {
     this.detailReason = r?.reason ?? '';
     this.detailLabel = r?.settle_label ?? '';
     this.detailSummary = r?.response_summary ?? ev.detail;
-    // Show oldest→newest for readability
-    const changes = r?.changes ?? [];
-    this.detailChanges = changes.slice().reverse();
+    // Show newest typed decision first.
     const audits = r?.audits ?? [];
     this.detailAudits = audits.slice().reverse();
     this.showDetail = true;
@@ -138,14 +126,6 @@ struct Index {
 
   private closeDetail(): void {
     this.showDetail = false;
-  }
-
-  private formatDelta(c: ParamChange): string {
-    const oldV = c.old ?? 0;
-    const newV = c.new ?? 0;
-    const delta = newV - oldV;
-    const sign = delta >= 0 ? '+' : '';
-    return `${c.param}: ${oldV} → ${newV} (${sign}${delta.toFixed(4)})`;
   }
 
   private refresh(): void {
@@ -161,7 +141,7 @@ struct Index {
         return;
       }
       this.pollOk = true;
-      this.statusText = 'live · tap PersonalizeInvoke for θ changes';
+      this.statusText = 'live · tap PersonalizeInvoke for Agent decision';
       const st = data.status ?? {};
       this.scene = st.scene ?? '—';
       this.homeRel = st.home_relation ?? '—';
@@ -194,7 +174,7 @@ struct Index {
   DetailSheet() {
     Column() {
       Row() {
-        Text('LLM 改参结果')
+        Text('Agent 个性化结果')
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor('#F8FAFC')
@@ -220,44 +200,14 @@ struct Index {
           .margin({ top: 4 })
       }
 
-      Text('参数变更')
-        .fontSize(15)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#E2E8F0')
-        .margin({ top: 16, bottom: 8 })
-
-      if (this.detailChanges.length === 0) {
-        Text('本次无 apply_theta_delta（可能 no_op 或 Agent 未就绪）')
-          .fontSize(13)
-          .fontColor('#64748B')
-      } else {
-        ForEach(this.detailChanges, (c: ParamChange, idx: number) => {
-          Column() {
-            Text(this.formatDelta(c))
-              .fontSize(14)
-              .fontColor('#F1F5F9')
-            Text(c.reason ?? '')
-              .fontSize(12)
-              .fontColor('#86EFAC')
-              .margin({ top: 4 })
-          }
-          .width('100%')
-          .alignItems(HorizontalAlign.Start)
-          .padding(10)
-          .margin({ bottom: 8 })
-          .backgroundColor('#0F172A')
-          .borderRadius(8)
-        }, (c: ParamChange, idx: number) => `${c.param}_${idx}_${c.t_ms}`)
-      }
-
-      Text('Audit')
+      Text('结构化决策审计')
         .fontSize(15)
         .fontWeight(FontWeight.Medium)
         .fontColor('#E2E8F0')
         .margin({ top: 8, bottom: 8 })
 
       if (this.detailAudits.length === 0) {
-        Text('无 write_audit 记录')
+        Text('无 submit_agent_analysis 记录')
           .fontSize(13)
           .fontColor('#64748B')
       } else {
@@ -380,7 +330,7 @@ struct Index {
                     .fontColor('#94A3B8')
                     .margin({ top: 4 })
                   if (ev.type === 'LLM_DONE') {
-                    Text(ev.result ? '点击查看改参明细 ›' : '无 result 载荷')
+                    Text(ev.result ? '点击查看个性化决策 ›' : '无 result 载荷')
                       .fontSize(11)
                       .fontColor('#A78BFA')
                       .margin({ top: 6 })

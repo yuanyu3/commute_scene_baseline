@@ -2,7 +2,7 @@
 
 > 真机请用 **`D:\helloworld_agent\hap`**（已合并采集 + 时间线，绑 SA **9902**）。本目录仅作参考。
 
-可视化通勤 SA 的 **SceneEngine 场景变化 / 推送 / OUTSIDE 确认 / 改参 LLM** 时间线。
+可视化通勤 SA 的 **SceneEngine 场景变化 / 推送 / OUTSIDE 确认 / Agent 个性化** 时间线。
 
 ## 依赖
 
@@ -34,8 +34,7 @@ DevEco → Open → hap_debug/
 
 `LLM_DONE`（title 常为 `PersonalizeInvoke`）事件带 `result`：
 
-- `changes[]`：`param` / `old` / `new` / `reason`（来自 `apply_theta_delta`）
-- `audits[]`：`write_audit` 消息（含 no_op）
+- `audits[]`：`submit_agent_analysis` 产生的类型化决策记录（`STRUCTURE` / `EVIDENCE_STRENGTH` / `DURATION` / `NO_OP`）
 - `response_summary`：模型最终回复摘要
 
 HAP 中点击该条即可展开。

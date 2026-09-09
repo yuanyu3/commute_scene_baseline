@@ -5,7 +5,7 @@
 
 namespace sa_agent {
 
-/** Register action tools (apply_theta_delta / write_audit / request_anchor_reestimate). */
+/** Register constrained personalization tools; direct theta mutation is intentionally not exposed. */
 std::vector<std::string> RegisterActionTools();
 
 const std::vector<std::string> &ActionToolNames();

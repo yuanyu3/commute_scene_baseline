@@ -62,7 +62,7 @@ GPS `INSIDE/NEAR/OUTSIDE`、approaching 和 Wi-Fi attach 作为强观测。公�
 
 ## 个性化边界
 
-当前 Agent 可调整 `enter_leave/exit_leave`、`arm_delay_s`、`lead_*` 和观测可靠度 `w_*`（含 `w_baro`）。`evaluate_theta_on_history` 在 `policy_history.jsonl` 含 `obs_*` 时会重放 `LeaveHsmm`，因此可以验证权重；否则退回 recorded push score。
+当前 Agent 不直接写任意 θ。它可以选择结构模板、证据强度档位或持续时间先验这一种干预族，再由受约束工具从允许集合中生成候选，并使用历史前缀回放验收后提交；数值边界与安全条件仍由 C++ 决定。
 
 产品硬禁推（OUTSIDE / approaching / attach / 一次一推 / cooldown）留在 C++，不进入 Agent 可购物的硬门控目录。气压有观测就自动进入 HSMM，用 `w_baro` 调重要性。
 

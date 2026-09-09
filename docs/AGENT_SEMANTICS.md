@@ -34,7 +34,7 @@
 | `get_leave_window_samples` | 推送后稀疏轨迹/行走 |
 | `get_leave_sensor_summary` | 推送前后 WiFi/Cell/GPS/PDR/磁摘要 |
 
-动作类 Tool（`apply_theta_delta`、`evaluate_theta_on_history` 等）是**写/评**，不是传感语义，见 [AGENT_PERSONALIZATION.md](AGENT_PERSONALIZATION.md)。
+个性化动作只通过受约束的模板、证据强度和持续时间 trial 工具完成；最终统一调用 `submit_agent_analysis` 留下类型化审计。
 
 ---
 
@@ -213,7 +213,7 @@ Agent 用它了解「当前策略」，再决定改哪几个参。
 5. get_theta + get_anchors  → 当前参数与围栏是否合理？
 ```
 
-再进入 trial → `apply_theta_delta` → `evaluate_theta_on_history`。
+再选择一个干预族进入 trial：结构模板、证据强度或持续时间；由确定性工具回放验收，最后调用 `submit_agent_analysis`。
 
 ---
 
@@ -229,7 +229,7 @@ Agent 用它了解「当前策略」，再决定改哪几个参。
 
 ## 相关文档
 
-- [AGENT_PERSONALIZATION.md](AGENT_PERSONALIZATION.md) — 改参闭环与动作 Tool  
+- [CONTEXT_TEMPLATE_PERSONALIZATION.md](CONTEXT_TEMPLATE_PERSONALIZATION.md) — 当前个性化闭环与动作 Tool
 - [RADIO_EVIDENCE.md](RADIO_EVIDENCE.md) — WiFi/Cell 在线证据  
 - [PDR_EVIDENCE.md](PDR_EVIDENCE.md) — PDR 净外向如何进入 HSMM 观测
 - [PRODUCT_FLOW.md](PRODUCT_FLOW.md) — 何时 Invoke Agent  

@@ -6,11 +6,11 @@
 
   "agent_type": "REACT",
 
-  "max_turn": 16,
+  "max_turn": 80,
 
   "stream": false,
 
-  "description": "Low-frequency personalization: evidence discovery, validated aborted-leave interpretation and bounded context-template synthesis. Not per tick.",
+  "description": "Low-frequency constrained personalization across structure, evidence strength and HSMM duration. Not per tick.",
 
   "system_prompt_file": "system_prompt.md",
 
@@ -34,8 +34,9 @@
 
       "get_episode_dynamic_diagnostics",
 
-      "diagnose_context_template"
-      ,"get_current_user_anchor_profile",
+      "diagnose_context_template",
+
+      "get_current_user_anchor_profile",
 
       "get_personalization_history_summary"
 
@@ -76,8 +77,6 @@
 
       "submit_agent_analysis",
 
-      "write_audit",
-
       "request_anchor_reestimate"
 
     ]
@@ -93,11 +92,9 @@
   },
 
   "constraints": {
-
-    "max_params_per_invoke": 5,
-
+    "max_template_generations_per_invoke": 1,
+    "direct_numeric_targets_forbidden": true,
     "require_error_evidence": true,
-
     "require_eval_before_commit": true
 
   },
@@ -108,7 +105,7 @@
 
     "query": "commute_sa::EvidenceQuery",
 
-    "actions": "commute_sa::context_template + theta_eval",
+    "actions": "commute_sa::context_template + evidence_strength_profile + duration_profile + typed audit",
 
     "host": "OHOS SA ProactiveAgentBusinessModule::TryInitializeAgent"
 
