@@ -173,16 +173,6 @@ bool WouldHsmmPush(const LeaveHsmmResult &result, const LeaveObservation &obs, d
         (obs.inside || obs.near) && ArmDelayOk(walkStartedMs, tMs, armDelayS);
 }
 
-bool EpisodeHasBaroLowerPlatform(const HsmmEpisode &ep)
-{
-    for (const auto &tick : ep.ticks) {
-        if (tick.obs.baro_lower_platform >= 0.5) {
-            return true;
-        }
-    }
-    return false;
-}
-
 std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Theta &theta,
     const ObservationAdapter &adapter = {}, bool includePrefixTrace = false, int64_t cutoffMs = 0,
     std::vector<ReplayEpisodeSummary> *summaries = nullptr,
@@ -198,8 +188,6 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     int nUnscored = 0;
     int falseAvoided = 0;
     int falseKept = 0;
-    int softFalseAvoided = 0;
-    int softFalseKept = 0;
     int confirmedKept = 0;
     int missed = 0;
     int recovered = 0;
@@ -304,15 +292,14 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             }
         }
         const bool isAborted = ep.label == "ABORTED_LEAVE";
-        const bool isSoft = ep.label == "FALSE_PUSH" && EpisodeHasBaroLowerPlatform(ep);
         if (summaries) {
             summaries->push_back({ep.side + ":" + std::to_string(ep.outcome_ms) + ":" + ep.label + ":" + ep.episode_id,
-                isSoft || ep.label == "CONFIRMED_LEAVE" || ep.label == "MISSED_LEAVE",
-                !isSoft && (ep.label == "FALSE_PUSH" || ep.label == "TRUE_NEGATIVE"),
+                ep.label == "CONFIRMED_LEAVE" || ep.label == "MISSED_LEAVE",
+                ep.label == "FALSE_PUSH" || ep.label == "TRUE_NEGATIVE",
                 wouldPush, pushAtMs, leadAtPush, ep.label == "ABORTED_LEAVE", firstCancelMs});
         }
         // Outcome labels/time are used only for scoring, never by the prefix filter.
-        if (wouldPush && (isSoft || ep.label == "CONFIRMED_LEAVE" || ep.label == "MISSED_LEAVE")) {
+        if (wouldPush && (ep.label == "CONFIRMED_LEAVE" || ep.label == "MISSED_LEAVE")) {
             const double late = std::max(0.0, theta.lead_min_s - leadAtPush);
             const double early = std::max(0.0, leadAtPush - theta.lead_max_s);
             leadUtility += 1.0 - (late + early) / 60.0;
@@ -339,16 +326,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                 ++nTrueNegative;
             }
             ++nFalse;
-            if (isSoft) {
-                // Lobby/1F (baro_lower_platform): same positive target as outdoor confirm —
-                // must keep push; failing to push counts as missed_leave.
-                if (wouldPush) {
-                    ++softFalseKept;
-                } else {
-                    ++softFalseAvoided;
-                    ++missed;
-                }
-            } else if (wouldPush) {
+            if (wouldPush) {
                 ++falseKept;
             } else {
                 ++falseAvoided;
@@ -373,8 +351,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         std::ostringstream episodeRow;
         episodeRow << "{\"episode_id\":\"" << Esc(ep.episode_id)
             << "\",\"outcome_t_ms\":" << ep.outcome_ms << ",\"side\":\"" << Esc(ep.side)
-            << "\",\"label\":\"" << Esc(ep.label) << "\",\"soft_lower_platform\":"
-            << (isSoft ? "true" : "false") << ",\"would_push\":" << (wouldPush ? "true" : "false")
+            << "\",\"label\":\"" << Esc(ep.label) << "\",\"would_push\":" << (wouldPush ? "true" : "false")
             << ",\"push_t_ms\":" << pushAtMs << ",\"lead_s\":" << leadAtPush
             << ",\"first_ready_t_ms\":" << firstReadyMs
             << ",\"first_complete_t_ms\":" << firstCompleteMs
@@ -388,17 +365,15 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         episodeResults.push_back(episodeRow.str());
     }
 
-    // soft_false_* = FALSE_PUSH with baro_lower_platform: scored as positives (same as confirmed).
-    // soft_false_avoided already folded into missed. Hard FALSE_PUSH only in false_*.
     const double scoreValue = 2.0 * static_cast<double>(falseAvoided) - 2.0 * static_cast<double>(falseKept) +
-        1.5 * static_cast<double>(confirmedKept + softFalseKept) - 3.0 * static_cast<double>(missed) +
+        1.5 * static_cast<double>(confirmedKept) - 3.0 * static_cast<double>(missed) +
         1.5 * static_cast<double>(recovered) + 0.75 * static_cast<double>(abortedIntentRecognized) +
         1.25 * static_cast<double>(abortedCancelRecognized) + leadUtility;
     const double leadMae = (leadErrN > 0) ? (leadAbsErrSum / static_cast<double>(leadErrN)) : -1.0;
 
     std::ostringstream oss;
     oss << "{\"ok\":true,\"method\":\"hsmm_window_replay\""
-        << ",\"score_version\":3,\"lead_utility\":" << leadUtility
+        << ",\"score_version\":4,\"lead_utility\":" << leadUtility
         << ",\"late_seconds\":" << lateSeconds
         << ",\"mean_lead_s\":" << (leadErrN ? leadSum / leadErrN : -1.0)
         << ",\"prefix_cutoff_ms\":" << cutoffMs
@@ -407,16 +382,15 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         << ",\"notes\":\"Replay LeaveHsmm on stored leave-window observations. Evaluates w_*, enter_leave, and "
            "arm_delay_s. Counterfactual lead_s = t_star - first eligible push tick. "
            "Product bans (OUTSIDE/approaching/attach) stay in C++. Filtered by focus_side. "
-           "FALSE_PUSH with obs_baro_lower_platform counted as soft_false_* and scored as positives "
-           "(kept=+1.5 like confirmed; avoided folds into missed_leave=-3). "
+           "Ground-truth labels define scoring: FALSE_PUSH and TRUE_NEGATIVE remain negative "
+           "regardless of barometer shape. Context-specific sensor events never rewrite truth. "
            "ABORTED_LEAVE rewards recognizing intent before abort_t_ms and matching a cancel sequence after it; "
-           "it is not a hard negative. Hard FALSE_PUSH and explicit TRUE_NEGATIVE stay in false_kept/false_avoided.\""
+           "it is reported separately from ordinary negatives.\""
         << ",\"n_episodes\":" << n << ",\"n_false_push\":" << nFalse << ",\"n_confirmed_leave\":" << nConfirmed
         << ",\"n_missed_leave_label\":" << nMissedLabel
         << ",\"n_true_negative\":" << nTrueNegative
         << ",\"n_aborted_leave\":" << nAborted
         << ",\"false_avoided\":" << falseAvoided << ",\"false_kept\":" << falseKept
-        << ",\"soft_false_avoided\":" << softFalseAvoided << ",\"soft_false_kept\":" << softFalseKept
         << ",\"confirmed_kept\":" << confirmedKept << ",\"missed_leave\":" << missed
         << ",\"recovered_miss\":" << recovered << ",\"unscored\":" << nUnscored
         << ",\"aborted_intent_recognized\":" << abortedIntentRecognized
@@ -436,9 +410,8 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     }
     oss << ']'
         << ",\"better_guidance\":\"Prefer higher score. If missed_leave rises, revert the last change. "
-           "Positives: CONFIRMED_LEAVE and soft_false (FALSE_PUSH with baro_lower_platform / lobby-1F). "
-           "soft_false_kept is rewarded; soft_false_avoided counts as missed. "
-           "Hard false_kept (no baro_lower_platform) is the suppress target. "
+           "Positives are CONFIRMED_LEAVE and MISSED_LEAVE; negatives are FALSE_PUSH and TRUE_NEGATIVE. "
+           "Barometer shape is evidence, never a substitute for an outcome label. "
            "ABORTED_LEAVE is reported separately from false pushes. "
            "Diagnose obs_* before choosing enter_leave vs a channel w_*.\"}";
     return oss.str();
@@ -597,7 +570,6 @@ struct TrialGuardMetrics {
     bool ok = false;
     double score = -1.0e100;
     int false_kept = 0;
-    int soft_false_kept = 0;
     int confirmed_kept = 0;
     int missed_leave = 0;
 };
@@ -613,7 +585,6 @@ TrialGuardMetrics ParseTrialGuardMetrics(const std::string &json)
     double v = 0.0;
     if (ExtractNumber(json, "score", &v)) m.score = v;
     if (ExtractNumber(json, "false_kept", &v)) m.false_kept = static_cast<int>(v);
-    if (ExtractNumber(json, "soft_false_kept", &v)) m.soft_false_kept = static_cast<int>(v);
     if (ExtractNumber(json, "confirmed_kept", &v)) m.confirmed_kept = static_cast<int>(v);
     if (ExtractNumber(json, "missed_leave", &v)) m.missed_leave = static_cast<int>(v);
     return m;
@@ -950,10 +921,9 @@ bool CommitThetaTrial(std::string *err)
         }
         return false;
     }
-    if (candidate.confirmed_kept < gTrialBaselineMetrics.confirmed_kept ||
-        candidate.soft_false_kept < gTrialBaselineMetrics.soft_false_kept) {
+    if (candidate.confirmed_kept < gTrialBaselineMetrics.confirmed_kept) {
         if (err) {
-            *err = "commit guard: confirmed/lower-platform positives decreased";
+            *err = "commit guard: confirmed recall decreased";
         }
         return false;
     }

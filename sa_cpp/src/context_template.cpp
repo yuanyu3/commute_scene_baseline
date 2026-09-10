@@ -35,7 +35,6 @@ struct Metrics {
     int n_missed_leave_label = 0;
     int false_kept = 0;
     int false_avoided = 0;
-    int soft_false_kept = 0;
     int confirmed_kept = 0;
     int missed_leave = 0;
     int recovered_miss = 0;
@@ -309,7 +308,7 @@ struct EpisodeParameterEvidence {
     std::string label;
     int64_t outcome_ms = 0;
     double max_baro_descent_m = 0.0;
-    bool lower_platform = false;
+    bool baro_available = false;
 };
 
 std::vector<EpisodeParameterEvidence> LoadParameterEvidence()
@@ -362,9 +361,9 @@ std::vector<EpisodeParameterEvidence> LoadParameterEvidence()
         if (ExtractNumber(line, "baro_descent_m", &descent)) {
             episode.max_baro_descent_m = std::max(episode.max_baro_descent_m, descent);
         }
-        double lower = 0.0;
-        if (ExtractNumber(line, "obs_baro_lower_platform", &lower) && lower >= 0.5) {
-            episode.lower_platform = true;
+        bool baroAvailable = false;
+        if (ExtractBool(line, "obs_baro_available", &baroAvailable) && baroAvailable) {
+            episode.baro_available = true;
         }
     }
     std::vector<EpisodeParameterEvidence> result;
@@ -372,7 +371,7 @@ std::vector<EpisodeParameterEvidence> LoadParameterEvidence()
     return result;
 }
 
-void EstimateRequestedParameters(const Theta &theta, TemplateSpec *spec)
+void EstimateRequestedParameters(TemplateSpec *spec)
 {
     if (spec == nullptr || spec->parameter_families.empty()) return;
     const auto episodes = LoadParameterEvidence();
@@ -414,22 +413,20 @@ void EstimateRequestedParameters(const Theta &theta, TemplateSpec *spec)
             for (const auto &episode : episodes) {
                 const bool anchorMatches = !episode.anchor_id.empty() ?
                     episode.anchor_id == spec->anchor_id : episode.side == spec->side;
-                if (!anchorMatches || episode.max_baro_descent_m <= 0.0) continue;
-                // A labeled lobby/lower-platform intermediate is valid
-                // vertical evidence even if the user has not crossed outside.
-                if ((episode.label == "CONFIRMED_LEAVE" || episode.label == "ABORTED_LEAVE" ||
-                    episode.label == "FALSE_PUSH") &&
-                    episode.lower_platform) {
+                if (!anchorMatches || !episode.baro_available) continue;
+                // Select samples from independent outcome labels and raw descent.
+                // Never use lower_platform here: it was computed with the old
+                // threshold and would make threshold fitting circular.
+                if (episode.label == "CONFIRMED_LEAVE") {
                     positives.push_back(episode.max_baro_descent_m);
-                } else if ((episode.label == "FALSE_PUSH" || episode.label == "TRUE_NEGATIVE") &&
-                    !episode.lower_platform) {
+                } else if (episode.label == "FALSE_PUSH" || episode.label == "TRUE_NEGATIVE") {
                     hardFalse.push_back(episode.max_baro_descent_m);
                 }
             }
             spec->baro_sample_count = static_cast<int>(positives.size());
             if (positives.size() < 3) {
                 spec->unavailable_parameter_families.push_back(
-                    "vertical_threshold:need_3_validated_lower_platform_episodes");
+                    "vertical_threshold:need_3_baro_valid_confirmed_leave_episodes");
                 continue;
             }
             const double positiveLow = Quantile(positives, 0.2);
@@ -438,9 +435,6 @@ void EstimateRequestedParameters(const Theta &theta, TemplateSpec *spec)
             if (!hardFalse.empty() && positiveLow > falseHigh + 2.0) {
                 threshold = 0.5 * (positiveLow + falseHigh);
             }
-            // Old history only proves stability when lower_platform was true,
-            // so lowering the live threshold cannot be replayed faithfully.
-            threshold = std::max(theta.baro_min_descent_m, threshold);
             threshold = std::max(4.0, std::min(30.0, threshold));
             spec->baro_min_descent_m = 2.0 * std::round(threshold / 2.0);
             spec->personalized_vertical_threshold = true;
@@ -729,7 +723,6 @@ Metrics ParseMetrics(const std::string &json)
     integer("n_missed_leave_label", &metrics.n_missed_leave_label);
     integer("false_kept", &metrics.false_kept);
     integer("false_avoided", &metrics.false_avoided);
-    integer("soft_false_kept", &metrics.soft_false_kept);
     integer("confirmed_kept", &metrics.confirmed_kept);
     integer("missed_leave", &metrics.missed_leave);
     integer("recovered_miss", &metrics.recovered_miss);
@@ -743,12 +736,12 @@ Metrics ParseMetrics(const std::string &json)
 std::string MetricsJson(const Metrics &m)
 {
     std::ostringstream out;
-    out << "{\"score_version\":3,\"mean_lead_s\":" << m.mean_lead_s
+    out << "{\"score_version\":4,\"mean_lead_s\":" << m.mean_lead_s
         << ",\"late_seconds\":" << m.late_seconds
         << ",\"score\":" << m.score << ",\"n_episodes\":" << m.n_episodes
         << ",\"n_false_push\":" << m.n_false_push << ",\"n_confirmed_leave\":" << m.n_confirmed_leave
         << ",\"n_missed_leave_label\":" << m.n_missed_leave_label << ",\"false_kept\":" << m.false_kept
-        << ",\"false_avoided\":" << m.false_avoided << ",\"soft_false_kept\":" << m.soft_false_kept
+        << ",\"false_avoided\":" << m.false_avoided
         << ",\"confirmed_kept\":" << m.confirmed_kept << ",\"missed_leave\":" << m.missed_leave
         << ",\"recovered_miss\":" << m.recovered_miss
         << ",\"n_aborted_leave\":" << m.n_aborted_leave
@@ -768,7 +761,6 @@ bool Eligible(const Metrics &base, const Metrics &candidate, std::string *why)
     if (candidate.score < base.score + 0.25) { if (why) *why = "score_not_improved"; return false; }
     if (candidate.missed_leave > base.missed_leave) { if (why) *why = "missed_leave_increased"; return false; }
     if (candidate.confirmed_kept < base.confirmed_kept) { if (why) *why = "confirmed_recall_decreased"; return false; }
-    if (candidate.soft_false_kept < base.soft_false_kept) { if (why) *why = "lower_platform_positive_decreased"; return false; }
     if (candidate.false_kept > base.false_kept) { if (why) *why = "hard_false_push_increased"; return false; }
     if (candidate.aborted_intent_recognized < base.aborted_intent_recognized) {
         if (why) *why = "aborted_intent_recognition_decreased"; return false;
@@ -856,8 +848,8 @@ std::string TrialJson(const Trial &trial)
             << "\",\"template\":" << SpecJson(candidate.spec, candidate.strength_name, candidate.strength)
             << ",\"metrics\":" << MetricsJson(candidate.metrics) << '}';
     }
-    out << "],\"commit_guard\":{\"score_must_improve\":true,\"hard_false_must_not_increase\":true,"
-           "\"confirmed_and_lower_platform_positives_must_not_decrease\":true,\"missed_must_not_increase\":true,"
+    out << "],\"commit_guard\":{\"score_must_improve\":true,\"false_push_must_not_increase\":true,"
+           "\"confirmed_recall_must_not_decrease\":true,\"missed_must_not_increase\":true,"
            "\"aborted_intent_must_not_decrease\":true,\"aborted_visible_push_must_not_increase\":true,"
            "\"per_episode_no_new_false_or_lost_positive\":true,\"per_episode_positive_must_not_be_later\":true}}";
     return out.str();
@@ -1235,7 +1227,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     }
 
     const Theta theta = CurrentTheta();
-    EstimateRequestedParameters(theta, &spec);
+    EstimateRequestedParameters(&spec);
     std::vector<ReplayEpisodeSummary> baselineEpisodes, incumbentEpisodes;
     const Metrics baseline = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
         RootDir(), theta, {}, 0, 100, false, 0, &baselineEpisodes, spec.anchor_id, spec.side));

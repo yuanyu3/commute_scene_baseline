@@ -64,7 +64,6 @@ struct EvalMetrics {
     int n_missed_leave_label = 0;
     int false_kept = 0;
     int false_avoided = 0;
-    int soft_false_kept = 0;
     int confirmed_kept = 0;
     int missed_leave = 0;
     int recovered_miss = 0;
@@ -339,7 +338,6 @@ EvalMetrics ParseEval(const std::string &json)
     PARSE_INT(n_missed_leave_label);
     PARSE_INT(false_kept);
     PARSE_INT(false_avoided);
-    PARSE_INT(soft_false_kept);
     PARSE_INT(confirmed_kept);
     PARSE_INT(missed_leave);
     PARSE_INT(recovered_miss);
@@ -357,7 +355,7 @@ std::string MetricsJson(const EvalMetrics &m)
         << ",\"n_false_push\":" << m.n_false_push << ",\"n_confirmed_leave\":" << m.n_confirmed_leave
         << ",\"n_missed_leave_label\":" << m.n_missed_leave_label
         << ",\"false_kept\":" << m.false_kept << ",\"false_avoided\":" << m.false_avoided
-        << ",\"soft_false_kept\":" << m.soft_false_kept << ",\"confirmed_kept\":"
+        << ",\"confirmed_kept\":"
         << m.confirmed_kept << ",\"missed_leave\":" << m.missed_leave << ",\"recovered_miss\":"
         << m.recovered_miss << ",\"lead_ok\":" << m.lead_ok << ",\"lead_late\":" << m.lead_late
         << ",\"lead_early\":" << m.lead_early << "}";
@@ -617,10 +615,6 @@ bool CandidateEligible(const EvalMetrics &base, const EvalMetrics &candidate, do
         if (why) *why = "confirmed_recall_decreased";
         return false;
     }
-    if (candidate.soft_false_kept < base.soft_false_kept) {
-        if (why) *why = "lower_platform_positive_decreased";
-        return false;
-    }
     return true;
 }
 
@@ -646,7 +640,7 @@ std::string TrialJson(const OptimizationTrial &trial)
         out << "],\"metrics\":" << MetricsJson(c.metrics) << "}";
     }
     out << "],\"commit_guard\":{\"requires_score_improvement\":true,\"missed_leave_must_not_increase\":true,"
-           "\"hard_false_must_not_increase\":true,\"confirmed_and_lower_platform_positives_must_not_decrease\":true,"
+           "\"false_push_must_not_increase\":true,\"confirmed_recall_must_not_decrease\":true,"
            "\"suppression_requires_positive_history\":true,\"sensitization_requires_negative_history\":true}}";
     return out.str();
 }

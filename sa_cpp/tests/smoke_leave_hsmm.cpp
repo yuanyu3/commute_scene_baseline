@@ -97,6 +97,31 @@ int main()
         return 1;
     }
 
+    // Atomic lower_platform is an Agent-template primitive, not a generic HSMM
+    // emission. Toggling it alone must leave every state probability unchanged.
+    LeaveHsmm noLowerHsmm;
+    LeaveHsmm lowerHsmm;
+    LeaveObservation noLower = outbound;
+    noLower.baro_available = true;
+    noLower.baro_descending = 0.4;
+    noLower.baro_lower_platform = 0.0;
+    LeaveObservation lower = noLower;
+    lower.baro_lower_platform = 1.0;
+    int64_t lowerT = tMs + 10000;
+    for (int i = 0; i < 12; ++i) {
+        lowerT += 5000;
+        const auto a = noLowerHsmm.Step(noLower, lowerT, config);
+        const auto b = lowerHsmm.Step(lower, lowerT, config);
+        for (size_t state = 0; state < a.probability.size(); ++state) {
+            if (std::abs(a.probability[state] - b.probability[state]) > 1e-12) {
+                std::cerr << "FAIL: atomic lower_platform directly changed generic HSMM state="
+                          << state << " absent=" << a.probability[state]
+                          << " present=" << b.probability[state] << "\n";
+                return 1;
+            }
+        }
+    }
+
     // Context templates add interaction evidence; they must not rewrite the
     // identical atomic observation shared by all three filters.
     LeaveHsmm neutralHsmm;

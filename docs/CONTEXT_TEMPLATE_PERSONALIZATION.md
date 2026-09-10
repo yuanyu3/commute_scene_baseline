@@ -26,7 +26,7 @@ Agent 可填写：
 
 `ABORTED_LEAVE` 和返回序列的实现、验证条件及限制见 [ABORTED_LEAVE_PERSONALIZATION.md](ABORTED_LEAVE_PERSONALIZATION.md)。
 
-当前只开放 `vertical_threshold`：使用至少 3 个经标签确认的低层平台 episode（包括最终确认离开，以及已判定为软正例的低层平台中间过程）估计稳定下降阈值，并保存在锚点模板内，不修改全局 theta。旧历史无法证明“低于旧阈值时平台是否稳定”，因此首版只允许气压阈值保持或升高，避免不可回放的激进放宽。
+当前只开放 `vertical_threshold`：使用至少 3 个气压有效的 `CONFIRMED_LEAVE` episode 作为正样本，并使用气压有效的 `FALSE_PUSH` / `TRUE_NEGATIVE` 作为负样本，从原始 `baro_descent_m` 估计稳定下降阈值，结果保存在锚点模板内，不修改全局 theta。样本选择不读取旧 `lower_platform`，避免用旧阈值产生的事件反过来训练新阈值；`ABORTED_LEAVE` 独立用于返回序列，不混入阈值正负样本。
 
 `departure_time` 暂时关闭。当前数据集包含刻意安排在非正常时间的采集过程，启用它会学习采集计划而非真实通勤习惯。代码仍可读取旧 schema 中的时间画像，但 catalog 和生成接口不再允许新模板申请该参数族。
 

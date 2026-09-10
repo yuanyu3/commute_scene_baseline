@@ -152,12 +152,14 @@ int main(int argc, char **argv)
         "\"acc\":12,\"walking\":false,\"home_relation\":\"INSIDE\",\"dist_home_m\":18}\n");
     WriteFile(root + "/episode_interpretations.jsonl", "");
 
-    // Three independent validated lower-platform episodes support deterministic
-    // estimation of the vertical parameter family.
+    // Three barometer-valid confirmed departures support deterministic vertical
+    // fitting. The lower-platform FALSE_PUSH below must stay a negative sample,
+    // regardless of the old threshold-derived primitive stored in history.
     WriteFile(root + "/policy_history.jsonl",
         "{\"t_ms\":1799999940000,\"outcome_t_ms\":1800000000000,\"side\":\"company\",\"label\":\"CONFIRMED_LEAVE\",\"baro_descent_m\":18,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":1,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
         "{\"t_ms\":1800086340000,\"outcome_t_ms\":1800086400000,\"side\":\"company\",\"label\":\"FALSE_PUSH\",\"baro_descent_m\":20,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":1,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
         "{\"t_ms\":1800172740000,\"outcome_t_ms\":1800172800000,\"side\":\"company\",\"label\":\"CONFIRMED_LEAVE\",\"baro_descent_m\":22,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":1,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
+        "{\"t_ms\":1800215940000,\"outcome_t_ms\":1800216000000,\"side\":\"company\",\"label\":\"CONFIRMED_LEAVE\",\"baro_descent_m\":24,\"obs_pdr_outbound\":0.8,\"obs_walking\":1,\"obs_geo_outbound\":0.7,\"obs_wifi_detach\":0,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":1,\"obs_baro_lower_platform\":0,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n"
         "{\"t_ms\":1800259140000,\"outcome_t_ms\":1800259200000,\"side\":\"company\",\"label\":\"FALSE_PUSH\",\"baro_descent_m\":5,\"obs_pdr_outbound\":0.1,\"obs_walking\":1,\"obs_geo_outbound\":0,\"obs_wifi_detach\":1,\"obs_cell_detach\":0,\"obs_ble_detach\":0,\"obs_time_prior\":0,\"obs_baro_descending\":0,\"obs_baro_lower_platform\":0,\"obs_baro_available\":true,\"obs_relation_known\":true,\"obs_inside\":true,\"obs_near\":false,\"obs_outside\":false,\"obs_approaching\":false,\"obs_attached\":false,\"lead_s\":60}\n");
 
     // Two explicitly labelled intent reversals. They are neither hard false
@@ -518,8 +520,9 @@ int main(int argc, char **argv)
     Call("generate_context_template", generated);
     if (generated.find("\"personalized_time\":false") == std::string::npos ||
         generated.find("\"personalized_vertical_threshold\":true") == std::string::npos ||
-        generated.find("\"baro_sample_count\":3") == std::string::npos) {
-        std::cerr << "FAIL supported parameter families were not estimated from three episodes\n";
+        generated.find("\"baro_sample_count\":3") == std::string::npos ||
+        generated.find("\"baro_min_descent_m\":14") == std::string::npos) {
+        std::cerr << "FAIL vertical threshold did not use independent confirmed/negative labels\n";
         ++fails;
     }
 

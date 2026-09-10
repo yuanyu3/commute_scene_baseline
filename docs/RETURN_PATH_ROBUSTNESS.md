@@ -82,7 +82,7 @@ C++ HSMM历史加载也拒绝同一 episode 内重复时间戳。
 
 `compare_return_paths.py` 使用原始结果标签计算 TP/FN/FP/TN。
 Agent 的 ABORTED_LEAVE 解释在两臂保持一致，但不能把原始 FALSE_PUSH 从准确率分母里移除。
-旧优化评分仍保留历史的 lower-platform soft-positive 设计，所以其 false_kept=0 不等于实际零误推。
+优化评分已取消 lower-platform soft-positive：`FALSE_PUSH` 始终按负样本计分，气压形态不能覆盖结果标签，因此 `false_kept` 可直接解释为回放中仍被触发的已标注误推。
 
 ## 本次实际结果
 

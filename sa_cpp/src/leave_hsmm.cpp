@@ -117,14 +117,18 @@ double LeaveHsmm::ExitProbability(LeavePhase phase, int ageS, int dtS, const Lea
 std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
     const LeaveObservation &observation, const LeaveHsmmConfig &config) const
 {
-    const std::array<double, 9> x {{observation.walking, observation.pdr_outbound, observation.geo_outbound,
+    // lower_platform is deliberately excluded from the generic HSMM emission.
+    // It remains available to the context-template primitive matcher, where an
+    // Agent-selected sequence can use it without baking one building layout
+    // into every user's baseline.
+    const std::array<double, 8> x {{observation.walking, observation.pdr_outbound, observation.geo_outbound,
         observation.wifi_detach, observation.cell_detach, observation.ble_detach, observation.time_prior,
-        observation.baro_descending, observation.baro_lower_platform}};
-    const std::array<std::array<double, 9>, kPhaseCount> expected {{
-        {{0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25, 0.03, 0.02}},
-        {{0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62, 0.30, 0.08}},
-        {{0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72, 0.80, 0.72}},
-        {{0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08, 0.82}},
+        observation.baro_descending}};
+    const std::array<std::array<double, 8>, kPhaseCount> expected {{
+        {{0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25, 0.03}},
+        {{0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62, 0.30}},
+        {{0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72, 0.80}},
+        {{0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08}},
     }};
 
     std::array<double, kPhaseCount> logLikelihood {};
@@ -139,9 +143,6 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
         if (observation.relation_known) {
             double relationExpected = 0.25;
             if (observation.inside) {
-                // INSIDE is a structural observation: it strongly rejects
-                // OUTSIDE but still permits predictive LEAVING before the gate.
-                // It must not inspect atomic sensors again.
                 const std::array<double, kPhaseCount> p {{0.65, 0.65, 0.65, 0.02}};
                 relationExpected = p[state];
             } else if (observation.near) {

@@ -72,7 +72,7 @@ C++ 只有在以下条件全部成立时才接受：
 - 中止 episode 的用户可见推送不能增加；
 - 原有确认离开、硬负样本、漏报和逐 episode 提前量保护继续生效。
 
-`vertical_threshold` 估计把有 lower-platform 的 `ABORTED_LEAVE` 当作有效垂直过程，而不是硬负样本，因此不会因为用户返回就自动抬高下降阈值。
+`vertical_threshold` 估计不使用 `ABORTED_LEAVE`，也不使用旧 `lower_platform` 选择样本；它只依据气压有效的独立结果标签与原始下降量拟合。`ABORTED_LEAVE` 只参与返回序列学习和相应的回放保护。
 
 ## 当前限制
 
