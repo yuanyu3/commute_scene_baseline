@@ -464,23 +464,6 @@ class SceneEngine:
             return True
         return (t - self._last_push_at).total_seconds() >= float(self.theta["push_cooldown_s"])
 
-    def _arm_delay_ok(self, feat: TickFeatures) -> bool:
-        if feat.walk_started_at is None:
-            return True
-        return (feat.t - feat.walk_started_at).total_seconds() >= float(self.theta["arm_delay_s"])
-
-    def _elevator_resume_ok(self, feat: TickFeatures, radio_ok: bool, pdr_m: float) -> bool:
-        """Shorten arming after a brief indoor stop, such as an elevator ride."""
-        if not feat.walking or feat.walk_started_at is None or self._last_walk_stop_at is None:
-            return False
-        stop_gap = (feat.walk_started_at - self._last_walk_stop_at).total_seconds()
-        return (
-            20.0 <= stop_gap <= 120.0
-            and (feat.t - feat.walk_started_at).total_seconds() >= 5.0
-            and radio_ok
-            and pdr_m >= float(self.theta.get("preleave_pdr_min_m", 4.0))
-        )
-
     def _gps_trust(self, feat: TickFeatures) -> float:
         """Confidence for GPS direction, separate from coarse relation use."""
         trust = _clip01(float(feat.gps_trust))
@@ -520,13 +503,6 @@ class SceneEngine:
         if speed < 0.05:
             return None
         return remain / speed
-
-    def _lead_window_ok(self, eta_s: Optional[float]) -> tuple[bool, str]:
-        if eta_s is None:
-            return True, ""
-        if eta_s > float(self.theta["lead_max_s"]):
-            return False, "LEAD_EARLY"
-        return True, ""
 
     def _update_approach(
         self,
@@ -751,7 +727,6 @@ class SceneEngine:
             and not approach_h
             and self.prev_rel_home != Relation.OUTSIDE
             and sh >= enter
-            and self._arm_delay_ok(feat)
         )
         co_leave_cand = (
             allow_company
@@ -759,15 +734,15 @@ class SceneEngine:
             and not approach_c
             and self.prev_rel_company != Relation.OUTSIDE
             and sc >= enter
-            and self._arm_delay_ok(feat)
         )
 
-        lead_ok = False
+        # ETA remains diagnostic. It does not block a valid HSMM departure;
+        # lead_min/lead_max are evaluated only by offline scoring.
+        lead_ok = True
         if home_leave_cand:
             new_scene = Scene.LEAVING_HOME
             self._leave_home_since = self._leave_home_since or feat.t
             active_eta = eta_home
-            lead_ok, lead_block = self._lead_window_ok(eta_home)
             if wifi_home_attach or approach_h:
                 push_block = "APPROACHING"
             elif h_rel == Relation.OUTSIDE:
@@ -776,8 +751,6 @@ class SceneEngine:
                 push_block = "ALREADY_PUSHED"
             elif not self._cooldown_ok(feat.t):
                 push_block = "COOLDOWN"
-            elif not lead_ok:
-                push_block = lead_block or "LEAD_EARLY"
             else:
                 should_service = True
                 intent = "DEPARTURE_NOTIFICATION"
@@ -787,7 +760,6 @@ class SceneEngine:
             new_scene = Scene.LEAVING_COMPANY
             self._leave_company_since = self._leave_company_since or feat.t
             active_eta = eta_co
-            lead_ok, lead_block = self._lead_window_ok(eta_co)
             if wifi_company_attach or approach_c:
                 push_block = "APPROACHING"
             elif c_rel == Relation.OUTSIDE:
@@ -796,8 +768,6 @@ class SceneEngine:
                 push_block = "ALREADY_PUSHED"
             elif not self._cooldown_ok(feat.t):
                 push_block = "COOLDOWN"
-            elif not lead_ok:
-                push_block = lead_block or "LEAD_EARLY"
             else:
                 should_service = True
                 intent = "LEAVE_COMPANY_NOTIFICATION"

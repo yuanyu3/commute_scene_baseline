@@ -153,15 +153,16 @@ class LeaveHsmm:
             obs.ble_detach,
             obs.time_prior,
             obs.baro_descending,
-            obs.baro_lower_platform,
         ]
         expected = [
-            [0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25, 0.03, 0.02],
-            [0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62, 0.30, 0.08],
-            [0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72, 0.80, 0.72],
-            [0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08, 0.82],
+            [0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25, 0.03],
+            [0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62, 0.30],
+            [0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72, 0.80],
+            [0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08],
         ]
-        keys = ["w_walk", "w_pdr", "w_geo", "w_wifi", "w_cell", "w_ble", "w_time", "w_baro", "w_baro"]
+        # lower_platform remains available to the Agent-selected primitive
+        # matcher, but is deliberately absent from the generic HSMM emission.
+        keys = ["w_walk", "w_pdr", "w_geo", "w_wifi", "w_cell", "w_ble", "w_time", "w_baro"]
         feature_reliability = [_clip01(float(theta.get(key, 0.0))) for key in keys]
         logs: List[float] = []
         for state in range(4):
