@@ -327,16 +327,8 @@ bool BaselineRuntime::ApplyThetaDeltaAndPersist(const std::string &param, double
             *out = th.weekday_leave_company_hour;
             return true;
         }
-        if (param == "arm_delay_s") {
-            *out = th.arm_delay_s;
-            return true;
-        }
         if (param == "lead_min_s") {
             *out = th.lead_min_s;
-            return true;
-        }
-        if (param == "lead_max_s") {
-            *out = th.lead_max_s;
             return true;
         }
         return false;

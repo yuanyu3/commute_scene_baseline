@@ -129,7 +129,12 @@ int main()
 
     // Indoor HSMM leave: walking + radio detach at company, source_type=2.
     // Engine ignores policy templates; push is P(LEAVING) >= enter_leave.
-    SceneEngine hsmmEngine(anchors, theta);
+    // Legacy timing fields may still be present in theta.json, but neither a
+    // just-started walk nor an ETA above lead_max may block a valid candidate.
+    Theta noTimingGateTheta = theta;
+    noTimingGateTheta.arm_delay_s = 3600.0;
+    noTimingGateTheta.lead_max_s = 1.0;
+    SceneEngine hsmmEngine(anchors, noTimingGateTheta);
     TickFeatures fp;
     fp.t_ms = f.t_ms + 20000;
     fp.has_gps = true;
@@ -140,7 +145,7 @@ int main()
     hsmmEngine.Step(fp);
     fp.walking = true;
     fp.has_walk_started = true;
-    fp.walk_started_at_ms = fp.t_ms - 30000;
+    fp.walk_started_at_ms = fp.t_ms;
     fp.wifi_company_detach = true;
     fp.cell_leave_company = true;
     fp.pdr_net_out_company_m = 20.0;

@@ -259,8 +259,6 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         theta->weekday_leave_home_hour = theta->weekday_leave_home_hour + delta;
     } else if (param == "weekday_leave_company_hour") {
         theta->weekday_leave_company_hour = theta->weekday_leave_company_hour + delta;
-    } else if (param == "arm_delay_s") {
-        theta->arm_delay_s = theta->arm_delay_s + delta;
     } else if (param == "hsmm_preleave_min_s") {
         theta->hsmm_preleave_min_s = theta->hsmm_preleave_min_s + delta;
         theta->hsmm_preleave_mean_s = std::max(theta->hsmm_preleave_min_s, theta->hsmm_preleave_mean_s);
@@ -287,14 +285,6 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
         theta->hsmm_leaving_min_s = std::min(theta->hsmm_leaving_min_s, theta->hsmm_leaving_mean_s);
     } else if (param == "lead_min_s") {
         theta->lead_min_s = theta->lead_min_s + delta;
-        if (theta->lead_min_s > theta->lead_max_s) {
-            theta->lead_max_s = theta->lead_min_s;
-        }
-    } else if (param == "lead_max_s") {
-        theta->lead_max_s = theta->lead_max_s + delta;
-        if (theta->lead_max_s < theta->lead_min_s) {
-            theta->lead_min_s = theta->lead_max_s;
-        }
     } else if (param == "baro_min_descent_m") {
         theta->baro_min_descent_m = theta->baro_min_descent_m + delta;
     } else {
@@ -311,7 +301,6 @@ bool ApplyThetaDelta(Theta *theta, const std::string &param, double delta, std::
     theta->hsmm_preleave_max_s = std::max(theta->hsmm_preleave_mean_s, theta->hsmm_preleave_max_s);
     theta->hsmm_leaving_mean_s = std::max(theta->hsmm_leaving_min_s, theta->hsmm_leaving_mean_s);
     theta->hsmm_leaving_max_s = std::max(theta->hsmm_leaving_mean_s, theta->hsmm_leaving_max_s);
-    theta->lead_max_s = std::max(theta->lead_min_s, theta->lead_max_s);
     return true;
 }
 

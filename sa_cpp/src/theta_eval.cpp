@@ -158,19 +158,10 @@ struct HsmmEpisode {
     std::vector<HsmmTick> ticks;
 };
 
-bool ArmDelayOk(int64_t walkStartedMs, int64_t tMs, double armDelayS)
-{
-    if (walkStartedMs <= 0) {
-        return true;
-    }
-    return (tMs - walkStartedMs) >= static_cast<int64_t>(armDelayS * 1000.0);
-}
-
-bool WouldHsmmPush(const LeaveHsmmResult &result, const LeaveObservation &obs, double enterLeave, int64_t walkStartedMs,
-    int64_t tMs, double armDelayS)
+bool WouldHsmmPush(const LeaveHsmmResult &result, const LeaveObservation &obs, double enterLeave)
 {
     return result.LeavingProbability() >= enterLeave && !obs.outside && !obs.approaching && !obs.attached &&
-        (obs.inside || obs.near) && ArmDelayOk(walkStartedMs, tMs, armDelayS);
+        (obs.inside || obs.near);
 }
 
 std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Theta &theta,
@@ -196,7 +187,6 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
     int abortedVisiblePush = 0;
     int leadOk = 0;
     int leadLate = 0;
-    int leadEarly = 0;
     double leadAbsErrSum = 0.0;
     double leadUtility = 0.0;
     double lateSeconds = 0.0;
@@ -221,12 +211,11 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         bool wouldPush = false;
         int64_t pushAtMs = 0;
         double leadAtPush = -1.0;
-        int64_t walkStartedMs = 0;
         bool episodeStart = true;
         std::ostringstream trace;
         bool firstTrace = true;
         int64_t firstReadyMs = 0, firstCompleteMs = 0, firstThresholdMs = 0, firstCancelMs = 0;
-        int negativeTicks = 0, productBlockedTicks = 0, armBlockedTicks = 0;
+        int negativeTicks = 0, productBlockedTicks = 0;
         for (const auto &tick : ep.ticks) {
             if (cutoffMs > 0 && tick.t_ms > cutoffMs) break;
             LeaveObservation observation = tick.obs;
@@ -243,13 +232,6 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                 adapter(observation, episodeStart);
             }
             episodeStart = false;
-            if (observation.walking >= 0.5) {
-                if (walkStartedMs <= 0) {
-                    walkStartedMs = tick.t_ms;
-                }
-            } else {
-                walkStartedMs = 0;
-            }
             const LeaveHsmmResult result = hsmm.Step(observation, tick.t_ms, cfg);
             if (!firstReadyMs && observation.sequence_ready >= 0.5) firstReadyMs = tick.t_ms;
             if (!firstCompleteMs && observation.sequence_complete >= 0.5) firstCompleteMs = tick.t_ms;
@@ -259,7 +241,6 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                 if (!firstThresholdMs) firstThresholdMs = tick.t_ms;
                 if (observation.outside || observation.approaching || observation.attached ||
                     (!observation.inside && !observation.near)) ++productBlockedTicks;
-                if (walkStartedMs > 0 && tick.t_ms - walkStartedMs < theta.arm_delay_s * 1000) ++armBlockedTicks;
             }
             if (includePrefixTrace) {
                 if (!firstTrace) trace << ',';
@@ -277,13 +258,10 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                     << ",\"threshold_pass\":" << (result.LeavingProbability() >= theta.enter_leave ? "true" : "false")
                     << ",\"product_gate_pass\":" << (!observation.outside && !observation.approaching &&
                         !observation.attached && (observation.inside || observation.near) ? "true" : "false")
-                    << ",\"arm_gate_pass\":" << (walkStartedMs <= 0 ||
-                        tick.t_ms - walkStartedMs >= theta.arm_delay_s * 1000 ? "true" : "false")
-                    << ",\"eligible_push\":" << (WouldHsmmPush(result, observation, theta.enter_leave,
-                        walkStartedMs, tick.t_ms, theta.arm_delay_s) ? "true" : "false") << '}';
+                    << ",\"eligible_push\":" << (WouldHsmmPush(result, observation, theta.enter_leave)
+                        ? "true" : "false") << '}';
             }
-            if (!wouldPush &&
-                WouldHsmmPush(result, observation, theta.enter_leave, walkStartedMs, tick.t_ms, theta.arm_delay_s)) {
+            if (!wouldPush && WouldHsmmPush(result, observation, theta.enter_leave)) {
                 wouldPush = true;
                 pushAtMs = tick.t_ms;
                 leadAtPush = (ep.outcome_ms > tick.t_ms)
@@ -301,14 +279,12 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         // Outcome labels/time are used only for scoring, never by the prefix filter.
         if (wouldPush && (ep.label == "CONFIRMED_LEAVE" || ep.label == "MISSED_LEAVE")) {
             const double late = std::max(0.0, theta.lead_min_s - leadAtPush);
-            const double early = std::max(0.0, leadAtPush - theta.lead_max_s);
-            leadUtility += 1.0 - (late + early) / 60.0;
+            leadUtility += 1.0 - late / 60.0;
             lateSeconds += late;
             leadSum += leadAtPush;
-            leadAbsErrSum += std::fabs(leadAtPush - 0.5 * (theta.lead_min_s + theta.lead_max_s));
+            leadAbsErrSum += late;
             ++leadErrN;
             if (late > 0) ++leadLate;
-            else if (early > 0) ++leadEarly;
             else ++leadOk;
         }
         if (isAborted) {
@@ -358,8 +334,7 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             << ",\"first_threshold_t_ms\":" << firstThresholdMs
             << ",\"first_cancel_t_ms\":" << firstCancelMs
             << ",\"negative_match_ticks\":" << negativeTicks
-            << ",\"threshold_product_blocked_ticks\":" << productBlockedTicks
-            << ",\"threshold_arm_blocked_ticks\":" << armBlockedTicks;
+            << ",\"threshold_product_blocked_ticks\":" << productBlockedTicks;
         if (includePrefixTrace) episodeRow << ",\"prefix_trace\":[" << trace.str() << ']';
         episodeRow << '}';
         episodeResults.push_back(episodeRow.str());
@@ -373,14 +348,14 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
 
     std::ostringstream oss;
     oss << "{\"ok\":true,\"method\":\"hsmm_window_replay\""
-        << ",\"score_version\":4,\"lead_utility\":" << leadUtility
+        << ",\"score_version\":5,\"lead_utility\":" << leadUtility
         << ",\"late_seconds\":" << lateSeconds
         << ",\"mean_lead_s\":" << (leadErrN ? leadSum / leadErrN : -1.0)
         << ",\"prefix_cutoff_ms\":" << cutoffMs
         << ",\"partial_replay\":" << (cutoffMs > 0 ? "true" : "false")
         << ",\"focus_side\":\"" << Esc(theta.focus_side) << "\""
-        << ",\"notes\":\"Replay LeaveHsmm on stored leave-window observations. Evaluates w_*, enter_leave, and "
-           "arm_delay_s. Counterfactual lead_s = t_star - first eligible push tick. "
+        << ",\"notes\":\"Replay LeaveHsmm on stored leave-window observations. Evaluates w_* and enter_leave. "
+           "Counterfactual lead_s = t_star - first eligible push tick. arm_delay and lead_max are not gates. "
            "Product bans (OUTSIDE/approaching/attach) stay in C++. Filtered by focus_side. "
            "Ground-truth labels define scoring: FALSE_PUSH and TRUE_NEGATIVE remain negative "
            "regardless of barometer shape. Context-specific sensor events never rewrite truth. "
@@ -396,13 +371,12 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
         << ",\"aborted_intent_recognized\":" << abortedIntentRecognized
         << ",\"aborted_cancel_recognized\":" << abortedCancelRecognized
         << ",\"aborted_visible_push\":" << abortedVisiblePush
-        << ",\"lead_ok\":" << leadOk << ",\"lead_late\":" << leadLate << ",\"lead_early\":" << leadEarly
-        << ",\"lead_mae_to_mid_s\":" << leadMae << ",\"score\":" << scoreValue
+        << ",\"lead_ok\":" << leadOk << ",\"lead_late\":" << leadLate
+        << ",\"mean_late_s\":" << leadMae << ",\"score\":" << scoreValue
         << ",\"theta\":{\"enter_leave\":" << theta.enter_leave << ",\"lead_min_s\":" << theta.lead_min_s
-        << ",\"lead_max_s\":" << theta.lead_max_s << ",\"w_walk\":" << theta.w_walk << ",\"w_pdr\":" << theta.w_pdr
+        << ",\"w_walk\":" << theta.w_walk << ",\"w_pdr\":" << theta.w_pdr
         << ",\"w_geo\":" << theta.w_geo << ",\"w_wifi\":" << theta.w_wifi << ",\"w_cell\":" << theta.w_cell
-        << ",\"w_ble\":" << theta.w_ble << ",\"w_time\":" << theta.w_time << ",\"w_baro\":" << theta.w_baro
-        << ",\"arm_delay_s\":" << theta.arm_delay_s << "}"
+        << ",\"w_ble\":" << theta.w_ble << ",\"w_time\":" << theta.w_time << ",\"w_baro\":" << theta.w_baro << "}"
         << ",\"episode_results\":[";
     for (size_t i = 0; i < episodeResults.size(); ++i) {
         if (i) oss << ',';
@@ -768,7 +742,6 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
     int unscored = 0;
     int leadOk = 0;
     int leadLate = 0;
-    int leadEarly = 0;
     double leadAbsErrSum = 0.0;
     int leadErrN = 0;
 
@@ -804,13 +777,11 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
                 ++missed;
             }
             if (ep.has_lead) {
-                const double mid = 0.5 * (theta.lead_min_s + theta.lead_max_s);
-                leadAbsErrSum += std::fabs(ep.lead_s - mid);
+                const double late = std::max(0.0, theta.lead_min_s - ep.lead_s);
+                leadAbsErrSum += late;
                 ++leadErrN;
-                if (ep.lead_s < theta.lead_min_s) {
+                if (late > 0.0) {
                     ++leadLate;
-                } else if (ep.lead_s > theta.lead_max_s) {
-                    ++leadEarly;
                 } else {
                     ++leadOk;
                 }
@@ -821,15 +792,14 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
     // Higher is better. Missed leave hurts most; keeping false pushes also hurts.
     const double scoreValue = 2.0 * static_cast<double>(falseAvoided) - 2.0 * static_cast<double>(falseKept) +
         1.5 * static_cast<double>(confirmedKept) - 3.0 * static_cast<double>(missed) +
-        1.0 * static_cast<double>(leadOk) - 0.5 * static_cast<double>(leadLate) -
-        0.5 * static_cast<double>(leadEarly);
+        1.0 * static_cast<double>(leadOk) - 0.5 * static_cast<double>(leadLate);
 
     const double leadMae = (leadErrN > 0) ? (leadAbsErrSum / static_cast<double>(leadErrN)) : -1.0;
 
     std::ostringstream oss;
     oss << "{\"ok\":true,\"method\":\"counterfactual_push_score\""
         << ",\"focus_side\":\"" << Esc(theta.focus_side) << "\""
-        << ",\"notes\":\"Replay recorded push P(LEAVING) against candidate enter_leave; lead vs lead_min/max. "
+        << ",\"notes\":\"Replay recorded push P(LEAVING) against candidate enter_leave; lead_min is a lateness objective, with no lead_max penalty. "
            "Not full sensor-sequence HSMM replay; cannot evaluate w_* or hsmm duration changes. Episodes filtered by focus_side.\""
         << ",\"path\":\"" << Esc(path) << "\",\"n_lines\":" << nLines << ",\"n_push_seen\":" << nPushSeen
         << ",\"n_label_seen\":" << nLabelSeen
@@ -837,10 +807,9 @@ std::string EvaluateThetaOnHistoryJson(const std::string &rootDir, const Theta &
         << ",\"false_avoided\":" << falseAvoided << ",\"false_kept\":" << falseKept
         << ",\"confirmed_kept\":" << confirmedKept << ",\"missed_leave\":" << missed
         << ",\"unscored\":" << unscored << ",\"lead_ok\":" << leadOk << ",\"lead_late\":" << leadLate
-        << ",\"lead_early\":" << leadEarly << ",\"lead_mae_to_mid_s\":" << leadMae << ",\"score\":" << scoreValue
+        << ",\"mean_late_s\":" << leadMae << ",\"score\":" << scoreValue
         << ",\"theta\":{\"enter_leave\":" << theta.enter_leave << ",\"lead_min_s\":" << theta.lead_min_s
-        << ",\"lead_max_s\":" << theta.lead_max_s << ",\"min_evidence\":" << theta.min_evidence
-        << ",\"arm_delay_s\":" << theta.arm_delay_s << "}"
+        << ",\"min_evidence\":" << theta.min_evidence << "}"
         << ",\"better_guidance\":\"Prefer higher score. If missed_leave rises, revert. "
            "This fallback cannot evaluate w_*; store obs_* in policy_history for full HSMM replay. "
            "No fixed recipe for false_kept—use evidence then trial+eval.\"}";

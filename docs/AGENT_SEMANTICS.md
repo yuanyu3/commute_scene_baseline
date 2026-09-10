@@ -44,11 +44,11 @@
 
 **语义：** 端上正在用的 θ（`theta.json`），例如：
 
-- 门控：`enter_leave` / `exit_leave` 是 `P(LEAVING)` 阈值；另有 `arm_delay_s`（`min_evidence` 仅诊断）
+- 门控：`enter_leave` / `exit_leave` 是 `P(LEAVING)` 阈值；`arm_delay_s` 已停用（`min_evidence` 仅诊断）
 - Evidence strength：新配置使用 `evidence_strength` 对象；旧 `w_*` 名称仅作兼容
 - 持续时间先验：`hsmm_preleave_*` / `hsmm_leaving_*`（完整序列 replay 上线前不允许 Agent 直接修改）
 - 时段先验：`weekday_leave_home_hour` / `weekday_leave_company_hour` / `leave_window_min`
-- 预测窗口：`lead_min_s` / `lead_max_s` / `away_confirm_s` / `min_away_s`
+- 提前量目标：`lead_min_s` 只衡量晚推；`lead_max_s` 已停用；另有 `away_confirm_s` / `min_away_s`
 - 侧重点：`focus_side`（`company` | `home` | `both`）
 
 Agent 用它了解「当前策略」，再决定改哪几个参。
@@ -83,7 +83,7 @@ Agent 用它了解「当前策略」，再决定改哪几个参。
 | `n_confirmed_leave` | 推送后确认离开 |
 | `n_missed_leave` | 真离开但未推送（漏推） |
 | `n_lead_samples` / `lead_p50_s` / `lead_p90_s` | 确认离开样本的 lead 分布 |
-| `n_lead_late` / `n_lead_ok` / `n_lead_early` | lead 相对默认 90–240s 的桶 |
+| `n_lead_late` / `n_lead_ok` | lead 是否达到 `lead_min_s` |
 
 `lead_s = t*_outside − t_push`：越大越「推得早」。
 

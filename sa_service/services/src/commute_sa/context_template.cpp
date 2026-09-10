@@ -736,7 +736,7 @@ Metrics ParseMetrics(const std::string &json)
 std::string MetricsJson(const Metrics &m)
 {
     std::ostringstream out;
-    out << "{\"score_version\":4,\"mean_lead_s\":" << m.mean_lead_s
+    out << "{\"score_version\":5,\"mean_lead_s\":" << m.mean_lead_s
         << ",\"late_seconds\":" << m.late_seconds
         << ",\"score\":" << m.score << ",\"n_episodes\":" << m.n_episodes
         << ",\"n_false_push\":" << m.n_false_push << ",\"n_confirmed_leave\":" << m.n_confirmed_leave

@@ -107,9 +107,9 @@ struct TickDecision {
     std::string uncertainty = "MEDIUM";
     /** Estimated seconds until crossing r_out (predictive leave). <0 if unknown. */
     double eta_leave_s = -1.0;
-    /** True when ETA ≤ lead_max_s (or ETA unknown). lead_min is post-hoc / agent only. */
+    /** ETA is diagnostic only; it does not gate a valid departure candidate. */
     bool lead_gate_ok = false;
-    /** Why push was blocked: NONE | COOLDOWN | UNCERTAIN | OUTSIDE | LEAD_EARLY | ALREADY_PUSHED | APPROACHING */
+    /** Why push was blocked: NONE | COOLDOWN | UNCERTAIN | OUTSIDE | ALREADY_PUSHED | APPROACHING */
     std::string push_block_reason = "NONE";
     /** Active bounded policy and its last gate result, for audit/debug APIs. */
     std::string policy_template = "confirmed_leaving";
@@ -120,7 +120,7 @@ struct TickDecision {
 
 /**
  * Realtime leave-home / leave-company HSMM + product FSM.
- * Push is predictive: only while still INSIDE/NEAR and ETA in lead window.
+ * Push is predictive while still INSIDE/NEAR; ETA is retained for diagnostics.
  */
 class SceneEngine {
 public:
@@ -150,14 +150,11 @@ private:
     std::optional<double> EstimateEtaOutS(bool hasDist, double distM, double rOut, bool walking, double pdrNetOut,
         std::optional<double> prevDist, std::optional<TickTsMs> prevT, TickTsMs tMs, bool gpsReliable) const;
 
-    bool LeadWindowOk(const std::optional<double> &etaS, std::string *blockReason) const;
-
     Relation RelTo(const TickFeatures &feat, const Anchor &anchor, double *distOut) const;
     /** Home: GPS fence. Company: source_type 2/1 when in vicinity; fence is auxiliary. */
     Relation CompanyRelTo(const TickFeatures &feat, double *distOut, bool *nearCompany) const;
     bool GpsFixUsable(const TickFeatures &feat) const;
     bool CooldownOk(TickTsMs tMs) const;
-    bool ArmDelayOk(const TickFeatures &feat) const;
 
     AnchorSet anchors_;
     Theta theta_;

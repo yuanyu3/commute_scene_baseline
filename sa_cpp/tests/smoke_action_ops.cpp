@@ -69,6 +69,16 @@ int main()
         return 1;
     }
 
+    const std::string disabledArm = commute_sa::ApplyThetaDeltaAction(
+        "{\"param\":\"arm_delay_s\",\"delta\":5,\"reason\":\"must_be_disabled\"}");
+    const std::string disabledLeadMax = commute_sa::ApplyThetaDeltaAction(
+        "{\"param\":\"lead_max_s\",\"delta\":30,\"reason\":\"must_be_disabled\"}");
+    if (disabledArm.find("\"ok\":false") == std::string::npos ||
+        disabledLeadMax.find("\"ok\":false") == std::string::npos) {
+        std::cerr << "FAIL retired timing gates remain Agent-tunable\n";
+        return 1;
+    }
+
     const std::string apply = commute_sa::ApplyThetaDeltaAction(
         "{\"param\":\"enter_leave\",\"delta\":0.03,\"reason\":\"smoke_false_push\"}");
     std::cout << "apply=" << apply << "\n";

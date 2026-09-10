@@ -4,7 +4,7 @@
 
 ## 本次落地的范围
 
-保留 Agent 选择事件序列、C++ 受约束校准、HSMM 在线融合的架构。不增加 expert，不改全局传感器权重、enter_leave、arm_delay 或状态时长，不硬编码任何建筑/楼层的提前触发规则。
+保留 Agent 选择事件序列、C++ 受约束校准、HSMM 在线融合的架构。不增加 expert，不改全局传感器权重、enter_leave 或状态时长，不硬编码任何建筑/楼层的提前触发规则；`arm_delay` 已从推送门控移除。
 
 本次复用既有0812 Agent模板，不再次调用LLM。实验验证的是校准与在线解释器的改进，不是新的Agent能力消融。
 
@@ -30,11 +30,11 @@
 
 ```text
 late  = max(0, lead_min - lead)
-early = max(0, lead - lead_max)
+early = 0  # 不再对提前更多设上限或扣分
 timing_utility = 1 - (late + early) / 60
 ```
 
-窗口内同分，避免无条件越早越好；窗口外每偏离60秒少1分。CONFIRMED_LEAVE、已恢复MISSED_LEAVE和既有低层平台软正样本均参与。分类计分不变，旧离散时间奖励替换为上述连续效用。输出 `score_version=2`、`mean_lead_s`、`late_seconds`；不可与旧版本分数直接比较。没有HSMM观测的旧counterfactual回退评分保持不变。
+达到 `lead_min` 后同分，提前更多不额外奖励，也不扣分；不足时每晚60秒少1分。`CONFIRMED_LEAVE` 和已恢复的 `MISSED_LEAVE` 参与，`FALSE_PUSH` 不会因低层平台形态改写为正样本。当前输出 `score_version=5`、`mean_lead_s`、`late_seconds` 和 `mean_late_s`，不可与旧版本分数直接比较；旧 counterfactual 回退评分也采用同样的单边晚推目标。
 
 ### 3. 模板前缀校准
 

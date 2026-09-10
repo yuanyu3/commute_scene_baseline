@@ -150,14 +150,6 @@ bool SceneEngine::CooldownOk(TickTsMs tMs) const
     return (tMs - *lastPushAt_) >= static_cast<TickTsMs>(theta_.push_cooldown_s * 1000.0);
 }
 
-bool SceneEngine::ArmDelayOk(const TickFeatures &feat) const
-{
-    if (!feat.has_walk_started) {
-        return true;
-    }
-    return (feat.t_ms - feat.walk_started_at_ms) >= static_cast<TickTsMs>(theta_.arm_delay_s * 1000.0);
-}
-
 std::optional<double> SceneEngine::EstimateEtaOutS(bool hasDist, double distM, double rOut, bool walking,
     double pdrNetOut, std::optional<double> prevDist, std::optional<TickTsMs> prevT, TickTsMs tMs, bool gpsReliable) const
 {
@@ -190,23 +182,6 @@ std::optional<double> SceneEngine::EstimateEtaOutS(bool hasDist, double distM, d
         return std::nullopt;
     }
     return remain / speed;
-}
-
-bool SceneEngine::LeadWindowOk(const std::optional<double> &etaS, std::string *blockReason) const
-{
-    if (!etaS.has_value()) {
-        // No ETA: allow if other gates pass (still predictive via INSIDE/NEAR + score).
-        return true;
-    }
-    // Only block "too early". ETA < lead_min means urgent (almost out) — still push while
-    // INSIDE/NEAR so "带钥匙" happens before fully leaving; agent uses post-hoc lead_s.
-    if (*etaS > theta_.lead_max_s) {
-        if (blockReason) {
-            *blockReason = "LEAD_EARLY";
-        }
-        return false;
-    }
-    return true;
 }
 
 SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const Theta &effectiveTheta, const TickFeatures &feat, Relation rel, bool hasDist, double distM,
@@ -489,11 +464,9 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     }
 
     const bool legacyHomeLeaveCand = allowHome && (hRel == Relation::kInside || hRel == Relation::kNear) &&
-        !approachHome && prevRelHome_ != Relation::kOutside && hsmmHome.LeavingProbability() >= enter &&
-        ArmDelayOk(feat);
+        !approachHome && prevRelHome_ != Relation::kOutside && hsmmHome.LeavingProbability() >= enter;
     const bool legacyCoLeaveCand = allowCompany && (cRel == Relation::kInside || cRel == Relation::kNear) &&
-        !approachCo && prevRelCompany_ != Relation::kOutside && hsmmCompany.LeavingProbability() >= enter &&
-        ArmDelayOk(feat);
+        !approachCo && prevRelCompany_ != Relation::kOutside && hsmmCompany.LeavingProbability() >= enter;
 
     const bool homeLeaveCand = legacyHomeLeaveCand;
     const bool coLeaveCand = legacyCoLeaveCand;
@@ -501,15 +474,14 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const std::string policyCompanyReason = "HSMM";
 
     std::optional<double> activeEta;
-    bool leadOk = false;
+    // ETA remains diagnostic, but no longer blocks an otherwise valid HSMM
+    // departure candidate. This avoids suppressing early predictive evidence.
+    bool leadOk = true;
 
     if (homeLeaveCand) {
         newScene = Scene::kLeavingHome;
         leaveHomeSince_ = leaveHomeSince_.value_or(feat.t_ms);
         activeEta = etaHome;
-        std::string leadBlock;
-        leadOk = LeadWindowOk(etaHome, &leadBlock);
-
         if (hRel == Relation::kOutside) {
             pushBlock = "OUTSIDE";
         } else if (approachHome || wifiHomeAttach) {
@@ -518,8 +490,6 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
             pushBlock = "ALREADY_PUSHED";
         } else if (!CooldownOk(feat.t_ms)) {
             pushBlock = "COOLDOWN";
-        } else if (!leadOk) {
-            pushBlock = leadBlock.empty() ? "LEAD_EARLY" : leadBlock;
         } else {
             shouldService = true;
             intent = "DEPARTURE_NOTIFICATION";
@@ -530,9 +500,6 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         newScene = Scene::kLeavingCompany;
         leaveCompanySince_ = leaveCompanySince_.value_or(feat.t_ms);
         activeEta = etaCo;
-        std::string leadBlock;
-        leadOk = LeadWindowOk(etaCo, &leadBlock);
-
         if (cRel == Relation::kOutside) {
             pushBlock = "OUTSIDE";
         } else if (approachCo || wifiCompanyAttach) {
@@ -541,8 +508,6 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
             pushBlock = "ALREADY_PUSHED";
         } else if (!CooldownOk(feat.t_ms)) {
             pushBlock = "COOLDOWN";
-        } else if (!leadOk) {
-            pushBlock = leadBlock.empty() ? "LEAD_EARLY" : leadBlock;
         } else {
             shouldService = true;
             intent = "LEAVE_COMPANY_NOTIFICATION";
@@ -653,11 +618,7 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     } else if ((cRel == Relation::kInside || cRel == Relation::kNear) && etaCo.has_value()) {
         d.eta_leave_s = *etaCo;
     }
-    if (d.eta_leave_s < 0.0) {
-        d.lead_gate_ok = true;
-    } else {
-        d.lead_gate_ok = LeadWindowOk(std::optional<double>(d.eta_leave_s), nullptr);
-    }
+    d.lead_gate_ok = true;
     d.push_block_reason = shouldService ? "NONE" : pushBlock;
     d.policy_template = "confirmed_leaving";
     d.policy_match_reason = homeLeaveCand ? policyHomeReason : policyCompanyReason;

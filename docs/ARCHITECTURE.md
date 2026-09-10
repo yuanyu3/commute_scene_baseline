@@ -71,13 +71,13 @@
 ## 4. 推送时序（预测离家）
 
 ```text
-条件：home ∈ {INSIDE,NEAR} 且 P(LEAVING)/hits/arm_delay 达标
-      且 ETA_out ≤ lead_max_s（太早不推）
+条件：home ∈ {INSIDE,NEAR} 且 P(LEAVING) 达标
+      （ETA_out 仅诊断，不再设置过早上限）
       且 非 OUTSIDE（完全离家后不推「带钥匙」）
 t_push = 上述条件首次满足的 tick（同一离开 episode 只推一次）
 t*     = 推送后首次 OUTSIDE
 lead   = t* − t_push
-目标：lead_min ≤ lead ≤ lead_max（默认 90s～240s；偏晚仍可在家时紧急推）
+目标：lead ≥ lead_min；只惩罚偏晚，提前更多不再受 lead_max 限制
 ```
 
 `eta_leave_s`：按外扩速度（或默认步行 1.2m/s）估计距穿过 `r_out` 还有多少秒。  

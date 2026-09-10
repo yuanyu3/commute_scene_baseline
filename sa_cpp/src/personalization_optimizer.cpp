@@ -43,7 +43,6 @@ constexpr ParamSpec kParamSpecs[] = {
     {"w_baro", 0.00, 1.00, 0.05},
     {"weekday_leave_home_hour", 0.0, 24.0, 0.10},
     {"weekday_leave_company_hour", 11.0, 21.0, 0.10},
-    {"arm_delay_s", 0.0, 90.0, 5.0},
     {"hsmm_preleave_min_s", 0.0, 120.0, 5.0},
     {"hsmm_preleave_mean_s", 20.0, 240.0, 10.0},
     {"hsmm_preleave_max_s", 60.0, 900.0, 30.0},
@@ -51,7 +50,6 @@ constexpr ParamSpec kParamSpecs[] = {
     {"hsmm_leaving_mean_s", 20.0, 360.0, 10.0},
     {"hsmm_leaving_max_s", 60.0, 1200.0, 30.0},
     {"lead_min_s", 0.0, 600.0, 15.0},
-    {"lead_max_s", 30.0, 900.0, 30.0},
     {"baro_min_descent_m", 2.0, 40.0, 2.0},
 };
 
@@ -69,7 +67,6 @@ struct EvalMetrics {
     int recovered_miss = 0;
     int lead_ok = 0;
     int lead_late = 0;
-    int lead_early = 0;
 };
 
 struct EpisodeSignature {
@@ -273,7 +270,6 @@ bool ReadParam(const Theta &t, const std::string &name, double *out)
     READ_PARAM(w_baro)
     READ_PARAM(weekday_leave_home_hour)
     READ_PARAM(weekday_leave_company_hour)
-    READ_PARAM(arm_delay_s)
     READ_PARAM(hsmm_preleave_min_s)
     READ_PARAM(hsmm_preleave_mean_s)
     READ_PARAM(hsmm_preleave_max_s)
@@ -281,7 +277,6 @@ bool ReadParam(const Theta &t, const std::string &name, double *out)
     READ_PARAM(hsmm_leaving_mean_s)
     READ_PARAM(hsmm_leaving_max_s)
     READ_PARAM(lead_min_s)
-    READ_PARAM(lead_max_s)
     READ_PARAM(baro_min_descent_m)
 #undef READ_PARAM
     return false;
@@ -306,7 +301,6 @@ void NormalizeTheta(Theta *t)
     t->hsmm_preleave_max_s = std::max(t->hsmm_preleave_mean_s, t->hsmm_preleave_max_s);
     t->hsmm_leaving_mean_s = std::max(t->hsmm_leaving_min_s, t->hsmm_leaving_mean_s);
     t->hsmm_leaving_max_s = std::max(t->hsmm_leaving_mean_s, t->hsmm_leaving_max_s);
-    t->lead_max_s = std::max(t->lead_min_s, t->lead_max_s);
     t->w_radio = t->w_wifi + t->w_cell + t->w_ble;
 }
 
@@ -343,7 +337,6 @@ EvalMetrics ParseEval(const std::string &json)
     PARSE_INT(recovered_miss);
     PARSE_INT(lead_ok);
     PARSE_INT(lead_late);
-    PARSE_INT(lead_early);
 #undef PARSE_INT
     return m;
 }
@@ -357,8 +350,7 @@ std::string MetricsJson(const EvalMetrics &m)
         << ",\"false_kept\":" << m.false_kept << ",\"false_avoided\":" << m.false_avoided
         << ",\"confirmed_kept\":"
         << m.confirmed_kept << ",\"missed_leave\":" << m.missed_leave << ",\"recovered_miss\":"
-        << m.recovered_miss << ",\"lead_ok\":" << m.lead_ok << ",\"lead_late\":" << m.lead_late
-        << ",\"lead_early\":" << m.lead_early << "}";
+        << m.recovered_miss << ",\"lead_ok\":" << m.lead_ok << ",\"lead_late\":" << m.lead_late << "}";
     return out.str();
 }
 
@@ -524,7 +516,6 @@ std::vector<std::pair<std::string, double>> ParamsForBlock(const std::string &bl
     }
     if (block == "leaving_duration") return {{"hsmm_leaving_mean_s", sign}};
     if (block == "trigger_threshold") return {{"enter_leave", sign}};
-    if (block == "arm_timing") return {{"arm_delay_s", sign}};
     return {};
 }
 
@@ -595,7 +586,7 @@ bool CandidateEligible(const EvalMetrics &base, const EvalMetrics &candidate, do
         return false;
     }
     if (objective == "lead" && candidate.lead_ok <= base.lead_ok &&
-        candidate.lead_late + candidate.lead_early >= base.lead_late + base.lead_early) {
+        candidate.lead_late >= base.lead_late) {
         if (why) *why = "lead_objective_not_improved";
         return false;
     }
@@ -735,8 +726,7 @@ std::string RunOptimizer(const std::string &paramsJson, const std::string &sourc
                 0.50 * static_cast<double>(c.metrics.recovered_miss - trial.baseline.recovered_miss);
         } else if (objective == "lead") {
             objectiveBonus = 0.50 * static_cast<double>(c.metrics.lead_ok - trial.baseline.lead_ok) -
-                0.25 * static_cast<double>((c.metrics.lead_late + c.metrics.lead_early) -
-                    (trial.baseline.lead_late + trial.baseline.lead_early));
+                0.25 * static_cast<double>(c.metrics.lead_late - trial.baseline.lead_late);
         }
         c.regularized_score = c.metrics.score + objectiveBonus - 0.15 * stepDistance -
             0.10 * std::max(0, static_cast<int>(changes.size()) - 1);

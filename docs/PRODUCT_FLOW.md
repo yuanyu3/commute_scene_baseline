@@ -2,7 +2,7 @@
 
 ```text
 1) 采集        Ability 硬件 dump（WGS84）+ 离开窗口稀疏样本
-2) 标准化判定  每 tick → SceneEngine（无 LLM）→ 预测推送（仍在家 + ETA≤lead_max）
+2) 标准化判定  每 tick → SceneEngine（无 LLM）→ 预测推送（仍在家；ETA仅诊断）
 3) 个性化      PersonalizationController 触发时 → Agent 生成模板结构（无数值）
 4) 验证部署    全历史 HSMM 回放 → active_context_template.json 提交或 no-op
 ```

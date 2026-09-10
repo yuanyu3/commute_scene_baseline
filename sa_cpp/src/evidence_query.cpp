@@ -399,7 +399,6 @@ std::string EvidenceQuery::GetErrorStatsJson(const std::string &paramsJson) cons
     int nUnknown = 0;
     int nMissed = 0;
     int nLeadLate = 0;
-    int nLeadEarly = 0;
     int nLeadOk = 0;
     std::vector<double> leads;
     if (in.is_open()) {
@@ -436,8 +435,6 @@ std::string EvidenceQuery::GetErrorStatsJson(const std::string &paramsJson) cons
                     leads.push_back(lead);
                     if (lead < 90.0) {
                         ++nLeadLate;
-                    } else if (lead > 240.0) {
-                        ++nLeadEarly;
                     } else {
                         ++nLeadOk;
                     }
@@ -472,7 +469,7 @@ std::string EvidenceQuery::GetErrorStatsJson(const std::string &paramsJson) cons
         << "\",\"since_ms\":" << sinceMs << ",\"n_push\":" << nPush << ",\"n_false_push\":" << nFalse
         << ",\"n_confirmed_leave\":" << nConfirmed << ",\"n_unknown_label\":" << nUnknown
         << ",\"n_missed_leave\":" << nMissed << ",\"n_lead_samples\":" << leads.size()
-        << ",\"n_lead_late\":" << nLeadLate << ",\"n_lead_ok\":" << nLeadOk << ",\"n_lead_early\":" << nLeadEarly
+        << ",\"n_lead_late\":" << nLeadLate << ",\"n_lead_ok\":" << nLeadOk
         << ",\"lead_p50_s\":" << pct(0.5) << ",\"lead_p90_s\":" << pct(0.9)
         << ",\"notes\":\"lead_s = t_star_outside - t_push; MISSED_LEAVE = sustained OUTSIDE without prior push\"}";
     return oss.str();

@@ -230,10 +230,6 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
         *lim = {11.0, 21.0, 0.10};
         return true;
     }
-    if (param == "arm_delay_s") {
-        *lim = {0.0, 90.0, 5.0};
-        return true;
-    }
     if (param == "hsmm_preleave_min_s") {
         *lim = {0.0, 120.0, 5.0};
         return true;
@@ -260,10 +256,6 @@ bool LookupLimit(const std::string &param, ParamLimit *lim)
     }
     if (param == "lead_min_s") {
         *lim = {0.0, 600.0, 15.0};
-        return true;
-    }
-    if (param == "lead_max_s") {
-        *lim = {30.0, 900.0, 30.0};
         return true;
     }
     if (param == "baro_min_descent_m") {
@@ -347,10 +339,6 @@ bool ReadParamValue(const Theta &t, const std::string &param, double *out)
         *out = t.weekday_leave_company_hour;
         return true;
     }
-    if (param == "arm_delay_s") {
-        *out = t.arm_delay_s;
-        return true;
-    }
     if (param == "hsmm_preleave_min_s") {
         *out = t.hsmm_preleave_min_s;
         return true;
@@ -377,10 +365,6 @@ bool ReadParamValue(const Theta &t, const std::string &param, double *out)
     }
     if (param == "lead_min_s") {
         *out = t.lead_min_s;
-        return true;
-    }
-    if (param == "lead_max_s") {
-        *out = t.lead_max_s;
         return true;
     }
     if (param == "baro_min_descent_m") {
@@ -448,11 +432,11 @@ std::string GetParamLimitsJson()
            R"("w_radio":{"min":0,"max":0.90,"step":0.05,"note":"legacy; prefer split channels"},)"
            R"("w_time":{"min":0,"max":1.0,"step":0.05},"w_baro":{"min":0,"max":1.0,"step":0.05},)"
            R"("weekday_leave_home_hour":{"min":0,"max":24,"step":0.10},)"
-           R"("weekday_leave_company_hour":{"min":11,"max":21,"step":0.10},"arm_delay_s":{"min":0,"max":90,"step":5},)"
+           R"("weekday_leave_company_hour":{"min":11,"max":21,"step":0.10},)"
            R"("hsmm_preleave_min_s":{"min":0,"max":120,"step":5},"hsmm_preleave_mean_s":{"min":20,"max":240,"step":10},)"
            R"("hsmm_preleave_max_s":{"min":60,"max":900,"step":30},"hsmm_leaving_min_s":{"min":0,"max":120,"step":5},)"
            R"("hsmm_leaving_mean_s":{"min":20,"max":360,"step":10},"hsmm_leaving_max_s":{"min":60,"max":1200,"step":30},)"
-           R"("lead_min_s":{"min":0,"max":600,"step":15},"lead_max_s":{"min":30,"max":900,"step":30},)"
+           R"("lead_min_s":{"min":0,"max":600,"step":15},)"
            R"("baro_min_descent_m":{"min":2,"max":40,"step":2}})";
 }
 
