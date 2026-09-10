@@ -83,17 +83,19 @@ cmake --build sa_cpp/build_hsmm
 
 ## Persistent company radio fingerprint
 
-`config/company_radio_fingerprint.json` is the reusable workplace profile. It is separate from the expiring on-device `radio_soft.json`. A floor-specific profile must be built only from explicitly labelled dwell recordings on that floor; do not build it from complete departure/return routes merely because their GPS remains inside the company fence. The current demo profile uses the three synchronized fifth-floor dwell recordings from 0812:
+`config/company_radio_fingerprint.json` is the reusable workplace profile. It is separate from the expiring on-device `radio_soft.json`. A floor-specific profile must be built only from explicitly labelled dwell recordings on that floor; do not build it from complete departure/return routes merely because their GPS remains inside the company fence. The current demo intentionally uses a tight `company_origin_001` snapshot collected on 2026-09-10 (two Wi-Fi scans over 20.2 seconds). This makes movement away from the origin easier to observe and leaves same-floor false detach cases for Agent-selected temporal structure to disambiguate. The paired Cell capture contains 91 samples but every native `cellId` is zero, so the committed Cell whitelist is empty instead of inventing an unsupported identity.
+
+For a broader production floor profile, rebuild from multiple explicitly labelled dwell recordings:
 
 ```bash
 python examples/build_company_radio_fingerprint.py \
   --dwell-session /mnt/d/0812/20260812_105415 \
   --dwell-session /mnt/d/0812/20260812_105416 \
   --dwell-session /mnt/d/0812/20260812_105417 \
-  --floor-label floor_5 --top-k 12 --preserve-cell
+  --floor-label floor_5 --top-k 12
 ```
 
-`--preserve-cell` keeps the existing company-wide cellular fingerprint unchanged; only WiFi is narrowed to the fifth-floor dwell context.
+Use `--preserve-cell` only when the existing output already contains a separately validated non-empty Cell whitelist and the rebuild is intended to change Wi-Fi alone.
 
 Offline replay loads this file by default. On device, copy it to `/data/service/el1/public/commuteagentservice/company_radio_fingerprint.json`; `BaselineRuntime` loads it at startup. WiFi coverage or Cell match can establish a trusted workplace context/barometer baseline, but is never push permission by itself.
 
