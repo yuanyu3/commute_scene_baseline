@@ -27,8 +27,10 @@ namespace {
 struct Metrics {
     bool ok = false;
     double score = -1.0e100;
+    double lead_utility = 0.0;
     double mean_lead_s = -1.0;
     double late_seconds = 0.0;
+    double early_seconds = 0.0;
     int n_episodes = 0;
     int n_false_push = 0;
     int n_confirmed_leave = 0;
@@ -712,11 +714,13 @@ Metrics ParseMetrics(const std::string &json)
     ExtractBool(json, "ok", &metrics.ok);
     ExtractNumber(json, "mean_lead_s", &metrics.mean_lead_s);
     ExtractNumber(json, "late_seconds", &metrics.late_seconds);
+    ExtractNumber(json, "early_seconds", &metrics.early_seconds);
     double value = 0.0;
     auto integer = [&](const char *key, int *target) {
         if (ExtractNumber(json, key, &value)) *target = static_cast<int>(value);
     };
     ExtractNumber(json, "score", &metrics.score);
+    ExtractNumber(json, "lead_utility", &metrics.lead_utility);
     integer("n_episodes", &metrics.n_episodes);
     integer("n_false_push", &metrics.n_false_push);
     integer("n_confirmed_leave", &metrics.n_confirmed_leave);
@@ -736,8 +740,9 @@ Metrics ParseMetrics(const std::string &json)
 std::string MetricsJson(const Metrics &m)
 {
     std::ostringstream out;
-    out << "{\"score_version\":5,\"mean_lead_s\":" << m.mean_lead_s
+    out << "{\"score_version\":6,\"mean_lead_s\":" << m.mean_lead_s
         << ",\"late_seconds\":" << m.late_seconds
+        << ",\"early_seconds\":" << m.early_seconds << ",\"lead_utility\":" << m.lead_utility
         << ",\"score\":" << m.score << ",\"n_episodes\":" << m.n_episodes
         << ",\"n_false_push\":" << m.n_false_push << ",\"n_confirmed_leave\":" << m.n_confirmed_leave
         << ",\"n_missed_leave_label\":" << m.n_missed_leave_label << ",\"false_kept\":" << m.false_kept

@@ -30,11 +30,13 @@
 
 ```text
 late  = max(0, lead_min - lead)
-early = 0  # 不再对提前更多设上限或扣分
-timing_utility = 1 - (late + early) / 60
+early = max(0, lead - lead_max)
+lead < lead_min:              utility = 1 - late / 60
+lead_min <= lead <= lead_max: utility = 1 + 0.5 × (lead-lead_min)/(lead_max-lead_min)
+lead > lead_max:              utility = 1.5 - early / 60
 ```
 
-达到 `lead_min` 后同分，提前更多不额外奖励，也不扣分；不足时每晚60秒少1分。`CONFIRMED_LEAVE` 和已恢复的 `MISSED_LEAVE` 参与，`FALSE_PUSH` 不会因低层平台形态改写为正样本。当前输出 `score_version=5`、`mean_lead_s`、`late_seconds` 和 `mean_late_s`，不可与旧版本分数直接比较；旧 counterfactual 回退评分也采用同样的单边晚推目标。
+区间内越早效用越高，但最多只增加0.5；超过 `lead_max` 后每过早60秒少1分，因此最优点位于 `lead_max`，而不是无限提前。`CONFIRMED_LEAVE` 和已恢复的 `MISSED_LEAVE` 参与，`FALSE_PUSH` 不会因低层平台形态改写为正样本。当前输出 `score_version=6`、`lead_utility`、`mean_lead_s`、`late_seconds`、`early_seconds` 和 `lead_mae_to_target_s`；旧 counterfactual 回退评分采用同一时间效用。
 
 ### 3. 模板前缀校准
 

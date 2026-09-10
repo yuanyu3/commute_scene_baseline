@@ -5,6 +5,7 @@
 #include "commute_sa/crs.h"
 #include "commute_sa/geo.h"
 #include "commute_sa/product_store.h"
+#include "commute_sa/theta.h"
 
 #include <algorithm>
 #include <cctype>
@@ -387,6 +388,10 @@ std::string EvidenceQuery::GetErrorStatsJson(const std::string &paramsJson) cons
 {
     const std::string root = ResolveRoot();
     const std::string path = root + "/leave_episodes.jsonl";
+    Theta theta = DefaultTheta();
+    LoadThetaFromFile(root + "/theta.json", &theta, nullptr);
+    const double leadMinS = std::max(0.0, theta.lead_min_s);
+    const double leadMaxS = std::max(leadMinS, theta.lead_max_s);
     int64_t sinceMs = 0;
     ExtractInt64(paramsJson, "since_ms", &sinceMs);
     std::string scene = "ALL";
@@ -400,6 +405,7 @@ std::string EvidenceQuery::GetErrorStatsJson(const std::string &paramsJson) cons
     int nMissed = 0;
     int nLeadLate = 0;
     int nLeadOk = 0;
+    int nLeadEarly = 0;
     std::vector<double> leads;
     if (in.is_open()) {
         std::string line;
@@ -433,8 +439,10 @@ std::string EvidenceQuery::GetErrorStatsJson(const std::string &paramsJson) cons
                 double lead = 0.0;
                 if (ExtractNumber(line, "lead_s", &lead)) {
                     leads.push_back(lead);
-                    if (lead < 90.0) {
+                    if (lead < leadMinS) {
                         ++nLeadLate;
+                    } else if (lead > leadMaxS) {
+                        ++nLeadEarly;
                     } else {
                         ++nLeadOk;
                     }
@@ -469,7 +477,8 @@ std::string EvidenceQuery::GetErrorStatsJson(const std::string &paramsJson) cons
         << "\",\"since_ms\":" << sinceMs << ",\"n_push\":" << nPush << ",\"n_false_push\":" << nFalse
         << ",\"n_confirmed_leave\":" << nConfirmed << ",\"n_unknown_label\":" << nUnknown
         << ",\"n_missed_leave\":" << nMissed << ",\"n_lead_samples\":" << leads.size()
-        << ",\"n_lead_late\":" << nLeadLate << ",\"n_lead_ok\":" << nLeadOk
+        << ",\"n_lead_late\":" << nLeadLate << ",\"n_lead_ok\":" << nLeadOk << ",\"n_lead_early\":" << nLeadEarly
+        << ",\"lead_min_s\":" << leadMinS << ",\"lead_max_s\":" << leadMaxS
         << ",\"lead_p50_s\":" << pct(0.5) << ",\"lead_p90_s\":" << pct(0.9)
         << ",\"notes\":\"lead_s = t_star_outside - t_push; MISSED_LEAVE = sustained OUTSIDE without prior push\"}";
     return oss.str();

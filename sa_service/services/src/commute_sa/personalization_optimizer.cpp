@@ -56,6 +56,7 @@ constexpr ParamSpec kParamSpecs[] = {
 struct EvalMetrics {
     bool ok = false;
     double score = -1.0e100;
+    double lead_utility = 0.0;
     int n_episodes = 0;
     int n_false_push = 0;
     int n_confirmed_leave = 0;
@@ -326,6 +327,7 @@ EvalMetrics ParseEval(const std::string &json)
     double v = 0.0;
 #define PARSE_INT(field) if (ExtractNumber(json, #field, &v)) m.field = static_cast<int>(v)
     if (ExtractNumber(json, "score", &v)) m.score = v;
+    if (ExtractNumber(json, "lead_utility", &v)) m.lead_utility = v;
     PARSE_INT(n_episodes);
     PARSE_INT(n_false_push);
     PARSE_INT(n_confirmed_leave);
@@ -344,7 +346,8 @@ EvalMetrics ParseEval(const std::string &json)
 std::string MetricsJson(const EvalMetrics &m)
 {
     std::ostringstream out;
-    out << "{\"score\":" << m.score << ",\"n_episodes\":" << m.n_episodes
+    out << "{\"score\":" << m.score << ",\"lead_utility\":" << m.lead_utility
+        << ",\"n_episodes\":" << m.n_episodes
         << ",\"n_false_push\":" << m.n_false_push << ",\"n_confirmed_leave\":" << m.n_confirmed_leave
         << ",\"n_missed_leave_label\":" << m.n_missed_leave_label
         << ",\"false_kept\":" << m.false_kept << ",\"false_avoided\":" << m.false_avoided
@@ -585,8 +588,7 @@ bool CandidateEligible(const EvalMetrics &base, const EvalMetrics &candidate, do
         if (why) *why = "missed_leave_objective_not_improved";
         return false;
     }
-    if (objective == "lead" && candidate.lead_ok <= base.lead_ok &&
-        candidate.lead_late >= base.lead_late) {
+    if (objective == "lead" && candidate.lead_utility <= base.lead_utility + 1.0e-9) {
         if (why) *why = "lead_objective_not_improved";
         return false;
     }
@@ -725,8 +727,7 @@ std::string RunOptimizer(const std::string &paramsJson, const std::string &sourc
             objectiveBonus = 0.75 * static_cast<double>(trial.baseline.missed_leave - c.metrics.missed_leave) +
                 0.50 * static_cast<double>(c.metrics.recovered_miss - trial.baseline.recovered_miss);
         } else if (objective == "lead") {
-            objectiveBonus = 0.50 * static_cast<double>(c.metrics.lead_ok - trial.baseline.lead_ok) -
-                0.25 * static_cast<double>(c.metrics.lead_late - trial.baseline.lead_late);
+            objectiveBonus = 0.50 * (c.metrics.lead_utility - trial.baseline.lead_utility);
         }
         c.regularized_score = c.metrics.score + objectiveBonus - 0.15 * stepDistance -
             0.10 * std::max(0, static_cast<int>(changes.size()) - 1);

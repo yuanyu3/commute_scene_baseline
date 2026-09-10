@@ -56,7 +56,7 @@ struct Theta {
     double hsmm_leaving_max_s = 600.0;
     double hsmm_max_gap_s = 300.0;
     double lead_min_s = 90.0;
-    // Legacy config compatibility only; ETA has no upper push/score limit.
+    // Scoring target only; ETA has no upper realtime push gate.
     double lead_max_s = 240.0;
     double away_confirm_s = 180.0;
     double min_away_s = 1200.0;

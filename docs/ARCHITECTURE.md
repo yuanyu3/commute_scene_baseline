@@ -77,7 +77,7 @@
 t_push = 上述条件首次满足的 tick（同一离开 episode 只推一次）
 t*     = 推送后首次 OUTSIDE
 lead   = t* − t_push
-目标：lead ≥ lead_min；只惩罚偏晚，提前更多不再受 lead_max 限制
+评分目标：在 `[lead_min, lead_max]` 内越早效用越高，`lead_max` 为合理最早边界；实时推送不设该硬门控
 ```
 
 `eta_leave_s`：按外扩速度（或默认步行 1.2m/s）估计距穿过 `r_out` 还有多少秒。  

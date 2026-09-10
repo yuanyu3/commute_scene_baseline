@@ -44,6 +44,19 @@ static void WriteFixture(const std::string &root)
           "\"lead_s\":43}\n";
 }
 
+static void WriteLeadTimingFixture(const std::string &root)
+{
+    std::ofstream ep(root + "/leave_episodes.jsonl", std::ios::trunc);
+    const int leads[] = {90, 240, 300};
+    for (int i = 0; i < 3; ++i) {
+        const int64_t tPush = 1000 + i * 1000;
+        ep << "{\"type\":\"push\",\"t_push_ms\":" << tPush
+           << ",\"intent\":\"LEAVE_COMPANY_NOTIFICATION\",\"score_home\":0.1,\"score_company\":0.70}\n";
+        ep << "{\"type\":\"label\",\"t_push_ms\":" << tPush
+           << ",\"label\":\"CONFIRMED_LEAVE\",\"lead_s\":" << leads[i] << "}\n";
+    }
+}
+
 int main()
 {
     const std::string root = "action_ops_smoke_tmp";
@@ -56,6 +69,22 @@ int main()
     std::cout << "eval0=" << eval0 << "\n";
     if (eval0.find("\"n_episodes\":2") == std::string::npos) {
         std::cerr << "FAIL eval0\n";
+        return 1;
+    }
+
+    const std::string timingRoot = "lead_timing_score_smoke_tmp";
+    MKDIR(timingRoot.c_str());
+    WriteLeadTimingFixture(timingRoot);
+    const std::string timingEval = commute_sa::EvaluateThetaOnHistoryJson(timingRoot, th0, 0, 10);
+    std::cout << "timing_eval=" << timingEval << "\n";
+    // lead=90 -> 1.0, lead=240 -> 1.5, lead=300 -> 0.5. The bounded
+    // earliest-point utility is therefore 3.0 and the total score is 7.5.
+    if (timingEval.find("\"score_version\":6") == std::string::npos ||
+        timingEval.find("\"lead_early\":1") == std::string::npos ||
+        timingEval.find("\"lead_utility\":3") == std::string::npos ||
+        timingEval.find("\"early_seconds\":60") == std::string::npos ||
+        timingEval.find("\"score\":7.5") == std::string::npos) {
+        std::cerr << "FAIL bounded lead timing score\n";
         return 1;
     }
 

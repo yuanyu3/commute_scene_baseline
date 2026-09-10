@@ -67,7 +67,7 @@
    - 同一离开 episode **只推一次**
 
 **ETA**：家侧估计距穿过围栏外径 `r_out` 还有多少秒；公司侧室内（`source_type=2`）不采信围栏 ETA，GNSS（`1`）视为已出大门。  
-**LEAD**：事后 `lead_s = t* − t_push`，其中 `t*` 为推送后首次 `OUTSIDE`；只以 `lead_min_s` 衡量晚推，提前更多不扣分。
+**LEAD**：事后 `lead_s = t* − t_push`，其中 `t*` 为推送后首次 `OUTSIDE`；评分在 `[lead_min_s, lead_max_s]` 内奖励更早区分，超过 `lead_max_s` 后按过早扣分，但不用于实时拦截。
 
 ---
 
