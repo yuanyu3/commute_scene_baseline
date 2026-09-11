@@ -1,5 +1,8 @@
 # 原语语义与负向候选批量回放
 
+新生成模板的独立上下文强度及条件缺失见 [Context Engine](CONTEXT_ENGINE.md)。
+本工具仍保持固定配置诊断；仅固定强度下被拒绝不代表 generate 校准失败。
+
 catalog.event_semantics公开当前事件阈值、时间粒度和缺失语义。所有事件均在当前
 tick判断；positive_sequence/cancel_paths才负责跨tick的顺序。
 no_baro_descent要求baro_available、baro_descending<0.25和lower_platform<0.5；

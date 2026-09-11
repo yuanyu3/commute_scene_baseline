@@ -251,6 +251,10 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
             // Always rebuild template evidence from atomic observations. A
             // historical row may have been recorded under another template.
             observation.sequence_available = false;
+            observation.context_available = false;
+            observation.context_scores.fill(0);
+            observation.context_absence = 0;
+            observation.context_wait_s = 0;
             observation.sequence_progress = 0.0;
             observation.sequence_complete = 0.0;
             observation.sequence_ready = -1.0;
@@ -280,6 +284,11 @@ std::string ScoreHsmmReplay(const std::vector<HsmmEpisode> &episodes, const Thet
                     trace << result.probability[i];
                 }
                 trace << "],\"sequence_progress\":" << observation.sequence_progress
+                    << ",\"context_scores\":[" << observation.context_scores[0] << ','
+                    << observation.context_scores[1] << ',' << observation.context_scores[2] << ','
+                    << observation.context_scores[3] << ']'
+                    << ",\"context_absence\":" << observation.context_absence
+                    << ",\"context_wait_s\":" << observation.context_wait_s
                     << ",\"sequence_complete\":" << observation.sequence_complete
                     << ",\"sequence_ready\":" << observation.sequence_ready
                     << ",\"negative_match\":" << observation.negative_pattern_match

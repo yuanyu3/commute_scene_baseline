@@ -158,7 +158,10 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
 
         // Learned negative patterns own behavioral suppression. Attach/approach
         // remain available to template matching and product-level push guards.
-        if (observation.sequence_available) {
+        if (observation.context_available) {
+            const double context = observation.context_scores[state];
+            if (std::isfinite(context)) value += std::clamp(context, -6.0, 6.0);
+        } else if (observation.sequence_available) {
             // These are interaction terms: they encode temporal order that is
             // absent from the atomic per-tick observations.  Zero is neutral.
             const std::array<double, kPhaseCount> progressLlr {{-0.35, 0.65, 0.25, -0.30}};

@@ -174,6 +174,8 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"cancel_sequence", "optional ordered return events after the positive prefix starts", "string", false},
             {"cancel_paths", "optional alternatives: comma-ordered events, pipe-separated paths; see catalog; excludes cancel_sequence", "string", false},
             {"negative_pattern", "comma-separated events that jointly suppress nonspecific leave evidence", "string", false},
+            {"absence_trigger", "optional ordered positive events starting an expected-event clock; paired with absence_expected", "string", false},
+            {"absence_expected", "optional expected baro_descending|lower_platform|baro_ascending|vertical_closure; valid-time absence only; tools fit wait and separate strengths", "string", false},
             {"parameter_families", "optional vertical_threshold; departure_time is disabled; C++ estimates values", "string", false},
             {"rationale", "evidence-grounded explanation", "string", true}},
         &GenerateTemplate);

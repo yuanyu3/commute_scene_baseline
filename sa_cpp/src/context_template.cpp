@@ -1,4 +1,5 @@
 #include "commute_sa/context_template.h"
+#include "commute_sa/context_engine.h"
 
 #include "commute_sa/anchors.h"
 #include "commute_sa/baseline_runtime.h"
@@ -47,6 +48,13 @@ struct Metrics {
 };
 
 struct TemplateSpec {
+    bool context_engine = false; // Old persisted templates retain their replay semantics.
+    double positive_strength = 0.2;
+    double negative_strength = 0.2;
+    double return_strength = 0.2;
+    double absence_wait_s = 30.0;
+    std::vector<std::string> absence_trigger;
+    std::string absence_expected;
     int ready_prefix_length = 0; // 0: legacy fusion; fitted only by bounded replay.
     std::string template_name;
     std::string side = "company";
@@ -97,6 +105,10 @@ bool gActivePresent = false;
 TemplateSpec gActiveSpec;
 double gActiveStrength = 0.0;
 struct TemplateRuntimeState {
+    size_t absence_index = 0;
+    ContextAbsenceClock absence_clock;
+    int64_t context_started_ms = 0;
+    int64_t context_last_ms = 0;
     size_t positive_index = 0;
     size_t cancel_index = 0;
     int64_t last_match_ms = 0;
@@ -520,6 +532,14 @@ bool EventActive(const std::string &event, const LeaveObservation &obs)
 bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs, TemplateRuntimeState *state)
 {
     if (obs == nullptr || state == nullptr) return false;
+    if (spec.context_engine) {
+        if ((state->context_last_ms && (obs->t_ms < state->context_last_ms ||
+            obs->t_ms - state->context_last_ms > 30000)) ||
+            (state->context_started_ms && obs->t_ms - state->context_started_ms > 600000) || obs->outside)
+            *state = TemplateRuntimeState {};
+        state->context_last_ms = obs->t_ms;
+        if (!state->context_started_ms) state->context_started_ms = obs->t_ms;
+    }
     // Replaying an observation that was previously produced under another
     // active template must not carry old template evidence into this trial.
     obs->sequence_available = true;
@@ -536,6 +556,14 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         obs->baro_lower_platform = obs->baro_stable_platform &&
             obs->baro_descent_m >= spec.baro_min_descent_m ? 1.0 : 0.0;
     }
+    if (spec.context_engine) {
+        if (!obs->outside && state->absence_index < spec.absence_trigger.size() &&
+            EventActive(spec.absence_trigger[state->absence_index], *obs)) ++state->absence_index;
+        obs->context_absence = state->absence_clock.Step(obs->t_ms,
+            !obs->outside && !spec.absence_trigger.empty() && state->absence_index == spec.absence_trigger.size(),
+            obs->baro_available, EventActive(spec.absence_expected, *obs), spec.absence_wait_s);
+        obs->context_wait_s = state->absence_clock.valid_s;
+    }
     if (state->cancel_until_ms > 0) {
         // New templates may release the hold after a fresh, sustained departure.
         // A single noisy tick must not release cancellation.
@@ -550,6 +578,7 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
             }
         }
         if (state->cancel_until_ms > 0 && obs->t_ms <= state->cancel_until_ms) {
+            obs->context_absence = 0;
             obs->negative_pattern_match = 1.0;
             obs->cancel_sequence_match = 1.0;
             return false;
@@ -608,6 +637,9 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         if (obs->outside) state->positive_index = 0;
     }
     if (pathComplete || (!spec.cancel_sequence.empty() && state->cancel_index >= spec.cancel_sequence.size())) {
+        state->absence_clock = {};
+        state->absence_index = 0;
+        obs->context_absence = 0;
         constexpr int64_t kCancelHoldMs = 120000;
         state->cancel_until_ms = obs->t_ms + kCancelHoldMs;
         state->positive_index = 0;
@@ -635,6 +667,32 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         state->cancel_until_ms > 0;
 }
 
+bool ParseAbsence(const std::string &json, TemplateSpec *spec)
+{
+    std::string trigger;
+    ExtractString(json, "absence_trigger", &trigger);
+    ExtractString(json, "absence_expected", &spec->absence_expected);
+    spec->absence_trigger = SplitCsv(trigger);
+    if (spec->absence_trigger.empty() && spec->absence_expected.empty()) return true;
+    if (spec->absence_trigger.empty() || spec->absence_trigger.size() > 6) return false;
+    // Only this family currently exposes explicit availability. Other families
+    // can be enabled when their missing/quality semantics reach LeaveObservation.
+    const std::set<std::string> expected {"baro_descending", "lower_platform", "baro_ascending", "vertical_closure"};
+    if (!expected.count(spec->absence_expected)) return false;
+    for (const auto &e : spec->absence_trigger)
+        if (!SupportedEvents().count(e) || e.rfind("no_", 0) == 0 || e == spec->absence_expected) return false;
+    return true;
+}
+
+void ComposeSpecContext(const TemplateSpec &spec, LeaveObservation &obs)
+{
+    obs.context_available = spec.context_engine && obs.sequence_available;
+    obs.context_positive_strength = spec.positive_strength;
+    obs.context_negative_strength = spec.negative_strength;
+    obs.context_return_strength = spec.return_strength;
+    ComposeContextEvidence(obs);
+}
+
 void LoadActiveTemplateLocked()
 {
     gActiveLoaded = true;
@@ -652,6 +710,18 @@ void LoadActiveTemplateLocked()
     std::string negativeCsv;
     std::string parameterFamiliesCsv;
     double strength = 0.0;
+    ExtractBool(json, "context_engine", &spec.context_engine);
+    if (!ParseAbsence(json, &spec)) return;
+    if (spec.context_engine) {
+        for (auto field : {std::make_pair("positive_strength", &spec.positive_strength),
+            std::make_pair("negative_strength", &spec.negative_strength),
+            std::make_pair("return_strength", &spec.return_strength)}) {
+            if (!ExtractNumber(json, field.first, field.second) || !std::isfinite(*field.second) ||
+                *field.second < 0 || *field.second > 2.4) return;
+        }
+        if (!ExtractNumber(json, "absence_wait_s", &spec.absence_wait_s) ||
+            !std::isfinite(spec.absence_wait_s) || spec.absence_wait_s < 10 || spec.absence_wait_s > 120) return;
+    }
     if (!ExtractString(json, "template_name", &spec.template_name) ||
         !ExtractString(json, "side", &spec.side) ||
         !ExtractString(json, "anchor_id", &spec.anchor_id) ||
@@ -785,6 +855,10 @@ ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
     return [spec, strength, state](LeaveObservation &obs, bool episodeStart) mutable {
         if (episodeStart) state = TemplateRuntimeState {};
         obs.sequence_available = false;
+        obs.context_available = false;
+        obs.context_scores.fill(0);
+        obs.context_absence = 0;
+        obs.context_wait_s = 0;
         obs.sequence_progress = 0.0;
         obs.sequence_complete = 0.0;
         obs.sequence_ready = -1.0;
@@ -792,12 +866,16 @@ ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
         obs.cancel_sequence_match = 0.0;
         obs.sequence_reliability = 0.0;
         if (!obs.context_side.empty() && obs.context_side != spec.side) return;
-        if (spec.applicability == "baro_ready" && !obs.baro_available) return;
+        if (spec.applicability == "baro_ready" && !obs.baro_available) {
+            state.absence_clock.previous_valid = false;
+            return;
+        }
         if (state.last_match_ms > 0 &&
             (obs.t_ms < state.last_match_ms || obs.t_ms - state.last_match_ms > 600000)) {
             state = TemplateRuntimeState {};
         }
         if (ApplySpec(spec, strength, &obs, &state)) state.last_match_ms = obs.t_ms;
+        ComposeSpecContext(spec, obs);
         if (obs.outside || (!spec.cancel_paths_mode &&
             (obs.approaching || (obs.attached && state.cancel_until_ms <= 0)))) {
             state = TemplateRuntimeState {};
@@ -808,7 +886,14 @@ ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
 std::string SpecJson(const TemplateSpec &spec, const std::string &strengthName = "", double strength = 0.0)
 {
     std::ostringstream out;
-    out << "{\"schema_version\":6,\"ready_prefix_length\":" << spec.ready_prefix_length
+    out << "{\"schema_version\":7,\"context_engine\":" << (spec.context_engine ? "true" : "false")
+        << ",\"positive_strength\":" << spec.positive_strength
+        << ",\"negative_strength\":" << spec.negative_strength
+        << ",\"return_strength\":" << spec.return_strength
+        << ",\"absence_wait_s\":" << spec.absence_wait_s
+        << ",\"absence_trigger\":\"" << Esc(JoinCsv(spec.absence_trigger))
+        << "\",\"absence_expected\":\"" << Esc(spec.absence_expected)
+        << "\",\"ready_prefix_length\":" << spec.ready_prefix_length
         << ",\"template_name\":\"" << Esc(spec.template_name)
         << "\",\"side\":\"" << Esc(spec.side) << "\",\"anchor_id\":\"" << Esc(spec.anchor_id)
         << "\",\"applicability\":\"" << Esc(spec.applicability)
@@ -864,12 +949,18 @@ std::string TrialJson(const Trial &trial)
 
 std::string GetContextTemplateCatalogAction(const std::string &)
 {
-    return "{\"ok\":true,\"schema_version\":6,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
+    return "{\"ok\":true,\"schema_version\":7,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
            "\"cancel_paths\":{\"syntax\":\"ordered comma-separated events; pipe separates up to 3 alternative paths; mutually exclusive with cancel_sequence\","
            "\"validation\":\"each path needs baro_ascending before vertical_closure, or geo_outbound before approaching ending in attached; <=6 events per path\","
            "\"fusion\":\"any completed path; no additive sensor votes; redundant prefix extensions removed; 180s path expiry; fresh departure for 10s releases 120s hold\","
            "\"evidence_rule\":\"attached_observed is whole-episode presence, NOT reattachment; missing auxiliary evidence must not become a mandatory prerequisite\"},"
            "\"applicability\":[\"always\",\"baro_ready\"],"
+           "\"context_engine\":{\"output\":\"bounded additive log evidence c_t[AT,PRE,LEAVE,OUT], replaces legacy sequence emission\","
+           "\"absence_trigger\":\"optional comma-separated ordered positive events, <=6; paired with absence_expected; expected cannot be in trigger\","
+           "\"absence_expected\":\"baro_descending|lower_platform|baro_ascending|vertical_closure; only events with explicit availability supported in v1\","
+           "\"absence_semantics\":\"after trigger, consecutive available intervals accumulate valid seconds; score ramps to one at fitted wait; missing observations emit zero and do not count; expected event latches satisfaction until context reset\","
+           "\"lifecycle\":\"30s tick gap or clock reversal resets context; 600s lifetime; outside and completed return reset absence; legacy product guards retained\","
+           "\"calibration\":\"deterministic two-pass coordinate search: independent positive/negative/return strengths 0,0.2,0.6,1.2,2.4; absence wait 10,30,60,120s; causal prefix selection; no global optimum claim\"},"
            "\"events\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\","
            "\"ble_detach\",\"baro_descending\",\"lower_platform\",\"outside\",\"approaching\","
            "\"attached\",\"baro_ascending\",\"vertical_closure\",\"no_baro_descent\",\"no_geo_outbound\"],"
@@ -887,11 +978,11 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"effects\":{\"positive_sequence\":\"emit progress/completion and replay-calibrated prefix readiness; readiness replaces, never adds to, legacy positive evidence\","
            "\"negative_pattern\":\"emit an independent negative_pattern_match observation\","
            "\"cancel_sequence\":\"ordered reversal after a started positive prefix; emits a 120-second cancel observation\","
-           "\"strength\":\"emit sequence_reliability selected by deterministic replay\"},"
+           "\"strength\":\"new templates: independent calibrated context channels; legacy templates: sequence_reliability\"},"
            "\"parameter_families\":{\"vertical_threshold\":\"anchor-scoped stable descent threshold; needs 3 validated lower-platform episodes\"},"
            "\"disabled_parameter_families\":{\"departure_time\":\"disabled while collection timestamps are not representative of normal behavior\"},"
            "\"ready_prefix_length\":\"C++ evaluates legacy mode and each causal prefix; agent supplies sequence only\","
-           "\"strengths\":\"LOW|MEDIUM|HIGH selected by deterministic replay with continuous lead score and no false/missed regression\"}";
+           "\"strengths\":\"LOW|MEDIUM|HIGH warm start, then independent channel coordinate search; consult context_engine.calibration; all candidates pass the existing per-episode commit guards\"}";
 }
 
 std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
@@ -1182,6 +1273,9 @@ std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJso
 std::string GenerateContextTemplateAction(const std::string &paramsJson)
 {
     TemplateSpec spec;
+    spec.context_engine = true;
+    if (!ParseAbsence(paramsJson, &spec))
+        return "{\"ok\":false,\"error\":\"invalid absence_trigger/absence_expected; consult catalog\"}";
     std::string positiveCsv;
     std::string cancelCsv;
     std::string negativeCsv;
@@ -1246,7 +1340,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     EstimateRequestedParameters(&spec);
     std::vector<ReplayEpisodeSummary> baselineEpisodes, incumbentEpisodes;
     const Metrics baseline = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-        RootDir(), theta, {}, 0, 100, false, 0, &baselineEpisodes, spec.anchor_id, spec.side));
+        RootDir(), theta, {}, 0, 1000, false, 0, &baselineEpisodes, spec.anchor_id, spec.side));
     if (!baseline.ok) return "{\"ok\":false,\"error\":\"baseline history replay unavailable\"}";
     if ((!spec.cancel_sequence.empty() || !spec.cancel_paths.empty()) && baseline.n_aborted_leave < 2) {
         return "{\"ok\":false,\"error\":\"cancel_sequence requires at least 2 ABORTED_LEAVE episodes\","
@@ -1258,7 +1352,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         TemplateSpec single = spec;
         single.cancel_paths = {spec.cancel_paths[i]};
         const Metrics support = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(single, 0.2), 0, 100, false, 0, nullptr,
+            RootDir(), theta, BuildAdapter(single, 0.2), 0, 1000, false, 0, nullptr,
             spec.anchor_id, spec.side));
         if (!support.ok || support.aborted_cancel_recognized < 2) {
             return "{\"ok\":false,\"error\":\"each cancel path requires 2 independently labeled ABORTED_LEAVE matches\","
@@ -1285,28 +1379,23 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     }
     if (incumbentStrength > 0.0) {
         trial.incumbent = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(incumbentSpec, incumbentStrength), 0, 100, false, 0,
+            RootDir(), theta, BuildAdapter(incumbentSpec, incumbentStrength), 0, 1000, false, 0,
             &incumbentEpisodes, spec.anchor_id, spec.side));
     }
     const std::vector<std::pair<std::string, double>> levels = {{"LOW", 0.20}, {"MEDIUM", 0.40}, {"HIGH", 0.60}};
     double bestScore = -1.0e100;
     int nextId = 1;
-    for (int prefix = 0; prefix <= static_cast<int>(spec.positive_sequence.size()); ++prefix) {
-      for (const auto &level : levels) {
-        Candidate candidate;
-        candidate.spec = spec;
-        candidate.spec.ready_prefix_length = prefix;
+    int searchBest = -1;
+    auto evaluateCandidate = [&](Candidate candidate) {
         candidate.id = nextId++;
-        candidate.strength_name = level.first;
-        candidate.strength = level.second;
         std::vector<ReplayEpisodeSummary> candidateEpisodes;
         candidate.metrics = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
-            RootDir(), theta, BuildAdapter(candidate.spec, candidate.strength), 0, 100, false, 0,
+            RootDir(), theta, BuildAdapter(candidate.spec, candidate.strength), 0, 1000, false, 0,
             &candidateEpisodes, spec.anchor_id, spec.side));
         candidate.eligible = Eligible(baseline, candidate.metrics, &candidate.rejection);
         if (candidate.eligible && !CheckReplayEpisodeSafety(baselineEpisodes, candidateEpisodes, &candidate.rejection))
             candidate.eligible = false;
-        if (candidate.eligible && prefix > 0 && baseline.false_avoided + baseline.false_kept == 0) {
+        if (candidate.eligible && candidate.spec.ready_prefix_length > 0 && baseline.false_avoided + baseline.false_kept == 0) {
             candidate.eligible = false;
             candidate.rejection = "prefix_requires_hard_negative_history";
         }
@@ -1320,13 +1409,58 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
             candidate.eligible = false;
             candidate.rejection = "incumbent_" + candidate.rejection;
         }
-        const double regularized = candidate.metrics.score - 0.1 * candidate.strength;
+        const double regularized = candidate.metrics.score - 0.03 * (candidate.spec.positive_strength +
+            candidate.spec.negative_strength + candidate.spec.return_strength);
         if (candidate.eligible && regularized > bestScore) {
             bestScore = regularized;
             trial.best_index = static_cast<int>(trial.candidates.size());
         }
-        trial.candidates.push_back(candidate);
+        // Search seeds need not already beat the incumbent: stronger negative
+        // evidence may unlock a previously ineffective structural candidate.
+        if (candidate.metrics.ok && (searchBest < 0 ||
+            candidate.metrics.score > trial.candidates[searchBest].metrics.score))
+            searchBest = static_cast<int>(trial.candidates.size());
+        trial.candidates.push_back(std::move(candidate));
+    };
+    for (int prefix = 0; prefix <= static_cast<int>(spec.positive_sequence.size()); ++prefix) {
+      for (const auto &level : levels) {
+        Candidate candidate;
+        candidate.spec = spec;
+        candidate.spec.ready_prefix_length = prefix;
+        candidate.strength_name = level.first;
+        candidate.strength = level.second;
+        candidate.spec.positive_strength = level.second;
+        candidate.spec.negative_strength = level.second;
+        candidate.spec.return_strength = level.second;
+        evaluateCandidate(candidate);
       }
+    }
+    // Two bounded coordinate passes, all scored on the same causal replay.
+    // Independent channel strengths include zero; no Agent-supplied numbers.
+    for (int pass = 0; pass < 2 && searchBest >= 0; ++pass) {
+        for (int axis = 0; axis < 5; ++axis) {
+            Candidate seed = trial.candidates[searchBest];
+            if (axis == 1 && spec.negative_pattern.empty() && spec.absence_trigger.empty()) continue;
+            if (axis == 2 && spec.cancel_sequence.empty() && spec.cancel_paths.empty()) continue;
+            if (axis == 3 && spec.absence_trigger.empty()) continue;
+            std::vector<double> values = axis == 3 ? std::vector<double>{10, 30, 60, 120} :
+                std::vector<double>{0, 0.2, 0.6, 1.2, 2.4};
+            if (axis == 4) {
+                values.clear();
+                for (int p = 0; p <= static_cast<int>(spec.positive_sequence.size()); ++p) values.push_back(p);
+            }
+            for (double value : values) {
+                Candidate candidate = seed;
+                candidate.strength_name = "CALIBRATED";
+                candidate.rejection.clear();
+                if (axis == 0) candidate.spec.positive_strength = value;
+                if (axis == 1) candidate.spec.negative_strength = value;
+                if (axis == 2) candidate.spec.return_strength = value;
+                if (axis == 3) candidate.spec.absence_wait_s = value;
+                if (axis == 4) candidate.spec.ready_prefix_length = static_cast<int>(value);
+                evaluateCandidate(candidate);
+            }
+        }
     }
     std::lock_guard<std::mutex> lock(gTemplateMutex);
     gTrial = std::move(trial);
@@ -1530,7 +1664,9 @@ std::string DiagnoseContextTemplateOnHistoryAction(const std::string &args)
         if (ablation == "negative" || ablation == "both") {
             obs.negative_pattern_match = 0;
             obs.cancel_sequence_match = 0;
+            obs.context_absence = 0;
         }
+        ComposeContextEvidence(obs);
     };
     const auto active = EvaluateThetaOnHistoryWithAdapterJson(
         RootDir(), theta, BuildAdapter(spec, strength), 0, static_cast<int>(limit), false, 0, nullptr,
@@ -1551,11 +1687,16 @@ bool ApplyActiveContextTemplateObservation(const std::string &side, const std::s
     int64_t tMs, LeaveObservation *observation)
 {
     if (observation == nullptr) return false;
+    observation->context_available = false;
+    observation->context_scores.fill(0);
+    observation->context_absence = 0;
+    observation->context_wait_s = 0;
     std::lock_guard<std::mutex> lock(gTemplateMutex);
     if (!gActiveLoaded) LoadActiveTemplateLocked();
     if (!gActivePresent || gActiveSpec.side != side ||
         (!gActiveSpec.anchor_id.empty() && gActiveSpec.anchor_id != anchorId) ||
         (gActiveSpec.applicability == "baro_ready" && !observation->baro_available)) {
+        gActiveState.absence_clock.previous_valid = false;
         return false;
     }
     // A stale partial sequence must not leak into a later departure episode.
@@ -1565,6 +1706,7 @@ bool ApplyActiveContextTemplateObservation(const std::string &side, const std::s
     }
     observation->t_ms = tMs;
     const bool advanced = ApplySpec(gActiveSpec, gActiveStrength, observation, &gActiveState);
+    ComposeSpecContext(gActiveSpec, *observation);
     if (advanced) gActiveState.last_match_ms = tMs;
     if (observation->outside || (!gActiveSpec.cancel_paths_mode &&
         (observation->approaching || (observation->attached && gActiveState.cancel_until_ms <= 0)))) {

@@ -50,8 +50,9 @@
 7. 原语语义以 catalog.event_semantics 为准。必须区分逐tick、窗口和整段episode；bin均值大于零不代表达到事件阈值，某时刻出现过一个事件也不能否定其他时刻的负向原语。未知质量不得解释为物理上未发生。
    对有区分力假设且目录允许表达的负向候选，先调用 `evaluate_negative_pattern_candidates` 批量回放，再选择。candidates是最多8个候选的字符串，候选之间用 |，同一候选内部用逗号表示AND。当前模板正向、返回、强度及theta冻结；没有活动模板时使用纯负向诊断与固定LOW强度。这不是正式生成，也不消耗生成次数，每次任务最多两批。不得仅凭名称或语言推断宣布候选无效。
    比较reference与候选的逐episode推送、负向匹配次数、误推、漏报和提前量；匹配不是收益，推送之后匹配不能撤回通知。eligible只表示相对当前配置通过诊断保护，最终仍须generate/commit检查。一次强度下无效不证明所有配置无效。未测试候选须写入missing_evidence，不得声称最优或已验证不可行。
-   每次任务最多调用一次 `generate_context_template`，用于提交实测选择的结构；选择与批量实测不同的结构必须说明尚未验证的部分。候选被拒绝后允许discard/no-op，但须引用回放结果。
-8. 阅读前缀长度与 LOW/MEDIUM/HIGH 的 C++ 全历史回放结果。前缀和强度由工具选择；同时检查逐episode退化原因。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则调用 `discard_context_template` 或 no-op。
+   每次任务最多调用一次 `generate_context_template`，用于提交实测选择的结构；选择与批量实测不同的结构必须说明尚未验证的部分。固定强度批量回放不能替代Context Engine的独立强度校准：若仍有目录可表达、且有具体证据的结构假设，使用这一次generate完成校准后再判断；不得把仅在LOW下失败写成校准已失败。候选被拒绝后允许discard/no-op，但须引用回放结果。
+8. 新生成模板通过 Context Engine 输出每tick四状态修正分数，替换旧序列加分。工具独立校准 positive_strength、negative_strength、return_strength、前缀长度；读取候选实际参数与逐episode回放。不要因固定LOW诊断失败直接断言结构无效。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则discard/no-op。
+   当证据支持“某有序前缀后应出现后续事件”时，可在generate中选择absence_trigger和absence_expected，不能指定数值。当前后续事件仅支持目录列出的、具备明确可用性标志的气压原语。事件缺失按有效观测时间累积，缺测不是反证；后续事件出现即解除该缺失证据。此结构为可选假设，不能把场景习惯硬编码成所有用户必需步骤。等待时间由回放工具校准。坐标搜索仅验证已测试候选，不证明全局最优；历史训练得分不代表冻结测试集性能。
 9. 只有证据显示垂直过程具有跨 episode 稳定性时，才申请 `vertical_threshold`；不能仅凭一个 episode 申请。不得申请已关闭的时间参数，也不得调用或要求直接参数修改、参数优化器、policy mutation 或代码生成工具。
 
 ## 输出与审计

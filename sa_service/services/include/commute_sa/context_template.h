@@ -25,8 +25,8 @@ std::string DiagnoseContextTemplateOnHistoryAction(const std::string &paramsJson
 std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJson);
 
 /**
- * Validate an Agent-composed event sequence, replay LOW/MEDIUM/HIGH effect
- * strengths on historical HSMM observations, and stage the best safe template.
+ * Validate Agent-composed sequences and optional conditioned absence, calibrate
+ * independent context channels and wait time, and stage the best safe template.
  * The Agent supplies structure only; numeric strengths are chosen in C++.
  */
 std::string GenerateContextTemplateAction(const std::string &paramsJson);

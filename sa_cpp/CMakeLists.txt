@@ -36,6 +36,8 @@ endif()
 
 option(COMMUTE_SA_BUILD_SMOKE "Build host smoke tests" ON)
 if(COMMUTE_SA_BUILD_SMOKE)
+    add_executable(commute_context_engine_smoke tests/smoke_context_engine.cpp)
+    target_link_libraries(commute_context_engine_smoke PRIVATE commute_sa)
     add_executable(commute_sa_smoke tests/smoke_dump.cpp)
     target_link_libraries(commute_sa_smoke PRIVATE commute_sa)
 

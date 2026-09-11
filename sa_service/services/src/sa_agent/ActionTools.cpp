@@ -206,6 +206,8 @@ std::vector<std::string> RegisterActionTools()
             {"cancel_sequence", "optional ordered return events", "string", false},
             {"cancel_paths", "optional comma-ordered, pipe-separated return paths; see catalog; excludes cancel_sequence", "string", false},
             {"negative_pattern", "optional same-tick conjunction", "string", false},
+            {"absence_trigger", "optional ordered events starting an expected-event clock", "string", false},
+            {"absence_expected", "optional baro_descending|lower_platform|baro_ascending|vertical_closure; tools fit wait and strengths", "string", false},
             {"parameter_families", "optional vertical_threshold", "string", false},
             {"rationale", "evidence-grounded explanation", "string", true}}, &CallGenerateContextTemplate);
     RegisterOne("get_context_template_trial", "Inspect staged template candidates", {},

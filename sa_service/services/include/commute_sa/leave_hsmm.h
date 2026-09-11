@@ -58,6 +58,13 @@ struct LeaveObservation {
     double negative_pattern_match = 0.0;
     double cancel_sequence_match = 0.0;
     double sequence_reliability = 0.0;
+    bool context_available = false;
+    std::array<double, 4> context_scores {{0, 0, 0, 0}};
+    double context_positive_strength = 0.0;
+    double context_negative_strength = 0.0;
+    double context_return_strength = 0.0;
+    double context_absence = 0.0;
+    double context_wait_s = 0.0;
 };
 
 struct LeaveHsmmConfig {
