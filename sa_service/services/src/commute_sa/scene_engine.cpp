@@ -66,7 +66,6 @@ void SceneEngine::SetAnchors(const AnchorSet &anchors)
     anchors_ = anchors;
     home_hsmm_.Reset();
     company_hsmm_.Reset();
-    prevGpsSourceType_ = 0;
 }
 
 const AnchorSet &SceneEngine::GetAnchors() const
@@ -104,42 +103,36 @@ bool SceneEngine::GpsFixUsable(const TickFeatures &feat) const
     if (!feat.has_gps) {
         return false;
     }
-    if (feat.acc > theta_.max_gps_acc_m && feat.acc > theta_.allow_network_dwell_acc_m) {
+    if (feat.acc > theta_.max_gps_acc_m) {
         return false;
     }
     return true;
 }
 
-Relation SceneEngine::CompanyRelTo(const TickFeatures &feat, double *distOut, bool *nearCompany) const
+Relation SceneEngine::CompanyRelTo(const TickFeatures &feat, double *distOut) const
 {
-    if (nearCompany != nullptr) {
-        *nearCompany = false;
-    }
-    if (!feat.has_gps) {
-        return Relation::kUnknown;
-    }
-    const Relation geoRel = RelationToAnchor(feat.lat, feat.lon, anchors_.company.lat, anchors_.company.lon,
-        anchors_.company.r_in_m, anchors_.company.r_out_m, distOut);
-    const double dist = distOut != nullptr ? *distOut : 0.0;
-    const double vicinity = std::max(theta_.company_source_vicinity_m, anchors_.company.r_out_m);
-    const bool sticky = scene_ == Scene::kAtCompany || scene_ == Scene::kLeavingCompany;
-    const bool near = sticky || (theta_.w_wifi > 0.0 && feat.wifi_company_attach) || dist <= vicinity || geoRel == Relation::kInside ||
-        geoRel == Relation::kNear;
-    if (nearCompany != nullptr) {
-        *nearCompany = near;
-    }
-    if (near) {
-        if (feat.gps_source_type == kLocationSourceIndoorNetwork) {
-            return Relation::kInside;
-        }
-        if (feat.gps_source_type == kLocationSourceOutdoorGnss) {
-            return Relation::kOutside;
-        }
-    }
+    return RelTo(feat, anchors_.company, distOut);
+}
+
+double SceneEngine::GpsReliability(const TickFeatures &feat, bool hasDist, double distM,
+    const std::optional<double> &prevDist) const
+{
     if (!GpsFixUsable(feat)) {
-        return Relation::kUnknown;
+        return 0.0;
     }
-    return geoRel;
+    const double startAcc = std::max(0.0, theta_.gps_low_quality_start_m);
+    const double zeroAcc = std::max(startAcc + 1.0, theta_.gps_low_quality_zero_m);
+    double reliability = feat.acc <= startAcc ? 1.0 : Clip01((zeroAcc - feat.acc) / (zeroAcc - startAcc));
+    if (hasDist && prevDist.has_value() && prevTMs_.has_value() && feat.t_ms > *prevTMs_) {
+        const double dt = static_cast<double>(feat.t_ms - *prevTMs_) / 1000.0;
+        const double radialSpeed = std::abs(distM - *prevDist) / std::max(dt, 0.001);
+        const double startSpeed = std::max(0.0, theta_.gps_jump_speed_start_mps);
+        const double zeroSpeed = std::max(startSpeed + 0.1, theta_.gps_jump_speed_zero_mps);
+        if (radialSpeed > startSpeed) {
+            reliability *= Clip01((zeroSpeed - radialSpeed) / (zeroSpeed - startSpeed));
+        }
+    }
+    return Clip01(reliability);
 }
 
 bool SceneEngine::CooldownOk(TickTsMs tMs) const
@@ -187,7 +180,7 @@ std::optional<double> SceneEngine::EstimateEtaOutS(bool hasDist, double distM, d
 SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const Theta &effectiveTheta, const TickFeatures &feat, Relation rel, bool hasDist, double distM,
     double rIn, double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double wifiJaccard,
     bool wifiAttach, double centerHour, std::optional<double> prevDist, bool approaching,
-    bool radioSuppressed, bool gpsDistUnreliable) const
+    bool radioSuppressed, double gpsReliability) const
 {
     ObservationResult out;
     int hits = 0;
@@ -213,7 +206,7 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const Theta &e
     }
 
     double sGeo = 0.0;
-    if (useGeo && !gpsDistUnreliable) {
+    if (useGeo) {
         if (hasDist && (rel == Relation::kInside || rel == Relation::kNear)) {
             if (prevDist.has_value() && distM > *prevDist + 3.0) {
                 sGeo = Clip01(distM / std::max(rOut, 1.0));
@@ -224,10 +217,8 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const Theta &e
         } else if (rel == Relation::kOutside && !approaching) {
             sGeo = 0.8;
         }
-    } else if (useGeo && rel == Relation::kOutside && !approaching) {
-        // source_type 2→1 (or GNSS while near company) is the precise gate-leave.
-        sGeo = 1.0;
     }
+    sGeo *= Clip01(gpsReliability);
     if (useGeo && sGeo >= effectiveTheta.thr_geo) {
         ++hits;
     }
@@ -266,7 +257,8 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const Theta &e
         ++hits;
     }
 
-    if (approaching || (!gpsDistUnreliable && prevDist.has_value() && hasDist && distM + 8.0 < *prevDist)) {
+    if (approaching || (gpsReliability >= theta_.gps_approach_min_reliability &&
+        prevDist.has_value() && hasDist && distM + 8.0 < *prevDist)) {
         sGeo = 0.0;
         sWifi = 0.0;
     }
@@ -310,19 +302,20 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const bool wifiCompanyAttach = companyTheta.w_wifi > 0.0 && feat.wifi_company_attach;
     double dHome = 0.0;
     double dCo = 0.0;
-    bool nearCompany = false;
     const Relation hRel = RelTo(feat, anchors_.home, &dHome);
-    const Relation cRel = CompanyRelTo(feat, &dCo, &nearCompany);
+    const Relation cRel = CompanyRelTo(feat, &dCo);
     const bool hasHome = feat.has_gps && hRel != Relation::kUnknown;
     const bool hasCo = feat.has_gps && cRel != Relation::kUnknown;
-    const bool companySourceIndoor = nearCompany && feat.gps_source_type == kLocationSourceIndoorNetwork;
-    const bool companySourceOutdoor = nearCompany && feat.gps_source_type == kLocationSourceOutdoorGnss;
-    const bool companySourceGate = companySourceIndoor || companySourceOutdoor;
-    const bool companyGateLeave = companySourceOutdoor && prevGpsSourceType_ == kLocationSourceIndoorNetwork;
+    const double gpsReliabilityHome = GpsReliability(feat, hasHome, dHome, prevDistHome_);
+    const double gpsReliabilityCompany = GpsReliability(feat, hasCo, dCo, prevDistCompany_);
 
     auto updateApproach = [&](Relation rel, bool hasDist, double distM, Relation prevRel,
                                const std::optional<double> &prevDist, int *streak, bool wifiAttach,
-                               bool *returnFromOutside) -> bool {
+                               bool *returnFromOutside, double gpsReliability) -> bool {
+        if (gpsReliability < theta_.gps_approach_min_reliability) {
+            *streak = 0;
+            return wifiAttach;
+        }
         if (hasDist && prevDist.has_value() && distM + 3.0 < *prevDist) {
             ++(*streak);
         } else {
@@ -346,24 +339,9 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         return approaching;
     };
     const bool approachHome = updateApproach(hRel, hasHome, dHome, prevRelHome_, prevDistHome_, &approachHomeStreak_,
-        wifiHomeAttach, &returnFromOutsideHome_);
-    bool approachCo = false;
-    if (companySourceGate) {
-        approachCompanyStreak_ = 0;
-        if (prevGpsSourceType_ == kLocationSourceOutdoorGnss && companySourceIndoor) {
-            approachCo = true;
-            returnFromOutsideCompany_ = true;
-        }
-        if (wifiCompanyAttach) {
-            approachCo = true;
-        }
-        if (companyGateLeave) {
-            approachCo = false;
-        }
-    } else {
-        approachCo = updateApproach(cRel, hasCo, dCo, prevRelCompany_, prevDistCompany_, &approachCompanyStreak_,
-            wifiCompanyAttach, &returnFromOutsideCompany_);
-    }
+        wifiHomeAttach, &returnFromOutsideHome_, gpsReliabilityHome);
+    const bool approachCo = updateApproach(cRel, hasCo, dCo, prevRelCompany_, prevDistCompany_, &approachCompanyStreak_,
+        wifiCompanyAttach, &returnFromOutsideCompany_, gpsReliabilityCompany);
 
     auto noteApproachEdge = [&](bool approaching, bool *wasApproach, bool *returnFromOutside,
                                 std::optional<TickTsMs> *until) -> bool {
@@ -382,11 +360,11 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     auto sh = BuildLeaveObservation(homeTheta, feat, hRel, hasHome, dHome, anchors_.home.r_in_m, anchors_.home.r_out_m,
         feat.pdr_net_out_home_m, feat.wifi_home_detach, feat.cell_leave_home, feat.ble_home_detach,
         feat.wifi_jaccard_home, wifiHomeAttach, theta_.weekday_leave_home_hour, prevDistHome_, approachHome,
-        radioSupHome);
+        radioSupHome, gpsReliabilityHome);
     auto sc = BuildLeaveObservation(companyTheta, feat, cRel, hasCo, dCo, anchors_.company.r_in_m, anchors_.company.r_out_m,
         feat.pdr_net_out_company_m, feat.wifi_company_detach, feat.cell_leave_company, feat.ble_company_detach,
         feat.wifi_jaccard_company, wifiCompanyAttach, theta_.weekday_leave_company_hour, prevDistCompany_,
-        approachCo, radioSupCo, companySourceGate);
+        approachCo, radioSupCo, gpsReliabilityCompany);
     ApplyActiveContextTemplateObservation("home", anchors_.home.id, feat.t_ms, &sh.observation);
     ApplyActiveContextTemplateObservation("company", anchors_.company.id, feat.t_ms, &sc.observation);
     // A zero weight means the channel is unavailable, including values added
@@ -415,16 +393,12 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     const auto hsmmHome = home_hsmm_.Step(sh.observation, feat.t_ms, HsmmConfigFromTheta(homeTheta));
     const auto hsmmCompany = company_hsmm_.Step(sc.observation, feat.t_ms, HsmmConfigFromTheta(companyTheta));
 
-    const bool gpsReliable = feat.acc <= 50.0;
+    const bool gpsReliableHome = gpsReliabilityHome >= 0.50;
+    const bool gpsReliableCompany = gpsReliabilityCompany >= 0.50;
     const auto etaHome = EstimateEtaOutS(hasHome, dHome, anchors_.home.r_out_m, feat.walking, feat.pdr_net_out_home_m,
-        prevDistHome_, prevTMs_, feat.t_ms, gpsReliable);
-    std::optional<double> etaCo;
-    if (companySourceOutdoor) {
-        etaCo = 0.0;
-    } else if (!companySourceIndoor) {
-        etaCo = EstimateEtaOutS(hasCo, dCo, anchors_.company.r_out_m, feat.walking, feat.pdr_net_out_company_m,
-            prevDistCompany_, prevTMs_, feat.t_ms, gpsReliable);
-    }
+        prevDistHome_, prevTMs_, feat.t_ms, gpsReliableHome);
+    const auto etaCo = EstimateEtaOutS(hasCo, dCo, anchors_.company.r_out_m, feat.walking,
+        feat.pdr_net_out_company_m, prevDistCompany_, prevTMs_, feat.t_ms, gpsReliableCompany);
 
     const double enter = theta_.enter_leave;
     const int need = theta_.min_evidence;
@@ -580,7 +554,6 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     scene_ = newScene;
     prevRelHome_ = hRel;
     prevRelCompany_ = cRel;
-    prevGpsSourceType_ = feat.gps_source_type;
     if (hasHome) {
         prevDistHome_ = dHome;
     }
@@ -599,6 +572,8 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
     d.hsmm_preleave_company = hsmmCompany.PreLeaveProbability();
     d.hsmm_outside_home = hsmmHome.OutsideProbability();
     d.hsmm_outside_company = hsmmCompany.OutsideProbability();
+    d.gps_reliability_home = gpsReliabilityHome;
+    d.gps_reliability_company = gpsReliabilityCompany;
     d.home_relation = hRel;
     d.company_relation = cRel;
     d.has_dist_home = hasHome;

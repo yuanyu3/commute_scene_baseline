@@ -11,11 +11,6 @@ from .anchors import Anchor, AnchorSet
 from .geo import Relation, relation_to_anchor
 from .hsmm import LeaveHsmm, LeaveObservation, LeavePhase
 
-# Location source_type near company: 2 = still inside, 1 = already outside the gate.
-GPS_SOURCE_OUTDOOR = 1
-GPS_SOURCE_INDOOR = 2
-
-
 class Scene(str, Enum):
     AT_HOME = "AT_HOME"
     LEAVING_HOME = "LEAVING_HOME"
@@ -81,15 +76,12 @@ DEFAULT_THETA: Dict[str, Any] = {
     "push_cooldown_s": 1800,
     "max_gps_acc_m": 80.0,
     "allow_network_dwell_acc_m": 120.0,
-    # GPS remains useful for coarse anchor relation, but weak indoor fixes
-    # should not dominate departure direction or return/approach gating.
-    "gps_type2_weight": 0.15,
-    "gps_low_quality_start_m": 50.0,
+    # GPS reliability is based on measurable quality, never source_type.
+    "gps_low_quality_start_m": 20.0,
     "gps_low_quality_zero_m": 120.0,
-    "gps_min_weight": 0.05,
-    "gps_approach_min_weight": 0.50,
-    # Company: source_type 2=inside / 1=outside the gate; r_in/r_out is vicinity only.
-    "company_source_vicinity_m": 400.0,
+    "gps_jump_speed_start_mps": 3.0,
+    "gps_jump_speed_zero_mps": 15.0,
+    "gps_approach_min_reliability": 0.50,
     "focus_side": "all",
     # Relative vertical-distance gate.  This is physical height, not a
     # building-specific floor count, so it transfers across buildings.
@@ -258,7 +250,7 @@ def score_leaving_anchor(
     prev_dist: Optional[float],
     approaching: bool = False,
     radio_suppressed: bool = False,
-    gps_dist_unreliable: bool = False,
+    gps_reliability: float = 1.0,
 ) -> tuple[float, Dict[str, Any], int]:
     """Per-channel leave scores → weighted sum; hits use per-channel thresholds."""
     ev: Dict[str, Any] = {}
@@ -293,7 +285,7 @@ def score_leaving_anchor(
     ev["pdr_net_out"] = round(pdr_eff, 2)
 
     s_geo = 0.0
-    if use_geo and not gps_dist_unreliable:
+    if use_geo:
         if dist_m is not None and rel in (Relation.INSIDE, Relation.NEAR):
             if prev_dist is not None and dist_m > prev_dist + 3:
                 s_geo = _clip01(dist_m / max(r_out, 1))
@@ -302,10 +294,7 @@ def score_leaving_anchor(
             # No static NEAR leave credit.
         elif rel == Relation.OUTSIDE and not approaching:
             s_geo = 0.8
-    elif use_geo and rel == Relation.OUTSIDE and not approaching:
-        # source_type 2→1 (or GNSS while near company) is the precise gate-leave.
-        s_geo = 1.0
-    s_geo *= _clip01(float(feat.gps_trust))
+    s_geo *= _clip01(float(gps_reliability))
     if use_geo and s_geo >= thr_geo:
         hits += 1
     ev["s_geo"] = round(s_geo, 3)
@@ -346,7 +335,8 @@ def score_leaving_anchor(
     ev["radio_suppressed"] = radio_suppressed
 
     # Soft anti-return; hard approach gate also in SceneEngine.step.
-    if (not gps_dist_unreliable) and prev_dist is not None and dist_m is not None and dist_m + 8 < prev_dist:
+    if gps_reliability >= float(theta.get("gps_approach_min_reliability", 0.50)) and \
+            prev_dist is not None and dist_m is not None and dist_m + 8 < prev_dist:
         ev["toward_anchor"] = True
         return 0.0, ev, 0
     if approaching:
@@ -398,15 +388,12 @@ class SceneEngine:
         self._was_walking = False
         self._hsmm_home = LeaveHsmm()
         self._hsmm_company = LeaveHsmm()
-        self._prev_gps_source_type = 0
 
     def _rel(self, feat: TickFeatures, anchor: Anchor) -> tuple[Relation, Optional[float]]:
         if feat.lat is None or feat.lon is None:
             return Relation.UNKNOWN, None
         max_acc = float(self.theta["max_gps_acc_m"])
-        if feat.acc is not None and feat.acc > max_acc and feat.acc > float(
-            self.theta["allow_network_dwell_acc_m"]
-        ):
+        if feat.acc is not None and feat.acc > max_acc:
             return Relation.UNKNOWN, None
         return relation_to_anchor(
             feat.lat,
@@ -428,7 +415,7 @@ class SceneEngine:
         return True
 
     def _company_rel(self, feat: TickFeatures) -> tuple[Relation, Optional[float], bool]:
-        """Company relation: source_type 2/1 when near campus; GPS fence is auxiliary."""
+        """Company relation uses the same WGS84 fence as every other anchor."""
         if feat.lat is None or feat.lon is None:
             return Relation.UNKNOWN, None, False
         geo_rel, dist = relation_to_anchor(
@@ -439,25 +426,9 @@ class SceneEngine:
             self.anchors.company.r_in_m,
             self.anchors.company.r_out_m,
         )
-        vicinity = max(
-            float(self.theta.get("company_source_vicinity_m", 400.0)),
-            float(self.anchors.company.r_out_m),
-        )
-        sticky = self.scene in (Scene.AT_COMPANY, Scene.LEAVING_COMPANY)
-        near = (
-            sticky
-            or (float(self.theta.get("w_wifi", 0.0)) > 0.0 and feat.wifi_company_attach)
-            or dist <= vicinity
-            or geo_rel in (Relation.INSIDE, Relation.NEAR)
-        )
-        if near:
-            if feat.gps_source_type == GPS_SOURCE_INDOOR:
-                return Relation.INSIDE, dist, True
-            if feat.gps_source_type == GPS_SOURCE_OUTDOOR:
-                return Relation.OUTSIDE, dist, True
         if not self._gps_fix_usable(feat):
-            return Relation.UNKNOWN, dist, near
-        return geo_rel, dist, near
+            return Relation.UNKNOWN, dist, False
+        return geo_rel, dist, geo_rel in (Relation.INSIDE, Relation.NEAR)
 
     def _cooldown_ok(self, t: datetime) -> bool:
         if self._last_push_at is None:
@@ -467,14 +438,23 @@ class SceneEngine:
     def _gps_trust(self, feat: TickFeatures) -> float:
         """Confidence for GPS direction, separate from coarse relation use."""
         trust = _clip01(float(feat.gps_trust))
-        if feat.gps_source_type == 2:
-            trust *= float(self.theta.get("gps_type2_weight", 0.15))
         if feat.acc is not None:
-            start = float(self.theta.get("gps_low_quality_start_m", 50.0))
+            start = float(self.theta.get("gps_low_quality_start_m", 20.0))
             zero = float(self.theta.get("gps_low_quality_zero_m", 120.0))
             if feat.acc > start:
                 trust *= _clip01((zero - feat.acc) / max(1.0, zero - start))
         return max(0.0, min(1.0, trust))
+
+    def _gps_reliability(self, feat: TickFeatures, dist: Optional[float], prev_dist: Optional[float]) -> float:
+        trust = self._gps_trust(feat)
+        if dist is not None and prev_dist is not None and self.prev_t is not None and feat.t > self.prev_t:
+            dt = (feat.t - self.prev_t).total_seconds()
+            speed = abs(dist - prev_dist) / max(dt, 0.001)
+            start = float(self.theta.get("gps_jump_speed_start_mps", 3.0))
+            zero = max(start + 0.1, float(self.theta.get("gps_jump_speed_zero_mps", 15.0)))
+            if speed > start:
+                trust *= _clip01((zero - speed) / (zero - start))
+        return _clip01(trust)
 
     def _estimate_eta_out_s(
         self,
@@ -515,7 +495,7 @@ class SceneEngine:
     ) -> bool:
         """Return True if moving toward this anchor (return / approach)."""
         streak_attr = "_approach_home_streak" if side == "home" else "_approach_company_streak"
-        if gps_trust < float(self.theta.get("gps_approach_min_weight", 0.50)):
+        if gps_trust < float(self.theta.get("gps_approach_min_reliability", 0.50)):
             setattr(self, streak_attr, 0)
             return False
         streak = getattr(self, streak_attr)
@@ -560,36 +540,20 @@ class SceneEngine:
         wifi_company_attach = float(self.theta.get("w_wifi", 0.0)) > 0.0 and feat.wifi_company_attach
         home, company = self.anchors.home, self.anchors.company
         h_rel, d_home = self._rel(feat, home)
-        c_rel, d_co, near_company = self._company_rel(feat)
-        gps_trust = self._gps_trust(feat)
-        company_source_indoor = near_company and feat.gps_source_type == GPS_SOURCE_INDOOR
-        company_source_outdoor = near_company and feat.gps_source_type == GPS_SOURCE_OUTDOOR
-        company_source_gate = company_source_indoor or company_source_outdoor
-        company_gate_leave = company_source_outdoor and self._prev_gps_source_type == GPS_SOURCE_INDOOR
+        c_rel, d_co, _ = self._company_rel(feat)
+        gps_trust_home = self._gps_reliability(feat, d_home, self.prev_dist_home)
+        gps_trust_company = self._gps_reliability(feat, d_co, self.prev_dist_company)
 
         approach_h = self._update_approach(
-            "home", h_rel, d_home, self.prev_rel_home, self.prev_dist_home, gps_trust
+            "home", h_rel, d_home, self.prev_rel_home, self.prev_dist_home, gps_trust_home
         )
-        if company_source_gate:
-            self._approach_company_streak = 0
-            approach_c = False
-            if self._prev_gps_source_type == GPS_SOURCE_OUTDOOR and company_source_indoor:
-                approach_c = True
-                self._return_from_outside_company = True
-            if wifi_company_attach:
-                approach_c = True
-            if company_gate_leave:
-                approach_c = False
-        else:
-            approach_c = self._update_approach(
-                "company", c_rel, d_co, self.prev_rel_company, self.prev_dist_company, gps_trust
-            )
+        approach_c = self._update_approach(
+            "company", c_rel, d_co, self.prev_rel_company, self.prev_dist_company, gps_trust_company
+        )
         if wifi_home_attach:
             approach_h = True
         if wifi_company_attach:
             approach_c = True
-        if company_gate_leave:
-            approach_c = False
 
         radio_sup_h = self._note_approach_edge("home", approach_h, feat.t)
         radio_sup_c = self._note_approach_edge("company", approach_c, feat.t)
@@ -611,6 +575,7 @@ class SceneEngine:
             self.prev_dist_home,
             approaching=approach_h,
             radio_suppressed=radio_sup_h,
+            gps_reliability=gps_trust_home,
         )
         sc, ec, hc = score_leaving_anchor(
             feat,
@@ -629,15 +594,14 @@ class SceneEngine:
             self.prev_dist_company,
             approaching=approach_c,
             radio_suppressed=radio_sup_c,
-            gps_dist_unreliable=company_source_gate,
+            gps_reliability=gps_trust_company,
         )
         eh["approaching"] = approach_h
         ec["approaching"] = approach_c
-        eh["gps_trust"] = round(gps_trust, 3)
-        ec["gps_trust"] = round(gps_trust, 3)
+        eh["gps_trust"] = round(gps_trust_home, 3)
+        ec["gps_trust"] = round(gps_trust_company, 3)
         ec["gps_source_type"] = feat.gps_source_type
-        ec["company_source_gate"] = company_source_gate
-        ec["company_gate_leave"] = company_gate_leave
+        ec["gps_source_role"] = "POST_HOC_ONLY"
 
         def hsmm_observation(ev: Dict[str, Any], rel: Relation, approaching: bool, attached: bool) -> LeaveObservation:
             baro_ready = (
@@ -681,16 +645,12 @@ class SceneEngine:
         ec["hsmm_probability"] = hsmm_company.probability
 
         eta_home = self._estimate_eta_out_s(
-            d_home, home.r_out_m, feat.walking, feat.pdr_net_out_home_m, self.prev_dist_home, feat.t, gps_trust
+            d_home, home.r_out_m, feat.walking, feat.pdr_net_out_home_m, self.prev_dist_home, feat.t, gps_trust_home
         )
-        if company_source_outdoor:
-            eta_co = 0.0
-        elif company_source_indoor:
-            eta_co = None
-        else:
-            eta_co = self._estimate_eta_out_s(
-                d_co, company.r_out_m, feat.walking, feat.pdr_net_out_company_m, self.prev_dist_company, feat.t, gps_trust
-            )
+        eta_co = self._estimate_eta_out_s(
+            d_co, company.r_out_m, feat.walking, feat.pdr_net_out_company_m, self.prev_dist_company, feat.t,
+            gps_trust_company
+        )
 
         need = int(self.theta["min_evidence"])
         should_service = False
@@ -831,7 +791,6 @@ class SceneEngine:
         if d_co is not None:
             self.prev_dist_company = d_co
         self.prev_t = feat.t
-        self._prev_gps_source_type = feat.gps_source_type
 
         return TickDecision(
             scene=new_scene,

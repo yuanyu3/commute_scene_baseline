@@ -62,12 +62,15 @@ struct Theta {
     double min_away_s = 1200.0;
     double push_cooldown_s = 1800.0;
     double max_gps_acc_m = 80.0;
+    /** Legacy load compatibility; no source-specific dwell override is applied. */
     double allow_network_dwell_acc_m = 120.0;
-    /**
-     * Company vicinity (metres) in which source_type 2/1 overrides the GPS fence.
-     * r_in/r_out remain auxiliary; indoor network fixes are often hundreds of metres off.
-     */
-    double company_source_vicinity_m = 400.0;
+    /** GPS direction reliability falls linearly from 1 to 0 across this range. */
+    double gps_low_quality_start_m = 20.0;
+    double gps_low_quality_zero_m = 120.0;
+    /** Implausible radial speed is downweighted from this value and rejected at the maximum. */
+    double gps_jump_speed_start_mps = 3.0;
+    double gps_jump_speed_zero_mps = 15.0;
+    double gps_approach_min_reliability = 0.50;
     double w_baro = 0.85;
     double baro_min_descent_m = 12.0;
     /**

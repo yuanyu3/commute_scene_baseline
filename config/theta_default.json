@@ -42,7 +42,11 @@
   "push_cooldown_s": 1800,
   "max_gps_acc_m": 80.0,
   "allow_network_dwell_acc_m": 120.0,
-  "company_source_vicinity_m": 400.0,
+  "gps_low_quality_start_m": 20.0,
+  "gps_low_quality_zero_m": 120.0,
+  "gps_jump_speed_start_mps": 3.0,
+  "gps_jump_speed_zero_mps": 15.0,
+  "gps_approach_min_reliability": 0.5,
   "focus_side": "company",
   "param_limits": {
     "enter_leave": {"min": 0.4, "max": 0.85, "step": 0.03},

@@ -198,8 +198,20 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     if (ExtractNumber(json, "allow_network_dwell_acc_m", &v)) {
         t.allow_network_dwell_acc_m = v;
     }
-    if (ExtractNumber(json, "company_source_vicinity_m", &v)) {
-        t.company_source_vicinity_m = v;
+    if (ExtractNumber(json, "gps_low_quality_start_m", &v)) {
+        t.gps_low_quality_start_m = v;
+    }
+    if (ExtractNumber(json, "gps_low_quality_zero_m", &v)) {
+        t.gps_low_quality_zero_m = v;
+    }
+    if (ExtractNumber(json, "gps_jump_speed_start_mps", &v)) {
+        t.gps_jump_speed_start_mps = v;
+    }
+    if (ExtractNumber(json, "gps_jump_speed_zero_mps", &v)) {
+        t.gps_jump_speed_zero_mps = v;
+    }
+    if (ExtractNumber(json, "gps_approach_min_reliability", &v)) {
+        t.gps_approach_min_reliability = v;
     }
     if (!hasEvidenceStrength && ExtractNumber(json, "w_baro", &v)) {
         t.w_baro = LegacyWeightToEvidenceStrength(v);

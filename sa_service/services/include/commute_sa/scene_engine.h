@@ -52,10 +52,7 @@ struct TickFeatures {
     double lat = 0.0;
     double lon = 0.0;
     double acc = 0.0;
-    /**
-     * Location source_type: 1=GNSS/outdoor (outside company gate when near),
-     * 2=network/indoor (inside company when near). 0=unknown.
-     */
+    /** Platform metadata retained for logging and post-hoc annotation only. */
     int32_t gps_source_type = 0;
     bool walking = false;
     bool has_walk_started = false;
@@ -94,6 +91,9 @@ struct TickDecision {
     double hsmm_preleave_company = 0.0;
     double hsmm_outside_home = 0.0;
     double hsmm_outside_company = 0.0;
+    /** Quality-derived GPS reliability; independent of source_type. */
+    double gps_reliability_home = 0.0;
+    double gps_reliability_company = 0.0;
     Relation home_relation = Relation::kUnknown;
     Relation company_relation = Relation::kUnknown;
     bool has_dist_home = false;
@@ -145,14 +145,15 @@ private:
     ObservationResult BuildLeaveObservation(const Theta &effectiveTheta, const TickFeatures &feat, Relation rel, bool hasDist, double distM, double rIn,
         double rOut, double pdrNetOut, bool wifiDetach, bool cellLeave, bool bleDetach, double wifiJaccard,
         bool wifiAttach, double centerHour, std::optional<double> prevDist, bool approaching,
-        bool radioSuppressed, bool gpsDistUnreliable = false) const;
+        bool radioSuppressed, double gpsReliability) const;
     /** Seconds until dist reaches rOut; nullopt if not outbound / unknown. */
     std::optional<double> EstimateEtaOutS(bool hasDist, double distM, double rOut, bool walking, double pdrNetOut,
         std::optional<double> prevDist, std::optional<TickTsMs> prevT, TickTsMs tMs, bool gpsReliable) const;
 
     Relation RelTo(const TickFeatures &feat, const Anchor &anchor, double *distOut) const;
-    /** Home: GPS fence. Company: source_type 2/1 when in vicinity; fence is auxiliary. */
-    Relation CompanyRelTo(const TickFeatures &feat, double *distOut, bool *nearCompany) const;
+    Relation CompanyRelTo(const TickFeatures &feat, double *distOut) const;
+    double GpsReliability(const TickFeatures &feat, bool hasDist, double distM,
+        const std::optional<double> &prevDist) const;
     bool GpsFixUsable(const TickFeatures &feat) const;
     bool CooldownOk(TickTsMs tMs) const;
 
@@ -166,7 +167,6 @@ private:
     std::optional<double> prevDistCompany_;
     Relation prevRelHome_ = Relation::kUnknown;
     Relation prevRelCompany_ = Relation::kUnknown;
-    int32_t prevGpsSourceType_ = 0;
     std::optional<TickTsMs> prevTMs_;
     int approachHomeStreak_ = 0;
     int approachCompanyStreak_ = 0;

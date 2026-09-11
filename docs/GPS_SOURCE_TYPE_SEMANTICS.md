@@ -1,17 +1,15 @@
 # GPS Source-Type Semantics
 
-For company departure detection, platform GPS `source_type` is the authoritative
-company-gate semantic:
+`source_type` is platform metadata retained in sensor events and replay evidence.
+It is **not an online baseline feature**: values `1`, `2`, and unknown are scored
+identically when coordinates, accuracy, and trajectory are identical.
 
-| Value | Meaning | Departure behavior |
-|---|---|---|
-| `2` | Inside company | May enter a departure prediction episode. |
-| `1` | Outside company gate | Confirms departure only when it follows `2`; never send a departure reminder. |
+The online engine first unifies locations and anchors to WGS84, then derives
+anchor relation and outbound evidence from distance. GPS reliability is computed
+from horizontal accuracy and radial jump speed. Low-reliability fixes contribute
+less `geo_outbound` evidence and cannot independently trigger approach/return or
+GPS-speed ETA logic.
 
-The only departure truth is the first `2 -> 1` transition. A session beginning
-at `type=1` is already outside. When it later becomes `type=2`, it is a
-return-to-company trace, not a departure process, and departure push is blocked.
-
-The C++ runtime passes `source_type` into `TickFeatures`; it overrides a noisy
-coordinate fence for the company relation. The offline replay uses the same
-rule, so return traces cannot be scored as departure candidates.
+Offline evaluation may still use `source_type` as post-hoc annotation metadata,
+for example to compare platform labels with coordinate-fence outcomes. Such labels
+must not be fed back into the baseline observation or push gate.

@@ -29,10 +29,10 @@ python examples\agent_optimize_leave_risk.py `
   --out output\agent_leave_risk_0811_0812
 ```
 
-`GPS source_type=2` is the company-inside state and `source_type=1` is the
-company-outside state. The only departure truth is the first `2 -> 1`
-transition. A session beginning at `type=1` is a return-to-company trace and is
-excluded from departure prediction.
+`GPS source_type` is available only to the offline labeling/evaluation path. It
+does not enter the online baseline, Agent feature candidates, or push gates.
+Online spatial evidence uses WGS84 distance plus quality-derived GPS
+reliability; therefore an offline source label cannot leak into model scores.
 
 Outputs include the aggregate dataset profile, API response trace, candidate
 evaluations, Agent review, and the selected portable model. The API key is read at

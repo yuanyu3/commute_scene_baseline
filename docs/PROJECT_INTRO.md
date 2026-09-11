@@ -58,7 +58,7 @@
 
 ### 单 tick 流程（简述）
 
-1. 相对位置：家侧仍用 GPS 围栏；**公司侧在附近时以 `source_type` 为准**（`2`=公司内，`1`=公司外 / 出大门），`r_in`/`r_out` 只作附近辅助
+1. 相对位置：家庭和公司统一使用 WGS84 GPS 围栏；定位精度与轨迹跳变决定 GPS 可靠度，`source_type` 仅用于事后标注
 2. `LeaveHsmm`：将行走、PDR、距离外扩、**在线 WiFi/Cell 脱离**（见 `docs/RADIO_EVIDENCE.md`）和时段先验作为观测，结合状态持续时间输出 `P(LEAVING)`；距离变近/重新附着强化返回锚点概率
 3. `P(LEAVING)` ≥ `enter_leave` → 进入 `LEAVING_*`
 4. **预测推送门控**（带钥匙必须在完全离家前）：
@@ -66,7 +66,7 @@
    - `eta_leave_s` 仅用于诊断，不作为推送上限
    - 同一离开 episode **只推一次**
 
-**ETA**：家侧估计距穿过围栏外径 `r_out` 还有多少秒；公司侧室内（`source_type=2`）不采信围栏 ETA，GNSS（`1`）视为已出大门。  
+**ETA**：估计距穿过围栏外径 `r_out` 还有多少秒；只有可靠 GPS 的距离变化才用于速度估计，低可靠度时退回步行/PDR 推断。
 **LEAD**：事后 `lead_s = t* − t_push`，其中 `t*` 为推送后首次 `OUTSIDE`；评分在 `[lead_min_s, lead_max_s]` 内奖励更早区分，超过 `lead_max_s` 后按过早扣分，但不用于实时拦截。
 
 ---

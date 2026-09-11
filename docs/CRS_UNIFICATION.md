@@ -32,3 +32,6 @@ python python/scripts/replay_baseline.py --raw-dir <gcj> --location-crs GCJ02
 ```
 
 新采集不要再写 GCJ。
+
+`source_type` 不改变坐标系，也不参与在线围栏或外向证据计算。回放旧数据时必须先按
+`--location-crs` 转换，再计算距离与 GPS 可靠度，不能用 `source_type` 猜测 CRS。

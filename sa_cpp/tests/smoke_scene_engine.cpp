@@ -77,32 +77,36 @@ int main()
         return 1;
     }
 
-    // Company gate: GPS fence is auxiliary; source_type 2=inside, 2→1=outside the door.
+    // source_type is post-hoc metadata only: identical coordinates must yield
+    // identical online relations and GPS evidence for type 1 and type 2.
     SceneEngine srcEngine(anchors, theta);
     TickFeatures fs;
     fs.t_ms = 1754388000000LL;
     fs.has_gps = true;
-    fs.lat = anchors.company.lat + 0.002;  // GPS fence would be OUTSIDE
+    fs.lat = anchors.company.lat + 0.0001;
     fs.lon = anchors.company.lon;
     fs.acc = 80.0;
     fs.gps_source_type = kLocationSourceIndoorNetwork;
     auto dIn = srcEngine.Step(fs);
-    if (dIn.company_relation != Relation::kInside) {
-        std::cerr << "FAIL: source_type=2 near company must be INSIDE, got "
+    if (dIn.company_relation != Relation::kInside || dIn.gps_reliability_company <= 0.0) {
+        std::cerr << "FAIL: usable type=2 GPS must participate in the company fence, got "
                   << RelationToString(dIn.company_relation) << "\n";
         return 1;
     }
     fs.t_ms += 5000;
-    fs.lat = anchors.company.lat;  // GPS fence would still be INSIDE
     fs.gps_source_type = kLocationSourceOutdoorGnss;
     auto dGate = srcEngine.Step(fs);
-    if (dGate.company_relation != Relation::kOutside) {
-        std::cerr << "FAIL: source_type 2→1 must be OUTSIDE company gate, got "
+    if (dGate.company_relation != dIn.company_relation ||
+        std::abs(dGate.gps_reliability_company - dIn.gps_reliability_company) > 1e-9) {
+        std::cerr << "FAIL: source_type changed online GPS semantics, got "
                   << RelationToString(dGate.company_relation) << "\n";
         return 1;
     }
-    if (dGate.should_service) {
-        std::cerr << "FAIL: must not push after GNSS confirms outside the gate\n";
+    fs.t_ms += 5000;
+    fs.acc = 120.0;
+    auto dPoor = srcEngine.Step(fs);
+    if (dPoor.gps_reliability_company > 1e-9 || dPoor.hsmm_obs_company.geo_outbound > 1e-9) {
+        std::cerr << "FAIL: low-quality GPS leaked into outbound evidence\n";
         return 1;
     }
 

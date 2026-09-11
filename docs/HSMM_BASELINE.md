@@ -13,7 +13,7 @@ AT_ANCHOR -> PRE_LEAVE -> LEAVING -> OUTSIDE
 - `AT_ANCHOR`：稳定处于家或公司锚点。
 - `PRE_LEAVE`：出现准备离开的活动，但尚不足以触发服务。
 - `LEAVING`：连续证据支持正在离开；`P(LEAVING)` 可进入产品 `LEAVING_*`。
-- `OUTSIDE`：已越出锚点，只用于确认和回标，禁止此时推送“带钥匙”。家侧仍由 GPS 围栏确认；**公司侧以 `source_type` 为准**：附近时 `2`=公司内，`2→1`=出大门。
+- `OUTSIDE`：已越出锚点，只用于确认和回标，禁止此时推送“带钥匙”。家庭和公司统一由 WGS84 坐标围栏判断；`source_type` 不参与在线状态判定。
 
 模型分别为家和公司维护 `(state, elapsed_second)` 概率质量。转移 hazard 只依赖状态已持续时间、固定拓扑以及 INSIDE/OUTSIDE 等结构关系；walking、PDR、Wi-Fi、Cell、time、baro 等原子证据只在发射似然中使用一次。超过 `hsmm_max_gap_s` 的采样间隔会重置过滤器，避免用过期状态污染当前判断。
 
@@ -25,7 +25,7 @@ AT_ANCHOR -> PRE_LEAVE -> LEAVING -> OUTSIDE
 |------|------|
 | walking | walking 状态 |
 | pdr_outbound | PDR 净向外位移相对锚点半径归一化 |
-| geo_outbound | 家：GPS 距锚点连续扩张。公司：附近时不采信围栏扩张；`source_type` 2→1 为出大门 |
+| geo_outbound | GPS 距锚点连续扩张或越出围栏，并乘以由定位精度、轨迹跳变计算的 GPS 可靠度 |
 | wifi_detach | Wi-Fi Jaccard 下降或 detach 事件 |
 | cell_detach | Cell leave 事件 |
 | ble_detach | BLE detach 事件 |
@@ -45,7 +45,7 @@ descending / lower_platform 两项），不再经过 `0.25 + 3*w` 隐藏映射�
 
 `w_x=0` 的语义是“该原子观测通道对决策不可用”，而不是“观测值恰好为 0”。该通道会从 evidence hits、HSMM 发射似然、传感器派生 attach 门控和工作场所气压基线初始化中移除；上下文模板也不能重新注入它。原始传感器数据仍可采集和落盘，供诊断或以后重新启用。GPS 的 `INSIDE/OUTSIDE` 场景关系、OUTSIDE 禁推、冷却和一次一推属于独立的产品安全事实，不由 `w_geo` 关闭。
 
-GPS `INSIDE/NEAR/OUTSIDE`、approaching 和 Wi-Fi attach 作为强观测。公司相对位置在校园附近时由 `source_type` 判定（`2` 内 / `1` 外），`r_in`/`r_out` 只作附近辅助；推送频控、一次一推、OUTSIDE 禁推、approaching 禁推仍是模型外硬约束。INSIDE 只排斥 OUTSIDE，不再根据 walking/radio/PDR 二次改写关系似然；这些原子证据通过发射模型将概率从 AT_ANCHOR/PRE_LEAVE 推向 LEAVING。
+GPS `INSIDE/NEAR/OUTSIDE`、approaching 和 Wi-Fi attach 作为强观测。家庭和公司统一使用 WGS84 围栏；`source_type` 只保留用于事后标注。定位精度从 `gps_low_quality_start_m` 到 `gps_low_quality_zero_m` 连续降权，异常径向速度从 `gps_jump_speed_start_mps` 到 `gps_jump_speed_zero_mps` 连续降权；可靠度同时约束 `geo_outbound`、approaching 和 GPS ETA。推送频控、一次一推、OUTSIDE 禁推、approaching 禁推仍是模型外硬约束。
 
 ## 参数语义
 
