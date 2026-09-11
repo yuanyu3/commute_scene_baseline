@@ -173,7 +173,7 @@ class LeaveHsmm:
                 mu = max(0.02, min(0.98, expected[state][feature]))
                 sample = _clip01(observation)
                 value += feature_reliability[feature] * (
-                    sample * math.log(mu) + (1.0 - sample) * math.log(1.0 - mu)
+                    sample * math.log(mu)
                 )
             if obs.relation_known:
                 if obs.inside:
@@ -187,8 +187,7 @@ class LeaveHsmm:
                 else:
                     relation = [0.25, 0.25, 0.25, 0.25]
                 value += 3.0 * math.log(max(1e-9, relation[state]))
-            if obs.approaching or obs.attached:
-                value += 2.5 * math.log([0.92, 0.30, 0.02, 0.08][state])
+            # Behavioral penalties come from matched negative patterns.
             if obs.sequence_available:
                 progress_llr = [-0.35, 0.65, 0.25, -0.30]
                 complete_llr = [-1.00, 0.15, 1.20, -0.35]

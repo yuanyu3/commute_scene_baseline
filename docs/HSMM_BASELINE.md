@@ -38,7 +38,7 @@ AT_ANCHOR -> PRE_LEAVE -> LEAVING -> OUTSIDE
 | cancel_sequence_match | 正向前缀启动后，有序返回序列已经完成；与负向交互项一起抑制 LEAVING |
 | sequence_reliability | 经确定性验证器选定的模板可靠度/作用强度 |
 
-各状态对上述观测有不同的初始期望，使用分数型 Bernoulli 似然更新后验。配置中的
+各状态对上述观测有不同的初始期望，使用 `w*x*log(mu)` 事件证据更新后验，原子未激活时完全中性。行为惩罚由 Agent 负向模式产生，见 [事件发射语义与验证](ACTIVE_EVENT_HSMM.md)。配置中的
 `evidence_strength` 直接以 [0,1] 系数控制对应观测的发射似然（baro 同时作用于
 descending / lower_platform 两项），不再经过 `0.25 + 3*w` 隐藏映射，也不直接相加产生离家分数。
 旧 `w_*` 配置仅在读取时做一次等效迁移，详见 [EVIDENCE_STRENGTH.md](EVIDENCE_STRENGTH.md)。

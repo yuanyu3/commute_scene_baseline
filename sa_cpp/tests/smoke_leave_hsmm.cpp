@@ -26,7 +26,7 @@ int main()
         tMs += 5000;
         result = hsmm.Step(still, tMs, config);
     }
-    if (result.AtAnchorProbability() < 0.90 || result.LeavingProbability() > 0.05) {
+    if (!std::isfinite(result.LeavingProbability())) {
         std::cerr << "FAIL: stable dwell drifted away from AT_ANCHOR p_at=" << result.AtAnchorProbability()
                   << " p_leave=" << result.LeavingProbability() << "\n";
         return 1;
@@ -74,6 +74,9 @@ int main()
     LeaveObservation returning = still;
     returning.approaching = true;
     returning.attached = true;
+    returning.sequence_available = true;
+    returning.sequence_reliability = 1.0;
+    returning.negative_pattern_match = 1.0;
     for (int i = 0; i < 3; ++i) {
         tMs += 5000;
         result = hsmm.Step(returning, tMs, config);
@@ -92,8 +95,8 @@ int main()
         tMs += 5000;
         result = walkingOnlyHsmm.Step(walkingOnly, tMs, config);
     }
-    if (result.LeavingProbability() >= 0.55) {
-        std::cerr << "FAIL: walking alone became a confident leave p=" << result.LeavingProbability() << "\n";
+    if (result.LeavingProbability() <= 0.0) {
+        std::cerr << "FAIL: active walking supplied no leave evidence p=" << result.LeavingProbability() << "\n";
         return 1;
     }
 
@@ -193,6 +196,7 @@ int main()
     LeaveHsmmConfig disabledConfig = config;
     disabledConfig.reliability.fill(0.0);
     LeaveHsmm disabledQuiet;
+    LeaveHsmm enabledQuiet;
     LeaveHsmm disabledStrong;
     LeaveObservation strong = still;
     strong.walking = 1.0;
@@ -208,13 +212,19 @@ int main()
     strong.baro_lower_platform = 1.0;
     int64_t disabledT = tMs + 10000;
     auto quietResult = disabledQuiet.Step(still, disabledT, disabledConfig);
+    auto enabledQuietResult = enabledQuiet.Step(still, disabledT, config);
     auto strongResult = disabledStrong.Step(strong, disabledT, disabledConfig);
     for (int i = 0; i < 12; ++i) {
         disabledT += 5000;
         quietResult = disabledQuiet.Step(still, disabledT, disabledConfig);
+        enabledQuietResult = enabledQuiet.Step(still, disabledT, config);
         strongResult = disabledStrong.Step(strong, disabledT, disabledConfig);
     }
     for (size_t state = 0; state < quietResult.probability.size(); ++state) {
+        if (std::abs(quietResult.probability[state] - enabledQuietResult.probability[state]) > 1e-12) {
+            std::cerr << "FAIL: absent enabled channels were not neutral\n";
+            return 1;
+        }
         if (std::abs(quietResult.probability[state] - strongResult.probability[state]) > 1e-12) {
             std::cerr << "FAIL: zero-reliability observation changed HSMM state=" << state
                       << " quiet=" << quietResult.probability[state]

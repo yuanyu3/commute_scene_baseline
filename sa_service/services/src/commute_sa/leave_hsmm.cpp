@@ -19,11 +19,12 @@ int PhaseIndex(LeavePhase phase)
     return static_cast<int>(phase);
 }
 
-double FractionalBernoulliLogLikelihood(double observation, double expected)
+double ActiveEventLogLikelihood(double observation, double expected)
 {
     const double x = Clip01(observation);
     const double mu = std::max(0.02, std::min(0.98, expected));
-    return x * std::log(mu) + (1.0 - x) * std::log(1.0 - mu);
+    // Absence is neutral. Only an active event supplies state evidence.
+    return x * std::log(mu);
 }
 
 }  // namespace
@@ -137,7 +138,7 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
         for (size_t feature = 0; feature < x.size(); ++feature) {
             if (feature >= 7 && !observation.baro_available) continue;
             const double reliability = std::max(0.0, config.reliability[feature]);
-            value += reliability * FractionalBernoulliLogLikelihood(x[feature], expected[state][feature]);
+            value += reliability * ActiveEventLogLikelihood(x[feature], expected[state][feature]);
         }
 
         if (observation.relation_known) {
@@ -155,10 +156,8 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
             value += 3.0 * std::log(std::max(kProbabilityFloor, relationExpected));
         }
 
-        if (observation.approaching || observation.attached) {
-            const std::array<double, kPhaseCount> p {{0.92, 0.30, 0.02, 0.08}};
-            value += 2.5 * std::log(p[state]);
-        }
+        // Learned negative patterns own behavioral suppression. Attach/approach
+        // remain available to template matching and product-level push guards.
         if (observation.sequence_available) {
             // These are interaction terms: they encode temporal order that is
             // absent from the atomic per-tick observations.  Zero is neutral.
