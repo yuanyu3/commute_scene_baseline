@@ -978,11 +978,11 @@ bool CheckReplayEpisodeSafety(const std::vector<ReplayEpisodeSummary> &baseline,
             return reject("episode_set_mismatch");
         if (b.hard_negative && !b.pushed && c.pushed) return reject("new_false_push:" + b.key);
         if (b.positive && b.pushed && !c.pushed) return reject("lost_positive:" + b.key);
-        if (b.positive && b.pushed && c.pushed && c.push_ms > b.push_ms)
-            return reject("positive_push_delayed:" + b.key);
+        // Timing is a scoring preference, not a per-episode veto. Correct
+        // recognition remains protected above even when a candidate pushes later.
         if (b.aborted && !b.pushed && c.pushed) return reject("new_aborted_push:" + b.key);
-        if (b.aborted && b.cancel_ms > 0 && (c.cancel_ms <= 0 || c.cancel_ms > b.cancel_ms))
-            return reject("aborted_cancel_lost_or_delayed:" + b.key);
+        if (b.aborted && b.cancel_ms > 0 && c.cancel_ms <= 0)
+            return reject("aborted_cancel_lost:" + b.key);
     }
     return true;
 }

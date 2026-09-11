@@ -826,6 +826,15 @@ std::string MetricsJson(const Metrics &m)
     return out.str();
 }
 
+int RecognitionErrors(const Metrics &m) { return m.false_kept + m.missed_leave; }
+
+bool BetterRecognition(const Metrics &a, const Metrics &b)
+{
+    if (RecognitionErrors(a) != RecognitionErrors(b)) return RecognitionErrors(a) < RecognitionErrors(b);
+    if (a.aborted_visible_push != b.aborted_visible_push) return a.aborted_visible_push < b.aborted_visible_push;
+    return a.score > b.score;
+}
+
 bool Eligible(const Metrics &base, const Metrics &candidate, std::string *why)
 {
     if (!candidate.ok || candidate.n_episodes <= 0) { if (why) *why = "evaluation_failed"; return false; }
@@ -833,7 +842,6 @@ bool Eligible(const Metrics &base, const Metrics &candidate, std::string *why)
         if (why) *why = "insufficient_positive_history";
         return false;
     }
-    if (candidate.score < base.score + 0.25) { if (why) *why = "score_not_improved"; return false; }
     if (candidate.missed_leave > base.missed_leave) { if (why) *why = "missed_leave_increased"; return false; }
     if (candidate.confirmed_kept < base.confirmed_kept) { if (why) *why = "confirmed_recall_decreased"; return false; }
     if (candidate.false_kept > base.false_kept) { if (why) *why = "hard_false_push_increased"; return false; }
@@ -845,6 +853,10 @@ bool Eligible(const Metrics &base, const Metrics &candidate, std::string *why)
     }
     if (candidate.aborted_cancel_recognized < base.aborted_cancel_recognized) {
         if (why) *why = "aborted_cancel_recognition_decreased"; return false;
+    }
+    if (RecognitionErrors(candidate) >= RecognitionErrors(base) &&
+        candidate.aborted_visible_push >= base.aborted_visible_push && candidate.score < base.score + 0.25) {
+        if (why) *why = "score_not_improved"; return false;
     }
     return true;
 }
@@ -938,10 +950,11 @@ std::string TrialJson(const Trial &trial)
             << "\",\"template\":" << SpecJson(candidate.spec, candidate.strength_name, candidate.strength)
             << ",\"metrics\":" << MetricsJson(candidate.metrics) << '}';
     }
-    out << "],\"commit_guard\":{\"score_must_improve\":true,\"false_push_must_not_increase\":true,"
+    out << "],\"commit_guard\":{\"score_must_improve\":false,\"score_must_improve_when_errors_equal\":true,\"false_push_must_not_increase\":true,"
            "\"confirmed_recall_must_not_decrease\":true,\"missed_must_not_increase\":true,"
            "\"aborted_intent_must_not_decrease\":true,\"aborted_visible_push_must_not_increase\":true,"
-           "\"per_episode_no_new_false_or_lost_positive\":true,\"per_episode_positive_must_not_be_later\":true}}";
+           "\"per_episode_no_new_false_or_lost_positive\":true,\"per_episode_positive_must_not_be_later\":false,"
+           "\"selection_priority\":\"false_plus_missed_count,aborted_visible_push,existing_score; lower errors before lead utility\"}}";
     return out.str();
 }
 
@@ -1411,14 +1424,16 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         }
         const double regularized = candidate.metrics.score - 0.03 * (candidate.spec.positive_strength +
             candidate.spec.negative_strength + candidate.spec.return_strength);
-        if (candidate.eligible && regularized > bestScore) {
+        if (candidate.eligible && (trial.best_index < 0 ||
+            BetterRecognition(candidate.metrics, trial.candidates[trial.best_index].metrics) ||
+            (!BetterRecognition(trial.candidates[trial.best_index].metrics, candidate.metrics) && regularized > bestScore))) {
             bestScore = regularized;
             trial.best_index = static_cast<int>(trial.candidates.size());
         }
         // Search seeds need not already beat the incumbent: stronger negative
         // evidence may unlock a previously ineffective structural candidate.
         if (candidate.metrics.ok && (searchBest < 0 ||
-            candidate.metrics.score > trial.candidates[searchBest].metrics.score))
+            BetterRecognition(candidate.metrics, trial.candidates[searchBest].metrics)))
             searchBest = static_cast<int>(trial.candidates.size());
         trial.candidates.push_back(std::move(candidate));
     };

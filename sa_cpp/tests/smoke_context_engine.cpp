@@ -1,6 +1,7 @@
 #include "commute_sa/context_engine.h"
 #include "commute_sa/context_template.h"
 #include "commute_sa/product_store.h"
+#include "commute_sa/theta_eval.h"
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -11,6 +12,21 @@ void Check(bool ok, const char *message) { if (!ok) throw std::runtime_error(mes
 int main()
 {
     using namespace commute_sa;
+    ReplayEpisodeSummary baseline, candidate;
+    baseline.key = candidate.key = "positive";
+    baseline.positive = candidate.positive = true;
+    baseline.pushed = candidate.pushed = true;
+    baseline.push_ms = 1000;
+    candidate.push_ms = 2000;
+    std::string reason;
+    Check(CheckReplayEpisodeSafety({baseline}, {candidate}, &reason), "later correct push must be score-only");
+    candidate.pushed = false;
+    Check(!CheckReplayEpisodeSafety({baseline}, {candidate}, &reason), "lost positive still rejected");
+    baseline.positive = candidate.positive = false;
+    baseline.hard_negative = candidate.hard_negative = true;
+    baseline.pushed = false;
+    candidate.pushed = true;
+    Check(!CheckReplayEpisodeSafety({baseline}, {candidate}, &reason), "new false push still rejected");
     ContextAbsenceClock clock;
     Check(clock.Step(1000, false, true, false, 10) == 0, "no trigger");
     Check(clock.Step(2000, true, true, false, 10) == 0, "trigger is neutral");

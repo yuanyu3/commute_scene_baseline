@@ -47,7 +47,9 @@ def main():
         replay = call(args.binary, root, 'template_evaluate_frozen', {'include_prefix_trace': True})
         save(mode + '_replay.json', replay)
         results[mode] = replay['frozen']
-        best = max(fitted['trial']['candidates'], key=lambda c: c['metrics']['score'])
+        best = min(fitted['trial']['candidates'], key=lambda c: (
+            c['metrics']['false_kept'] + c['metrics']['missed_leave'],
+            c['metrics']['aborted_visible_push'], -c['metrics']['score']))
         diagnostic = copy(mode + '_uncommitted_diagnostic')
         # Explicit test fixture only. Rejected candidates never replace source.
         (diagnostic / 'active_context_template.json').write_text(json.dumps(best['template']), encoding='utf-8')
