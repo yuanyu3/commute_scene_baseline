@@ -873,6 +873,17 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"events\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\","
            "\"ble_detach\",\"baro_descending\",\"lower_platform\",\"outside\",\"approaching\","
            "\"attached\",\"baro_ascending\",\"vertical_closure\",\"no_baro_descent\",\"no_geo_outbound\"],"
+           "\"event_semantics\":{"
+           "\"scope\":\"All events are predicates on the CURRENT tick. An event at one tick does not imply its presence or absence throughout an episode. Continuous values above zero are not necessarily active.\","
+           "\"threshold_0_5\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\",\"ble_detach\",\"baro_descending\"],"
+           "\"lower_platform\":\"baro_lower_platform >= 0.5; not a fixed floor number\","
+           "\"baro_ascending\":\"baro_available AND baro_ascending >= 0.5\","
+           "\"vertical_closure\":\"baro_available AND vertical_closure >= 0.5\","
+           "\"boolean_fields\":[\"outside\",\"approaching\",\"attached\"],"
+           "\"no_baro_descent\":\"baro_available AND baro_descending < 0.25 AND baro_lower_platform < 0.5. Missing baro is FALSE, not evidence of no descent. Example: descending=0.1 and lower_platform=0 with available baro is TRUE, even if an earlier tick descended.\","
+           "\"no_geo_outbound\":\"geo_outbound < 0.25. No separate GPS availability check in this predicate: zero may mean missing or unreliable GPS; it does NOT prove physical stationarity.\","
+           "\"composition\":\"negative_pattern is AND at the same tick, not episode-wide absence. positive_sequence and cancel paths are ordered across ticks. Whole-episode presence and bin mean cannot replace exact predicate evaluation.\"},"
+           "\"candidate_exploration\":\"Use evaluate_negative_pattern_candidates before rejecting an expressible promising negative pattern. Pipe separates candidates; comma separates conjuncts. Evaluation is read-only and does not consume the one generation allowance.\","
            "\"effects\":{\"positive_sequence\":\"emit progress/completion and replay-calibrated prefix readiness; readiness replaces, never adds to, legacy positive evidence\","
            "\"negative_pattern\":\"emit an independent negative_pattern_match observation\","
            "\"cancel_sequence\":\"ordered reversal after a started positive prefix; emits a 120-second cancel observation\","
@@ -1405,6 +1416,79 @@ std::string EvaluateActiveContextTemplateOnHistoryAction(const std::string &args
         return "{\"ok\":false,\"error\":\"valid unique-timestamp HSMM history required; no score-only fallback permitted\"}";
     return "{\"ok\":true,\"mode\":\"frozen_template_no_tuning\",\"template\":" +
         SpecJson(spec, "FROZEN", strength) + ",\"baseline\":" + baseline + ",\"frozen\":" + frozen + '}';
+}
+
+std::string EvaluateNegativePatternCandidatesAction(const std::string &args)
+{
+    std::string requested, anchor, side, patterns;
+    if (!ExtractString(args, "anchor_id", &requested) || !ResolveAnchorRole(requested, &anchor, &side))
+        return "{\"ok\":false,\"error\":\"known anchor_id required\"}";
+    if (!ExtractString(args, "candidates", &patterns) || patterns.empty() || patterns.size() > 2048)
+        return "{\"ok\":false,\"error\":\"candidates required: pipe-separated patterns, comma-separated events\"}";
+    std::vector<std::vector<std::string>> candidates;
+    std::set<std::string> seen;
+    std::stringstream input(patterns);
+    std::string part;
+    if (patterns.back() == '|') return "{\"ok\":false,\"error\":\"empty candidate\"}";
+    while (std::getline(input, part, '|')) {
+        auto events = SplitCsv(part);
+        if (events.empty() || events.size() > 6)
+            return "{\"ok\":false,\"error\":\"each candidate needs 1..6 events\"}";
+        std::set<std::string> unique;
+        for (const auto &event : events) {
+            if (!SupportedEvents().count(event) || !unique.insert(event).second)
+                return "{\"ok\":false,\"error\":\"unsupported or duplicate event\"}";
+        }
+        std::sort(events.begin(), events.end());
+        if (!seen.insert(JoinCsv(events)).second)
+            return "{\"ok\":false,\"error\":\"duplicate candidate\"}";
+        candidates.push_back(events);
+        if (candidates.size() > 8) return "{\"ok\":false,\"error\":\"maximum 8 candidates\"}";
+    }
+    TemplateSpec spec;
+    double strength = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(gTemplateMutex);
+        if (!gActiveLoaded) LoadActiveTemplateLocked();
+        if (gActivePresent && gActiveSpec.anchor_id == anchor) {
+            spec = gActiveSpec;
+            strength = gActiveStrength;
+        } else {
+            spec.anchor_id = anchor;
+            spec.side = side;
+            spec.applicability = "always";
+            spec.template_name = "diagnostic_negative_only";
+            strength = 0.2;
+        }
+    }
+    const Theta theta = CurrentTheta();
+    std::vector<ReplayEpisodeSummary> referenceEpisodes;
+    const auto reference = EvaluateThetaOnHistoryWithAdapterJson(RootDir(), theta,
+        BuildAdapter(spec, strength), 0, 1000, false, 0, &referenceEpisodes, anchor, side);
+    const auto referenceMetrics = ParseMetrics(reference);
+    if (!referenceMetrics.ok) return "{\"ok\":false,\"error\":\"valid HSMM history required\"}";
+    std::ostringstream out;
+    out << "{\"ok\":true,\"read_only\":true,\"scope\":\"replace negative_pattern only; positive, cancel, strength and theta frozen; per-episode results include push and match counts; eligibility is relative to incumbent, not final commit approval\","
+        << "\"template\":" << SpecJson(spec, "FROZEN", strength)
+        << ",\"reference\":" << reference << ",\"candidates\":[";
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        TemplateSpec candidate = spec;
+        candidate.negative_pattern = candidates[i];
+        std::vector<ReplayEpisodeSummary> episodes;
+        const auto replay = EvaluateThetaOnHistoryWithAdapterJson(RootDir(), theta,
+            BuildAdapter(candidate, strength), 0, 1000, false, 0, &episodes, anchor, side);
+        std::string reason;
+        const auto metrics = ParseMetrics(replay);
+        const bool eligible = metrics.ok && Eligible(referenceMetrics, metrics, &reason) &&
+            CheckReplayEpisodeSafety(referenceEpisodes, episodes, &reason);
+        if (!metrics.ok) reason = "replay_unavailable";
+        if (i) out << ',';
+        out << "{\"candidate_id\":" << i + 1 << ",\"negative_pattern\":\"" << Esc(JoinCsv(candidates[i]))
+            << "\",\"eligible\":" << (eligible ? "true" : "false")
+            << ",\"rejection\":\"" << Esc(reason) << "\",\"replay\":" << replay << '}';
+    }
+    out << "]}";
+    return out.str();
 }
 
 std::string DiagnoseContextTemplateOnHistoryAction(const std::string &args)

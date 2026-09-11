@@ -91,6 +91,8 @@ int main(int argc, char **argv)
             std::cout << commute_sa::DiscardDurationPriorCandidateAction(params) << "\n";
         } else if (command == "template_catalog") {
             std::cout << commute_sa::GetContextTemplateCatalogAction(params) << "\n";
+        } else if (command == "template_batch_negative") {
+            std::cout << commute_sa::EvaluateNegativePatternCandidatesAction(params) << "\n";
         } else if (command == "semantic_timeline") {
             std::cout << commute_sa::EvidenceQuery::GetInstance().GetEpisodeSemanticTimelineJson(params) << "\n";
         } else if (command == "dynamic_diagnostics") {

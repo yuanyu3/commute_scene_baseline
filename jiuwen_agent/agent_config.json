@@ -35,6 +35,7 @@
       "get_episode_dynamic_diagnostics",
 
       "diagnose_context_template",
+      "evaluate_negative_pattern_candidates",
 
       "get_current_user_anchor_profile",
 

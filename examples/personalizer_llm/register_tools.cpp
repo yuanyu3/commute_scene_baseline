@@ -161,6 +161,10 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"path_index", "zero-based alternative path to remove for cancel_path ablation", "integer", false},
             {"limit", "1..100 episodes, default 20", "integer", false}},
         &commute_sa::DiagnoseContextTemplateOnHistoryAction);
+    Reg("evaluate_negative_pattern_candidates", "Read-only batch counterfactual replay; no staging or commit. Compare promising negative conjunctions before rejecting them. Active strength frozen, or LOW=0.2 without a template.",
+        {{"anchor_id", "exact anchor id", "string", true},
+         {"candidates", "1..8 pipe-separated patterns, each 1..6 comma-separated catalog events", "string", true}},
+        &commute_sa::EvaluateNegativePatternCandidatesAction);
     Reg("generate_context_template",
         "Validate an Agent-composed event sequence, deterministically estimate requested parameter families, replay strengths, and stage the best safe template",
         {{"template_name", "new stable identifier", "string", true},
@@ -217,7 +221,7 @@ std::vector<std::string> RegisterPersonalizerTools()
         "get_leave_sensor_summary", "get_episode_semantic_timeline", "get_episode_dynamic_diagnostics",
         "request_anchor_reestimate", "submit_agent_analysis",
         "get_context_template_catalog", "get_aborted_leave_candidates",
-        "propose_aborted_leave_interpretation", "diagnose_context_template", "generate_context_template", "get_context_template_trial",
+        "propose_aborted_leave_interpretation", "diagnose_context_template", "evaluate_negative_pattern_candidates", "generate_context_template", "get_context_template_trial",
         "commit_context_template", "discard_context_template", "get_active_context_template",
         "get_current_user_anchor_profile", "get_personalization_history_summary",
         "estimate_evidence_strength", "get_evidence_strength_trial",

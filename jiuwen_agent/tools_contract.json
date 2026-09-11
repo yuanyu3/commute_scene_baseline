@@ -83,6 +83,12 @@
       "output_schema": {"baseline": "object", "ablated": "object", "episode_results": "array"}
     },
     {
+      "name": "evaluate_negative_pattern_candidates", "category": "structure",
+      "description": "Read-only bounded batch replay replacing only negative_pattern; frozen active context and strength, or negative-only LOW without a template. Does not stage or commit.",
+      "input_schema": {"anchor_id": "required exact id", "candidates": "required string: 1..8 pipe-separated patterns; each 1..6 comma-separated catalog events"},
+      "output_schema": {"read_only": "boolean", "reference": "replay with episode_results", "candidates": "array of pattern, eligible, rejection and replay"}
+    },
+    {
       "name": "generate_context_template", "category": "structure",
       "description": "Validate one Agent-composed structure, estimate requested feature families and stage the best replay-safe candidate.",
       "input_schema": {"template_name": "required string", "anchor_id": "required exact id", "applicability": "always|baro_ready", "positive_sequence": "required ordered catalog events", "cancel_sequence": "optional ordered events", "cancel_paths": "optional alternative ordered paths", "negative_pattern": "optional conjunction", "parameter_families": "optional vertical_threshold", "rationale": "required string"},

@@ -47,7 +47,10 @@
    已有 cancel_paths 时可用 diagnose_context_template 的 ablation=cancel_path 与 path_index 分别移除路径，检查新增路径的独立贡献。每条新路径必须各自匹配至少两个已校验返回样本；其他路径的样本不能代替它的支持。
 5. 模板描述结构，并可从 catalog 中申请 `parameter_families`。当前只开放 `vertical_threshold`；`departure_time` 在非自然时间采集阶段关闭。Agent 只能决定“哪类参数值得个性化”，不得提供数值强度、阈值或参数变化；数值由 C++ 从历史样本估计，样本不足时必须接受 unavailable/no-op。
 6. 模板必须小且可在线计算。中间阶段不能冒充最终离开结果；返回、接近、已连接、锚点关系和通知门控不能被模板绕过。
-7. 每次任务最多调用一次 `generate_context_template`。不要在候选被拒绝后改写结构反复试探历史数据。
+7. 原语语义以 catalog.event_semantics 为准。必须区分逐tick、窗口和整段episode；bin均值大于零不代表达到事件阈值，某时刻出现过一个事件也不能否定其他时刻的负向原语。未知质量不得解释为物理上未发生。
+   对有区分力假设且目录允许表达的负向候选，先调用 `evaluate_negative_pattern_candidates` 批量回放，再选择。candidates是最多8个候选的字符串，候选之间用 |，同一候选内部用逗号表示AND。当前模板正向、返回、强度及theta冻结；没有活动模板时使用纯负向诊断与固定LOW强度。这不是正式生成，也不消耗生成次数，每次任务最多两批。不得仅凭名称或语言推断宣布候选无效。
+   比较reference与候选的逐episode推送、负向匹配次数、误推、漏报和提前量；匹配不是收益，推送之后匹配不能撤回通知。eligible只表示相对当前配置通过诊断保护，最终仍须generate/commit检查。一次强度下无效不证明所有配置无效。未测试候选须写入missing_evidence，不得声称最优或已验证不可行。
+   每次任务最多调用一次 `generate_context_template`，用于提交实测选择的结构；选择与批量实测不同的结构必须说明尚未验证的部分。候选被拒绝后允许discard/no-op，但须引用回放结果。
 8. 阅读前缀长度与 LOW/MEDIUM/HIGH 的 C++ 全历史回放结果。前缀和强度由工具选择；同时检查逐episode退化原因。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则调用 `discard_context_template` 或 no-op。
 9. 只有证据显示垂直过程具有跨 episode 稳定性时，才申请 `vertical_threshold`；不能仅凭一个 episode 申请。不得申请已关闭的时间参数，也不得调用或要求直接参数修改、参数优化器、policy mutation 或代码生成工具。
 

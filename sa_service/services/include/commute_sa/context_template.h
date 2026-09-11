@@ -9,6 +9,8 @@ namespace commute_sa {
 
 /** Supported context-template DSL primitives and persisted active template. */
 std::string GetContextTemplateCatalogAction(const std::string &paramsJson);
+/** Bounded read-only negative-pattern counterfactuals; never stages a trial. */
+std::string EvaluateNegativePatternCandidatesAction(const std::string &paramsJson);
 /** Read-only per-episode event timing used to ground aborted-leave analysis. */
 std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson);
 std::string GetActiveContextTemplateAction(const std::string &paramsJson);

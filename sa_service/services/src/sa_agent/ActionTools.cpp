@@ -134,6 +134,7 @@ const std::vector<std::string> &ActionToolNames()
         "get_aborted_leave_candidates",
         "propose_aborted_leave_interpretation",
         "diagnose_context_template",
+        "evaluate_negative_pattern_candidates",
         "generate_context_template",
         "get_context_template_trial",
         "commit_context_template",
@@ -193,6 +194,10 @@ std::vector<std::string> RegisterActionTools()
         {{"ablation", "positive|negative|both|cancel_path", "string", true},
             {"path_index", "zero-based alternative path for cancel_path ablation", "integer", false},
             {"limit", "1..100 episodes", "integer", false}}, &CallDiagnoseContextTemplate);
+    RegisterOne("evaluate_negative_pattern_candidates", "Read-only bounded batch of negative patterns; incumbent strength frozen, or LOW=0.2 without a template",
+        {{"anchor_id", "exact anchor id", "string", true},
+         {"candidates", "1..8 pipe-separated patterns of comma-separated catalog events", "string", true}},
+        &commute_sa::EvaluateNegativePatternCandidatesAction);
     RegisterOne("generate_context_template", "Stage a replay-safe Agent-composed context template",
         {{"template_name", "stable identifier", "string", true},
             {"anchor_id", "exact anchor id", "string", true},

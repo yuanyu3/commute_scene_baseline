@@ -995,7 +995,7 @@ std::string SubmitAgentAnalysisAction(const std::string &paramsJson)
             return "{\"ok\":false,\"error\":\"tool_name, tool_result and replay_result required for an intervention\"}";
         }
         const std::set<std::string> structureTools {
-            "diagnose_context_template", "generate_context_template", "commit_context_template",
+            "diagnose_context_template", "evaluate_negative_pattern_candidates", "generate_context_template", "commit_context_template",
             "discard_context_template"
         };
         const std::set<std::string> strengthTools {
