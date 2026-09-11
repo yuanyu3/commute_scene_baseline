@@ -8,6 +8,36 @@ int main()
     using namespace commute_sa;
 
     LeaveHsmmConfig config;
+    LeaveHsmm walkingFilter, correlatedFilter;
+    LeaveObservation walking, correlated;
+    walking.walking = 1;
+    walking.inside = walking.relation_known = true;
+    correlated = walking;
+    correlated.pdr_outbound = 1;
+    for (int64_t t = 1000; t < 60000; t += 5000) {
+        if (walkingFilter.Step(walking, t, config).probability !=
+            correlatedFilter.Step(correlated, t, config).probability) {
+            std::cerr << "FAIL same-source motion double counted\n";
+            return 1;
+        }
+    }
+    // Ordinary sustained motion, indoors or near the anchor, must not become
+    // a departure solely through repeated observations and duration rollover.
+    for (bool near : {false, true}) {
+        LeaveHsmm motionFilter;
+        LeaveObservation motion;
+        motion.relation_known = true;
+        motion.inside = !near;
+        motion.near = near;
+        motion.walking = motion.pdr_outbound = 1;
+        for (int64_t t = 1000; t < 1200000; t += 5000) {
+            const auto p = motionFilter.Step(motion, t, config);
+            if (p.LeavingProbability() >= .55) {
+                std::cerr << "FAIL motion-only departure near=" << near << " t=" << t << '\n';
+                return 1;
+            }
+        }
+    }
     config.preleave_min_s = 5.0;
     config.preleave_mean_s = 20.0;
     config.preleave_max_s = 90.0;

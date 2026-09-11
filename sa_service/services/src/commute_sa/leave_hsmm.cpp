@@ -122,22 +122,30 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
     // It remains available to the context-template primitive matcher, where an
     // Agent-selected sequence can use it without baking one building layout
     // into every user's baseline.
-    const std::array<double, 8> x {{observation.walking, observation.pdr_outbound, observation.geo_outbound,
+    const std::array<double, 6> x {{observation.geo_outbound,
         observation.wifi_detach, observation.cell_detach, observation.ble_detach, observation.time_prior,
         observation.baro_descending}};
-    const std::array<std::array<double, 8>, kPhaseCount> expected {{
-        {{0.08, 0.03, 0.03, 0.05, 0.08, 0.08, 0.25, 0.03}},
-        {{0.65, 0.24, 0.12, 0.16, 0.12, 0.10, 0.62, 0.30}},
-        {{0.92, 0.72, 0.72, 0.62, 0.40, 0.24, 0.72, 0.80}},
-        {{0.65, 0.55, 0.96, 0.88, 0.62, 0.30, 0.45, 0.08}},
+    const std::array<std::array<double, 6>, kPhaseCount> expected {{
+        {{0.03, 0.05, 0.08, 0.08, 0.25, 0.03}},
+        {{0.12, 0.16, 0.12, 0.10, 0.62, 0.30}},
+        {{0.72, 0.62, 0.40, 0.24, 0.72, 0.80}},
+        {{0.96, 0.88, 0.62, 0.30, 0.45, 0.08}},
     }};
 
     std::array<double, kPhaseCount> logLikelihood {};
     for (int state = 0; state < kPhaseCount; ++state) {
         double value = 0.0;
+        // Walking and step-derived PDR share motion measurements. Treat them as
+        // one locomotion channel, useful for PRE_LEAVE but not proof of exit.
+        // These likelihoods describe an ACTIVE motion observation; absence
+        // remains neutral, and a disabled channel cannot contribute via max.
+        const double motion = std::max(std::max(0.0, config.reliability[0]) * Clip01(observation.walking),
+            std::max(0.0, config.reliability[1]) * Clip01(observation.pdr_outbound));
+        const std::array<double, kPhaseCount> motionExpected {{0.45, 0.75, 0.35, 0.65}};
+        value += motion * std::log(motionExpected[state]);
         for (size_t feature = 0; feature < x.size(); ++feature) {
-            if (feature >= 7 && !observation.baro_available) continue;
-            const double reliability = std::max(0.0, config.reliability[feature]);
+            if (feature == 5 && !observation.baro_available) continue;
+            const double reliability = std::max(0.0, config.reliability[feature + 2]);
             value += reliability * ActiveEventLogLikelihood(x[feature], expected[state][feature]);
         }
 
@@ -147,7 +155,8 @@ std::array<double, LeaveHsmm::kPhaseCount> LeaveHsmm::EmissionLikelihood(
                 const std::array<double, kPhaseCount> p {{0.65, 0.65, 0.65, 0.02}};
                 relationExpected = p[state];
             } else if (observation.near) {
-                const std::array<double, kPhaseCount> p {{0.18, 0.48, 0.72, 0.12}};
+                // Nearness has no direction: returning users can be NEAR too.
+                const std::array<double, kPhaseCount> p {{0.65, 0.65, 0.65, 0.12}};
                 relationExpected = p[state];
             } else if (observation.outside) {
                 const std::array<double, kPhaseCount> p {{0.01, 0.03, 0.10, 0.97}};
