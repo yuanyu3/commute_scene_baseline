@@ -84,6 +84,7 @@ int main()
     std::ofstream profile(dir / "active_context_template.json");
     profile << R"({"template_name":"test","side":"company","anchor_id":"company_001",
       "applicability":"always","positive_sequence":"walking,wifi_detach","strength":0.2,
+      "readiness_policy":"disambiguate","ready_prefix_length":2,
       "context_engine":true,"positive_strength":0.2,"negative_strength":1.2,
       "return_strength":0.6,"absence_trigger":"walking,wifi_detach",
       "absence_expected":"baro_descending","absence_wait_s":10})";
@@ -97,14 +98,14 @@ int main()
         Check(ApplyActiveContextTemplateObservation("company", "company_001", t, &obs), "online apply");
         return obs;
     };
-    Check(tick(1000, true, 0).context_absence == 0, "ordered trigger first stage");
+    Check(tick(1000, true, 0).context_absence == 1, "incomplete discriminating prefix suppresses");
     Check(tick(6000, true, 0).context_absence == 0, "ordered trigger second stage");
     Check(tick(11000, true, 0).context_absence == .5, "online ramp");
     Check(tick(16000, false, 0).context_absence == 0, "online missing neutral");
     Check(tick(21000, true, 0).context_absence == .5, "online excludes missing interval");
     Check(tick(26000, true, 1).context_absence == 0, "online expected clears");
     Check(tick(31000, true, 0).context_absence == 0, "online expected stays cleared");
-    Check(tick(70000, true, 0).context_absence == 0, "online gap restarts trigger");
+    Check(tick(70000, true, 0).context_absence == 1, "online gap restarts at ambiguous first stage");
     // Fixture is deliberately left in the system temp directory for inspection.
     std::cout << "PASS context ramp, missing, reset, dedup, zero, HSMM single fusion\n";
 }

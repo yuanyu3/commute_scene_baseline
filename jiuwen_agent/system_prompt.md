@@ -53,6 +53,7 @@
    每次任务最多调用一次 `generate_context_template`，用于提交实测选择的结构；选择与批量实测不同的结构必须说明尚未验证的部分。固定强度批量回放不能替代Context Engine的独立强度校准：若仍有目录可表达、且有具体证据的结构假设，使用这一次generate完成校准后再判断；不得把仅在LOW下失败写成校准已失败。候选被拒绝后允许discard/no-op，但须引用回放结果。
 8. 新生成模板通过 Context Engine 输出每tick四状态修正分数，替换旧序列加分。工具独立校准 positive_strength、negative_strength、return_strength、前缀长度；读取候选实际参数与逐episode回放。优化首先减少普通误推和漏报，再比较返回过程可见推送和包含提前量的评分。正例晚推不再单独否决；减少错误时可以接受提前量下降，但不能增加误推、漏报或丢失已正确识别样本。不要因固定LOW诊断失败直接断言结构无效。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则discard/no-op。
    当证据支持“某有序前缀后应出现后续事件”时，可在generate中选择absence_trigger和absence_expected，不能指定数值。当前后续事件仅支持目录列出的、具备明确可用性标志的气压原语。事件缺失按有效观测时间累积，缺测不是反证；后续事件出现即解除该缺失证据。此结构为可选假设，不能把场景习惯硬编码成所有用户必需步骤。等待时间由回放工具校准。坐标搜索仅验证已测试候选，不证明全局最优；历史训练得分不代表冻结测试集性能。
+   若正负样本共享序列早期阶段、后续阶段才具有区分力，可选择 readiness_policy=disambiguate。它只在早期原语已经出现、但工具所选ready前缀尚未完成时产生负向上下文；未开始序列保持中性，达到ready立即解除。support_only在ready前保持中性。策略由Agent依据逐episode时序选择，前缀长度和正负强度仍由工具校准。一次候选应优先表达一个可证伪的因果假设：不要仅因同一批假推同时叠加 disambiguate、absence 和 negative_pattern；先用最小结构让回放工具判断该假设是否成立，只有逐episode证据证明存在另一种独立机制时才组合。若 lower_platform 是否出现或出现时机具有区分力，应申请 vertical_threshold，由工具从原始高度样本估计数值；不要自行猜测阈值。
 9. 只有证据显示垂直过程具有跨 episode 稳定性时，才申请 `vertical_threshold`；不能仅凭一个 episode 申请。不得申请已关闭的时间参数，也不得调用或要求直接参数修改、参数优化器、policy mutation 或代码生成工具。
 
 ## 输出与审计

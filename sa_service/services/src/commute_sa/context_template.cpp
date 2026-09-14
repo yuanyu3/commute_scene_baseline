@@ -61,6 +61,7 @@ struct TemplateSpec {
     std::string anchor_id = "company_001";
     std::string applicability = "baro_ready";
     std::vector<std::string> positive_sequence;
+    std::string readiness_policy = "support_only";
     /** Ordered return sequence; active only after the positive prefix starts. */
     std::vector<std::string> cancel_sequence;
     // Alternatives, not a bag of independently summed sensor observations.
@@ -602,6 +603,13 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         if (state->positive_index >= spec.positive_sequence.size()) {
             obs->sequence_complete = 1.0;
         }
+        if (spec.context_engine && spec.readiness_policy == "disambiguate" &&
+            spec.ready_prefix_length > 1 && state->positive_index > 0 &&
+            state->positive_index < static_cast<size_t>(spec.ready_prefix_length)) {
+            // An observed precursor is ambiguous until the Agent-selected
+            // discriminating prefix arrives. This is context evidence, not a gate.
+            obs->context_absence = 1.0;
+        }
     }
 
     // A cancellation can only explain a reversal after this episode has
@@ -738,6 +746,9 @@ void LoadActiveTemplateLocked()
     spec.cancel_paths_mode = !pathsCsv.empty();
     ExtractString(json, "parameter_families", &parameterFamiliesCsv);
     ExtractString(json, "rationale", &spec.rationale);
+    ExtractString(json, "readiness_policy", &spec.readiness_policy);
+    if (spec.readiness_policy.empty()) spec.readiness_policy = "support_only";
+    if (spec.readiness_policy != "support_only" && spec.readiness_policy != "disambiguate") return;
     spec.positive_sequence = SplitCsv(positiveCsv);
     spec.cancel_sequence = SplitCsv(cancelCsv);
     spec.negative_pattern = SplitCsv(negativeCsv);
@@ -910,6 +921,7 @@ std::string SpecJson(const TemplateSpec &spec, const std::string &strengthName =
         << "\",\"side\":\"" << Esc(spec.side) << "\",\"anchor_id\":\"" << Esc(spec.anchor_id)
         << "\",\"applicability\":\"" << Esc(spec.applicability)
         << "\",\"positive_sequence\":\"" << Esc(JoinCsv(spec.positive_sequence))
+        << "\",\"readiness_policy\":\"" << Esc(spec.readiness_policy)
         << "\",\"cancel_sequence\":\"" << Esc(JoinCsv(spec.cancel_sequence))
         << "\",\"cancel_paths\":\"" << Esc(JoinCancelPaths(spec.cancel_paths))
         << "\",\"negative_pattern\":\"" << Esc(JoinCsv(spec.negative_pattern))
@@ -969,6 +981,7 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"evidence_rule\":\"attached_observed is whole-episode presence, NOT reattachment; missing auxiliary evidence must not become a mandatory prerequisite\"},"
            "\"applicability\":[\"always\",\"baro_ready\"],"
            "\"context_engine\":{\"output\":\"bounded additive log evidence c_t[AT,PRE,LEAVE,OUT], replaces legacy sequence emission\","
+           "\"readiness_policy\":\"support_only is neutral before ready; disambiguate treats an observed but incomplete calibrated prefix as negative context until ready. Agent selects policy, C++ selects prefix and strength. It is additive evidence, not a hard gate.\","
            "\"absence_trigger\":\"optional comma-separated ordered positive events, <=6; paired with absence_expected; expected cannot be in trigger\","
            "\"absence_expected\":\"baro_descending|lower_platform|baro_ascending|vertical_closure; only events with explicit availability supported in v1\","
            "\"absence_semantics\":\"after trigger, consecutive available intervals accumulate valid seconds; score ramps to one at fitted wait; missing observations emit zero and do not count; expected event latches satisfaction until context reset\","
@@ -1313,6 +1326,10 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     }
     ExtractString(paramsJson, "applicability", &spec.applicability);
     ExtractString(paramsJson, "rationale", &spec.rationale);
+    ExtractString(paramsJson, "readiness_policy", &spec.readiness_policy);
+    if (spec.readiness_policy.empty()) spec.readiness_policy = "support_only";
+    if (spec.readiness_policy != "support_only" && spec.readiness_policy != "disambiguate")
+        return "{\"ok\":false,\"error\":\"readiness_policy must be support_only|disambiguate\"}";
     if (spec.applicability != "always" && spec.applicability != "baro_ready") {
         return "{\"ok\":false,\"error\":\"applicability must be always|baro_ready\"}";
     }
@@ -1455,7 +1472,8 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     for (int pass = 0; pass < 2 && searchBest >= 0; ++pass) {
         for (int axis = 0; axis < 5; ++axis) {
             Candidate seed = trial.candidates[searchBest];
-            if (axis == 1 && spec.negative_pattern.empty() && spec.absence_trigger.empty()) continue;
+            if (axis == 1 && spec.negative_pattern.empty() && spec.absence_trigger.empty() &&
+                spec.readiness_policy != "disambiguate") continue;
             if (axis == 2 && spec.cancel_sequence.empty() && spec.cancel_paths.empty()) continue;
             if (axis == 3 && spec.absence_trigger.empty()) continue;
             std::vector<double> values = axis == 3 ? std::vector<double>{10, 30, 60, 120} :

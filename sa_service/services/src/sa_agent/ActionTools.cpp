@@ -203,6 +203,7 @@ std::vector<std::string> RegisterActionTools()
             {"anchor_id", "exact anchor id", "string", true},
             {"applicability", "always|baro_ready", "string", true},
             {"positive_sequence", "ordered catalog events", "string", true},
+            {"readiness_policy", "support_only|disambiguate for observed incomplete prefix", "string", false},
             {"cancel_sequence", "optional ordered return events", "string", false},
             {"cancel_paths", "optional comma-ordered, pipe-separated return paths; see catalog; excludes cancel_sequence", "string", false},
             {"negative_pattern", "optional same-tick conjunction", "string", false},

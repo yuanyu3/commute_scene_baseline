@@ -38,6 +38,12 @@ HSMM 转移拓扑、duration、产品门控保持现有实现。
 使用 readiness 时不再同时累加 progress 和 complete。前缀从 0 到序列长度都可测试，
 无需强制等待完整过程。前缀本身的判别力由历史回放评分评估，不新增另一套分类器。
 
+Agent 可选 `readiness_policy=disambiguate` 表达“早期步骤在正负样本中共有，后续步骤
+才有区分力”。某个早期原语已经出现且尚未达到工具选择的 ready 前缀时，Context
+Engine 输出负向四状态证据；达到 ready 后立即解除。序列尚未开始时保持中性。
+`support_only` 保持原行为。该机制是有界发射证据，不是硬门控，策略由 Agent 选择，
+ready_prefix_length 和独立正负强度由确定性回放选择。
+
 正向、负向、返回使用独立的 positive_strength、negative_strength、return_strength：
 
 ```
