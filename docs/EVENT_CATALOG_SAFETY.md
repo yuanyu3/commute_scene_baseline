@@ -1,7 +1,7 @@
 # 统一事实目录与组合安全
 
 原语不带正负标签，不设置 allowed_roles。event_catalog.h 提供统一事实目录与三值判定，
-Context Template 的正向、负向、返回、条件缺失结构决定组合的用途。
+Context Template 的正向、负向、返回和前缀结构决定组合的用途。
 不再根据 no_ 名称禁止事实用于序列。
 
 ## 已实现的组合校验
@@ -11,7 +11,7 @@ Context Template 的正向、负向、返回、条件缺失结构决定组合的
 - 跨 tick 的 A 然后 not-A 是合法变化，不按上述同刻矛盾拒绝。
 - 返回单序列和多路径均检查物理逆转顺序；历史匹配和回放保护继续生效。
 - 原有预算、路径时效、上下文重置、独立强度校准、重复证据取最大值与提交保护保留。
-- UNKNOWN 不推进序列，不等于 FALSE；有效条件缺失不累计 UNKNOWN 时间。
+- UNKNOWN 不推进序列，不等于 FALSE。
 - disambiguate 等待的下一事件为 UNKNOWN 时，不输出该未完成前缀的负向证据。
 
 ## GPS 慢刷新
@@ -34,7 +34,7 @@ SA 将定位 observed_at 传入 BaselineRuntime 和 SceneEngine，区别于处�
 
 30秒和120秒是当前固定工程边界，不是从个人数据学出的最优值。目录公开这些边界，
 Agent不能直接修改。当前 no_geo_outbound 仅表示在有效观测下外向分数低，不证明人静止。
-GPS期望缺失计时暂未开放：absence_expected 仍限有明确有效性语义的气压事实。
+条件缺失等待机制已删除，仅保留基于序列进度的 disambiguate。
 
 policy_history 同时保存 geo_observation_known、geo_fix_age_s、geo_fix_interval_s、
 geo_reliability。回放和Agent时序查询读取这些字段。旧历史缺字段时按UNKNOWN处理，

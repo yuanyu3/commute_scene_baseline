@@ -32,7 +32,7 @@ def main():
     save('legacy.json', old)
     results = {'legacy': old['frozen']}
     active = json.loads((args.source / 'active_context_template.json').read_text())
-    for mode in ('independent_negative', 'conditional_absence'):
+    for mode in ('independent_negative', 'prefix_disambiguation'):
         root = copy(mode)
         proposal = {k: active[k] for k in ('anchor_id', 'applicability', 'positive_sequence', 'cancel_paths')}
         proposal.update(template_name='context_engine_' + mode,
@@ -40,7 +40,7 @@ def main():
         if mode == 'independent_negative':
             proposal['negative_pattern'] = 'no_baro_descent'
         else:
-            proposal.update(absence_trigger='walking,wifi_detach', absence_expected='baro_descending')
+            proposal.update(readiness_policy='disambiguate')
         fitted = call(args.binary, root, 'template_fit', proposal)
         save(mode + '_fit.json', fitted)
         assert fitted['trial']['ok'], fitted

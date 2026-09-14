@@ -68,8 +68,7 @@ struct LeaveObservation {
     double context_positive_strength = 0.0;
     double context_negative_strength = 0.0;
     double context_return_strength = 0.0;
-    double context_absence = 0.0;
-    double context_wait_s = 0.0;
+    double context_prefix_incomplete = 0.0;
 };
 
 struct LeaveHsmmConfig {

@@ -65,23 +65,11 @@ int main()
     baseline.pushed = false;
     candidate.pushed = true;
     Check(!CheckReplayEpisodeSafety({baseline}, {candidate}, &reason), "new false push still rejected");
-    ContextAbsenceClock clock;
-    Check(clock.Step(1000, false, true, false, 10) == 0, "no trigger");
-    Check(clock.Step(2000, true, true, false, 10) == 0, "trigger is neutral");
-    Check(std::abs(clock.Step(7000, true, true, false, 10) - .5) < 1e-9, "valid interval ramp");
-    Check(clock.Step(12000, true, false, false, 10) == 0, "missing is neutral");
-    Check(std::abs(clock.Step(17000, true, true, false, 10) - .5) < 1e-9, "missing interval excluded");
-    Check(clock.Step(22000, true, true, false, 10) == 1, "ramp saturation");
-    Check(clock.Step(27000, true, true, true, 10) == 0, "expected clears absence");
-    Check(clock.Step(32000, true, true, false, 10) == 0, "satisfaction latched");
-    Check(clock.Step(70000, true, true, false, 10) == 0, "long gap resets");
-    Check(clock.Step(1000, true, true, false, 10) == 0, "clock reversal resets");
-
     LeaveObservation o;
     o.context_available = true;
     o.context_negative_strength = 1.2;
     o.context_return_strength = .6;
-    o.context_absence = 1;
+    o.context_prefix_incomplete = 1;
     ComposeContextEvidence(o);
     Check(std::abs(o.context_scores[2] + 2.4) < 1e-9, "negative suppresses leaving");
     const auto negative = o.context_scores;
@@ -121,11 +109,10 @@ int main()
     Check(ProductStore::GetInstance().Init(dir.string()), "fixture store init");
     std::ofstream profile(dir / "active_context_template.json");
     profile << R"({"template_name":"test","side":"company","anchor_id":"company_001",
-      "applicability":"always","positive_sequence":"walking,wifi_detach","strength":0.2,
+      "applicability":"always","positive_sequence":"walking,baro_descending","strength":0.2,
       "readiness_policy":"disambiguate","ready_prefix_length":2,
       "context_engine":true,"positive_strength":0.2,"negative_strength":1.2,
-      "return_strength":0.6,"absence_trigger":"walking,wifi_detach",
-      "absence_expected":"baro_descending","absence_wait_s":10})";
+      "return_strength":0.6})";
     profile.close();
     ReloadActiveContextTemplateRuntime();
     auto tick = [](int64_t t, bool available, double descending) {
@@ -136,14 +123,14 @@ int main()
         Check(ApplyActiveContextTemplateObservation("company", "company_001", t, &obs), "online apply");
         return obs;
     };
-    Check(tick(1000, true, 0).context_absence == 1, "incomplete discriminating prefix suppresses");
-    Check(tick(6000, true, 0).context_absence == 0, "ordered trigger second stage");
-    Check(tick(11000, true, 0).context_absence == .5, "online ramp");
-    Check(tick(16000, false, 0).context_absence == 0, "online missing neutral");
-    Check(tick(21000, true, 0).context_absence == .5, "online excludes missing interval");
-    Check(tick(26000, true, 1).context_absence == 0, "online expected clears");
-    Check(tick(31000, true, 0).context_absence == 0, "online expected stays cleared");
-    Check(tick(70000, true, 0).context_absence == 1, "online gap restarts at ambiguous first stage");
+    Check(tick(1000, true, 0).context_prefix_incomplete == 1, "incomplete discriminating prefix suppresses");
+    Check(tick(6000, true, 0).context_prefix_incomplete == 1, "incomplete prefix remains active");
+    Check(tick(11000, true, 0).context_prefix_incomplete == 1, "no wait ramp");
+    Check(tick(16000, false, 0).context_prefix_incomplete == 0, "online missing neutral");
+    Check(tick(21000, true, 0).context_prefix_incomplete == 1, "valid incomplete prefix resumes");
+    Check(tick(26000, true, 1).context_prefix_incomplete == 0, "online expected clears");
+    Check(tick(31000, true, 0).context_prefix_incomplete == 0, "online expected stays cleared");
+    Check(tick(70000, true, 0).context_prefix_incomplete == 1, "online gap restarts at ambiguous first stage");
     // Fixture is deliberately left in the system temp directory for inspection.
-    std::cout << "PASS context ramp, missing, reset, dedup, zero, HSMM single fusion\n";
+    std::cout << "PASS prefix readiness, missing, reset, dedup, zero, HSMM single fusion\n";
 }

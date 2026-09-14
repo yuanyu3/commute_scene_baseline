@@ -348,8 +348,7 @@ void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::
             << ",\"obs_context_scores\":[" << row.hsmm_obs.context_scores[0] << ','
             << row.hsmm_obs.context_scores[1] << ',' << row.hsmm_obs.context_scores[2] << ','
             << row.hsmm_obs.context_scores[3] << ']'
-            << ",\"obs_context_absence\":" << row.hsmm_obs.context_absence
-            << ",\"obs_context_wait_s\":" << row.hsmm_obs.context_wait_s
+            << ",\"obs_context_prefix_incomplete\":" << row.hsmm_obs.context_prefix_incomplete
             << ",\"obs_sequence_progress\":" << row.hsmm_obs.sequence_progress
             << ",\"obs_sequence_complete\":" << row.hsmm_obs.sequence_complete
             << ",\"obs_sequence_ready\":" << row.hsmm_obs.sequence_ready

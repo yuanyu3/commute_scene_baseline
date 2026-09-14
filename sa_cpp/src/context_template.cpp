@@ -53,9 +53,6 @@ struct TemplateSpec {
     double positive_strength = 0.2;
     double negative_strength = 0.2;
     double return_strength = 0.2;
-    double absence_wait_s = 30.0;
-    std::vector<std::string> absence_trigger;
-    std::string absence_expected;
     int ready_prefix_length = 0; // 0: legacy fusion; fitted only by bounded replay.
     std::string template_name;
     std::string side = "company";
@@ -107,8 +104,6 @@ bool gActivePresent = false;
 TemplateSpec gActiveSpec;
 double gActiveStrength = 0.0;
 struct TemplateRuntimeState {
-    size_t absence_index = 0;
-    ContextAbsenceClock absence_clock;
     int64_t context_started_ms = 0;
     int64_t context_last_ms = 0;
     size_t positive_index = 0;
@@ -529,6 +524,7 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
     }
     // Replaying an observation that was previously produced under another
     // active template must not carry old template evidence into this trial.
+    obs->context_prefix_incomplete = 0.0;
     obs->sequence_available = true;
     obs->sequence_progress = 0.0;
     obs->sequence_complete = 0.0;
@@ -542,15 +538,6 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
     if (spec.personalized_vertical_threshold && obs->baro_available && obs->baro_stable_platform_known) {
         obs->baro_lower_platform = obs->baro_stable_platform &&
             obs->baro_descent_m >= spec.baro_min_descent_m ? 1.0 : 0.0;
-    }
-    if (spec.context_engine) {
-        if (!obs->outside && state->absence_index < spec.absence_trigger.size() &&
-            EventActive(spec.absence_trigger[state->absence_index], *obs)) ++state->absence_index;
-        obs->context_absence = state->absence_clock.Step(obs->t_ms,
-            !obs->outside && !spec.absence_trigger.empty() && state->absence_index == spec.absence_trigger.size(),
-            EvaluateEventFact(spec.absence_expected, *obs) != EventTruth::Unknown,
-            EventActive(spec.absence_expected, *obs), spec.absence_wait_s);
-        obs->context_wait_s = state->absence_clock.valid_s;
     }
     if (state->cancel_until_ms > 0) {
         // New templates may release the hold after a fresh, sustained departure.
@@ -566,7 +553,7 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
             }
         }
         if (state->cancel_until_ms > 0 && obs->t_ms <= state->cancel_until_ms) {
-            obs->context_absence = 0;
+            obs->context_prefix_incomplete = 0;
             obs->negative_pattern_match = 1.0;
             obs->cancel_sequence_match = 1.0;
             return false;
@@ -596,7 +583,7 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
             EvaluateEventFact(spec.positive_sequence[state->positive_index], *obs) != EventTruth::Unknown) {
             // An observed precursor is ambiguous until the Agent-selected
             // discriminating prefix arrives. This is context evidence, not a gate.
-            obs->context_absence = 1.0;
+            obs->context_prefix_incomplete = 1.0;
         }
     }
 
@@ -633,9 +620,7 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         if (obs->outside) state->positive_index = 0;
     }
     if (pathComplete || (!spec.cancel_sequence.empty() && state->cancel_index >= spec.cancel_sequence.size())) {
-        state->absence_clock = {};
-        state->absence_index = 0;
-        obs->context_absence = 0;
+        obs->context_prefix_incomplete = 0;
         constexpr int64_t kCancelHoldMs = 120000;
         state->cancel_until_ms = obs->t_ms + kCancelHoldMs;
         state->positive_index = 0;
@@ -661,23 +646,6 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
     }
     return state->positive_index > previousPositive || state->cancel_index > previousCancel ||
         state->cancel_until_ms > 0;
-}
-
-bool ParseAbsence(const std::string &json, TemplateSpec *spec)
-{
-    std::string trigger;
-    ExtractString(json, "absence_trigger", &trigger);
-    ExtractString(json, "absence_expected", &spec->absence_expected);
-    spec->absence_trigger = SplitCsv(trigger);
-    if (spec->absence_trigger.empty() && spec->absence_expected.empty()) return true;
-    if (spec->absence_trigger.empty() || spec->absence_trigger.size() > 6) return false;
-    // Only this family currently exposes explicit availability. Other families
-    // can be enabled when their missing/quality semantics reach LeaveObservation.
-    const std::set<std::string> expected {"baro_descending", "lower_platform", "baro_ascending", "vertical_closure"};
-    if (!expected.count(spec->absence_expected)) return false;
-    for (const auto &e : spec->absence_trigger)
-        if (!SupportedEvents().count(e) || e == spec->absence_expected) return false;
-    return true;
 }
 
 void ComposeSpecContext(const TemplateSpec &spec, LeaveObservation &obs)
@@ -707,7 +675,6 @@ void LoadActiveTemplateLocked()
     std::string parameterFamiliesCsv;
     double strength = 0.0;
     ExtractBool(json, "context_engine", &spec.context_engine);
-    if (!ParseAbsence(json, &spec)) return;
     if (spec.context_engine) {
         for (auto field : {std::make_pair("positive_strength", &spec.positive_strength),
             std::make_pair("negative_strength", &spec.negative_strength),
@@ -715,8 +682,6 @@ void LoadActiveTemplateLocked()
             if (!ExtractNumber(json, field.first, field.second) || !std::isfinite(*field.second) ||
                 *field.second < 0 || *field.second > 2.4) return;
         }
-        if (!ExtractNumber(json, "absence_wait_s", &spec.absence_wait_s) ||
-            !std::isfinite(spec.absence_wait_s) || spec.absence_wait_s < 10 || spec.absence_wait_s > 120) return;
     }
     if (!ExtractString(json, "template_name", &spec.template_name) ||
         !ExtractString(json, "side", &spec.side) ||
@@ -871,8 +836,7 @@ ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
         obs.sequence_available = false;
         obs.context_available = false;
         obs.context_scores.fill(0);
-        obs.context_absence = 0;
-        obs.context_wait_s = 0;
+        obs.context_prefix_incomplete = 0;
         obs.sequence_progress = 0.0;
         obs.sequence_complete = 0.0;
         obs.sequence_ready = -1.0;
@@ -881,7 +845,6 @@ ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
         obs.sequence_reliability = 0.0;
         if (!obs.context_side.empty() && obs.context_side != spec.side) return;
         if (spec.applicability == "baro_ready" && !obs.baro_available) {
-            state.absence_clock.previous_valid = false;
             return;
         }
         if (state.last_match_ms > 0 &&
@@ -900,14 +863,11 @@ ObservationAdapter BuildAdapter(const TemplateSpec &spec, double strength)
 std::string SpecJson(const TemplateSpec &spec, const std::string &strengthName = "", double strength = 0.0)
 {
     std::ostringstream out;
-    out << "{\"schema_version\":7,\"context_engine\":" << (spec.context_engine ? "true" : "false")
+    out << "{\"schema_version\":9,\"context_engine\":" << (spec.context_engine ? "true" : "false")
         << ",\"positive_strength\":" << spec.positive_strength
         << ",\"negative_strength\":" << spec.negative_strength
         << ",\"return_strength\":" << spec.return_strength
-        << ",\"absence_wait_s\":" << spec.absence_wait_s
-        << ",\"absence_trigger\":\"" << Esc(JoinCsv(spec.absence_trigger))
-        << "\",\"absence_expected\":\"" << Esc(spec.absence_expected)
-        << "\",\"ready_prefix_length\":" << spec.ready_prefix_length
+        << ",\"ready_prefix_length\":" << spec.ready_prefix_length
         << ",\"template_name\":\"" << Esc(spec.template_name)
         << "\",\"side\":\"" << Esc(spec.side) << "\",\"anchor_id\":\"" << Esc(spec.anchor_id)
         << "\",\"applicability\":\"" << Esc(spec.applicability)
@@ -965,7 +925,7 @@ std::string TrialJson(const Trial &trial)
 
 std::string GetContextTemplateCatalogAction(const std::string &)
 {
-    std::string result = "{\"ok\":true,\"schema_version\":8,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
+    std::string result = "{\"ok\":true,\"schema_version\":9,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
            "\"cancel_paths\":{\"syntax\":\"ordered comma-separated events; pipe separates up to 3 alternative paths; mutually exclusive with cancel_sequence\","
            "\"validation\":\"each path needs baro_ascending before vertical_closure, or geo_outbound before approaching ending in attached; <=6 events per path\","
            "\"fusion\":\"any completed path; no additive sensor votes; redundant prefix extensions removed; 180s path expiry; fresh departure for 10s releases 120s hold\","
@@ -973,11 +933,8 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"applicability\":[\"always\",\"baro_ready\"],"
            "\"context_engine\":{\"output\":\"bounded additive log evidence c_t[AT,PRE,LEAVE,OUT], replaces legacy sequence emission\","
            "\"readiness_policy\":\"support_only is neutral before ready; disambiguate treats an observed but incomplete calibrated prefix as negative context until ready. Agent selects policy, C++ selects prefix and strength. It is additive evidence, not a hard gate.\","
-           "\"absence_trigger\":\"optional comma-separated ordered facts, <=6; paired with absence_expected; expected cannot be in trigger\","
-           "\"absence_expected\":\"baro_descending|lower_platform|baro_ascending|vertical_closure; only events with explicit availability supported in v1\","
-           "\"absence_semantics\":\"after trigger, consecutive available intervals accumulate valid seconds; score ramps to one at fitted wait; missing observations emit zero and do not count; expected event latches satisfaction until context reset\","
-           "\"lifecycle\":\"30s tick gap or clock reversal resets context; 600s lifetime; outside and completed return reset absence; legacy product guards retained\","
-           "\"calibration\":\"deterministic two-pass coordinate search: independent positive/negative/return strengths 0,0.2,0.6,1.2,2.4; absence wait 10,30,60,120s; causal prefix selection; no global optimum claim\"},"
+           "\"lifecycle\":\"30s tick gap or clock reversal resets context; 600s lifetime; outside and completed return reset context; legacy product guards retained\","
+           "\"calibration\":\"deterministic two-pass coordinate search: independent positive/negative/return strengths 0,0.2,0.6,1.2,2.4; causal prefix selection; no global optimum claim\"},"
            "\"event_semantics\":{"
            "\"scope\":\"Facts are role-neutral predicates with TRUE/FALSE/UNKNOWN on the CURRENT tick. An event at one tick does not imply its presence or absence throughout an episode. Continuous values above zero are not necessarily active.\","
            "\"threshold_0_5\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\",\"ble_detach\",\"baro_descending\"],"
@@ -1302,8 +1259,6 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
 {
     TemplateSpec spec;
     spec.context_engine = true;
-    if (!ParseAbsence(paramsJson, &spec))
-        return "{\"ok\":false,\"error\":\"invalid absence_trigger/absence_expected; consult catalog\"}";
     std::string positiveCsv;
     std::string cancelCsv;
     std::string negativeCsv;
@@ -1477,15 +1432,13 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     // Two bounded coordinate passes, all scored on the same causal replay.
     // Independent channel strengths include zero; no Agent-supplied numbers.
     for (int pass = 0; pass < 2 && searchBest >= 0; ++pass) {
-        for (int axis = 0; axis < 5; ++axis) {
+        for (int axis = 0; axis < 4; ++axis) {
             Candidate seed = trial.candidates[searchBest];
-            if (axis == 1 && spec.negative_pattern.empty() && spec.absence_trigger.empty() &&
+            if (axis == 1 && spec.negative_pattern.empty() &&
                 spec.readiness_policy != "disambiguate") continue;
             if (axis == 2 && spec.cancel_sequence.empty() && spec.cancel_paths.empty()) continue;
-            if (axis == 3 && spec.absence_trigger.empty()) continue;
-            std::vector<double> values = axis == 3 ? std::vector<double>{10, 30, 60, 120} :
-                std::vector<double>{0, 0.2, 0.6, 1.2, 2.4};
-            if (axis == 4) {
+            std::vector<double> values {0, 0.2, 0.6, 1.2, 2.4};
+            if (axis == 3) {
                 values.clear();
                 for (int p = 0; p <= static_cast<int>(spec.positive_sequence.size()); ++p) values.push_back(p);
             }
@@ -1496,8 +1449,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
                 if (axis == 0) candidate.spec.positive_strength = value;
                 if (axis == 1) candidate.spec.negative_strength = value;
                 if (axis == 2) candidate.spec.return_strength = value;
-                if (axis == 3) candidate.spec.absence_wait_s = value;
-                if (axis == 4) candidate.spec.ready_prefix_length = static_cast<int>(value);
+                if (axis == 3) candidate.spec.ready_prefix_length = static_cast<int>(value);
                 evaluateCandidate(candidate);
             }
         }
@@ -1706,7 +1658,7 @@ std::string DiagnoseContextTemplateOnHistoryAction(const std::string &args)
         if (ablation == "negative" || ablation == "both") {
             obs.negative_pattern_match = 0;
             obs.cancel_sequence_match = 0;
-            obs.context_absence = 0;
+            obs.context_prefix_incomplete = 0;
         }
         ComposeContextEvidence(obs);
     };
@@ -1731,14 +1683,12 @@ bool ApplyActiveContextTemplateObservation(const std::string &side, const std::s
     if (observation == nullptr) return false;
     observation->context_available = false;
     observation->context_scores.fill(0);
-    observation->context_absence = 0;
-    observation->context_wait_s = 0;
+    observation->context_prefix_incomplete = 0;
     std::lock_guard<std::mutex> lock(gTemplateMutex);
     if (!gActiveLoaded) LoadActiveTemplateLocked();
     if (!gActivePresent || gActiveSpec.side != side ||
         (!gActiveSpec.anchor_id.empty() && gActiveSpec.anchor_id != anchorId) ||
         (gActiveSpec.applicability == "baro_ready" && !observation->baro_available)) {
-        gActiveState.absence_clock.previous_valid = false;
         return false;
     }
     // A stale partial sequence must not leak into a later departure episode.

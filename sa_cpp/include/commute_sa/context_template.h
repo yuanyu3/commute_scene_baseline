@@ -25,7 +25,7 @@ std::string DiagnoseContextTemplateOnHistoryAction(const std::string &paramsJson
 std::string ProposeAbortedLeaveInterpretationAction(const std::string &paramsJson);
 
 /**
- * Validate Agent-composed sequences and optional conditioned absence, calibrate
+ * Validate Agent-composed sequences and prefix readiness, calibrate
  * independent context channels and wait time, and stage the best safe template.
  * The Agent supplies structure only; numeric strengths are chosen in C++.
  */

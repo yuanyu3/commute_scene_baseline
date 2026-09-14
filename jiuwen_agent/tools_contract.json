@@ -269,8 +269,6 @@
         "cancel_sequence": "optional ordered events",
         "cancel_paths": "optional alternative ordered paths",
         "negative_pattern": "optional conjunction",
-        "absence_trigger": "optional ordered events; paired with absence_expected",
-        "absence_expected": "optional baro_descending|lower_platform|baro_ascending|vertical_closure",
         "parameter_families": "optional vertical_threshold",
         "rationale": "required for template families",
         "families": "evidence channels for EVIDENCE_STRENGTH",
