@@ -43,7 +43,7 @@
     "after_push_settle_s": 1200
   },
   "constraints": {
-    "max_template_generations_per_invoke": 1,
+    "max_template_generations_per_invoke": 3,
     "direct_numeric_targets_forbidden": true,
     "require_error_evidence": true,
     "require_eval_before_commit": true

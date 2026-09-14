@@ -81,6 +81,7 @@ struct TemplateSpec {
 struct Candidate {
     TemplateSpec spec;
     int id = 0;
+    int combination = 0;
     std::string strength_name;
     double strength = 0.0;
     Metrics metrics;
@@ -95,6 +96,8 @@ struct Trial {
     Metrics incumbent;
     std::vector<Candidate> candidates;
     int best_index = -1;
+    int evaluated_count = 0;
+    std::vector<std::string> modules;
 };
 
 std::mutex gTemplateMutex;
@@ -903,11 +906,16 @@ std::string TrialJson(const Trial &trial)
         << ",\"incumbent\":" << MetricsJson(trial.incumbent)
         << ",\"best_candidate_id\":";
     if (trial.best_index >= 0) out << trial.candidates[trial.best_index].id; else out << "null";
-    out << ",\"candidates\":[";
+    out << ",\"evaluated_candidate_count\":" << trial.evaluated_count << ",\"module_catalog\":[";
+    for (size_t i = 0; i < trial.modules.size(); ++i) {
+        if (i) out << ',';
+        out << "{\"bit\":" << i << ",\"name\":\"" << trial.modules[i] << "\"}";
+    }
+    out << "],\"candidate_output\":\"best eligible and diagnostic per combination\",\"candidates\":[";
     for (size_t i = 0; i < trial.candidates.size(); ++i) {
         if (i) out << ',';
         const auto &candidate = trial.candidates[i];
-        out << "{\"id\":" << candidate.id << ",\"strength_level\":\"" << candidate.strength_name
+        out << "{\"id\":" << candidate.id << ",\"combination_mask\":" << candidate.combination << ",\"strength_level\":\"" << candidate.strength_name
             << "\",\"strength\":" << candidate.strength << ",\"eligible\":"
             << (candidate.eligible ? "true" : "false") << ",\"rejection\":\"" << Esc(candidate.rejection)
             << "\",\"template\":" << SpecJson(candidate.spec, candidate.strength_name, candidate.strength)
@@ -1334,6 +1342,9 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     const Metrics baseline = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
         RootDir(), theta, {}, 0, 1000, false, 0, &baselineEpisodes, spec.anchor_id, spec.side));
     if (!baseline.ok) return "{\"ok\":false,\"error\":\"baseline history replay unavailable\"}";
+
+    // Parameter-only requests must not implicitly remove structural modules.
+    if (!spec.parameter_families.empty()) {
     if ((!spec.cancel_sequence.empty() || !spec.cancel_paths.empty()) && baseline.n_aborted_leave < 2) {
         return "{\"ok\":false,\"error\":\"cancel_sequence requires at least 2 ABORTED_LEAVE episodes\","
                "\"n_aborted_leave\":" + std::to_string(baseline.n_aborted_leave) + "}";
@@ -1353,10 +1364,29 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         }
     }
 
+    }
     Trial trial;
     trial.active = true;
     trial.spec = spec;
     trial.baseline = baseline;
+    if (spec.parameter_families.empty()) {
+    if (spec.readiness_policy == "disambiguate") trial.modules.push_back("readiness");
+    if (!spec.negative_pattern.empty()) trial.modules.push_back("negative_pattern");
+    if (!spec.cancel_sequence.empty()) trial.modules.push_back("cancel_sequence");
+    for (size_t i = 0; i < spec.cancel_paths.size(); ++i)
+        trial.modules.push_back("cancel_path_" + std::to_string(i));
+    }
+    std::vector<bool> supported(trial.modules.size(), true);
+    for (size_t i = 0; i < trial.modules.size(); ++i) {
+        if (trial.modules[i].find("cancel_") != 0) continue;
+        TemplateSpec single = spec;
+        if (trial.modules[i].find("cancel_path_") == 0)
+            single.cancel_paths = {spec.cancel_paths[std::stoi(trial.modules[i].substr(12))]};
+        const Metrics support = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
+            RootDir(), theta, BuildAdapter(single, 0.2), 0, 1000, false, 0, nullptr,
+            spec.anchor_id, spec.side));
+        supported[i] = baseline.n_aborted_leave >= 2 && support.ok && support.aborted_cancel_recognized >= 2;
+    }
     // Replacing an existing template must not regress it merely because the
     // candidate beats an unpersonalized baseline.
     TemplateSpec incumbentSpec;
@@ -1378,7 +1408,9 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     double bestScore = -1.0e100;
     int nextId = 1;
     int searchBest = -1;
+    int combination = 0;
     auto evaluateCandidate = [&](Candidate candidate) {
+        candidate.combination = combination;
         candidate.id = nextId++;
         std::vector<ReplayEpisodeSummary> candidateEpisodes;
         candidate.metrics = ParseMetrics(EvaluateThetaOnHistoryWithAdapterJson(
@@ -1416,6 +1448,34 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
             searchBest = static_cast<int>(trial.candidates.size());
         trial.candidates.push_back(std::move(candidate));
     };
+    const TemplateSpec proposed = spec;
+    for (combination = 0; combination < (1 << trial.modules.size()); ++combination) {
+        spec = proposed;
+        bool valid = true;
+        if (!trial.modules.empty()) spec.cancel_paths.clear();
+        for (size_t i = 0; i < trial.modules.size(); ++i) {
+            const bool keep = (combination & (1 << i)) != 0;
+            if (keep && !supported[i]) valid = false;
+            const auto &name = trial.modules[i];
+            if (name == "readiness" && !keep) spec.readiness_policy = "support_only";
+            if (name == "negative_pattern" && !keep) spec.negative_pattern.clear();
+            if (name == "cancel_sequence" && !keep) spec.cancel_sequence.clear();
+            if (name.find("cancel_path_") == 0 && keep)
+                spec.cancel_paths.push_back(proposed.cancel_paths[std::stoi(name.substr(12))]);
+        }
+        if (!valid) {
+            Candidate rejected;
+            rejected.id = nextId++;
+            rejected.combination = combination;
+            rejected.spec = spec;
+            rejected.rejection = "return_module_requires_2_independent_ABORTED_LEAVE_matches";
+            for (size_t i = 0; i < trial.modules.size(); ++i)
+                if ((combination & (1 << i)) && !supported[i])
+                    rejected.rejection += ":" + trial.modules[i];
+            trial.candidates.push_back(rejected);
+            continue;
+        }
+        searchBest = -1;
     for (int prefix = 0; prefix <= static_cast<int>(spec.positive_sequence.size()); ++prefix) {
       for (const auto &level : levels) {
         Candidate candidate;
@@ -1454,6 +1514,29 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
             }
         }
     }
+    }
+    // Keep the best eligible and diagnostic candidate per combination in tool output.
+    // The complete grid is evaluated, but must not flood the LLM context.
+    trial.evaluated_count = nextId - 1;
+    const int selectedId = trial.best_index >= 0 ? trial.candidates[trial.best_index].id : -1;
+    std::vector<Candidate> shortlist;
+    for (int mask = 0; mask < (1 << trial.modules.size()); ++mask) {
+        int diagnostic = -1, eligible = -1;
+        for (size_t i = 0; i < trial.candidates.size(); ++i) {
+            const auto &c = trial.candidates[i];
+            if (c.combination != mask) continue;
+            if (diagnostic < 0 || (c.metrics.ok && (!trial.candidates[diagnostic].metrics.ok ||
+                BetterRecognition(c.metrics, trial.candidates[diagnostic].metrics)))) diagnostic = i;
+            if (c.eligible && (eligible < 0 || BetterRecognition(c.metrics, trial.candidates[eligible].metrics) ||
+                c.id == selectedId)) eligible = i;
+        }
+        if (diagnostic >= 0) shortlist.push_back(trial.candidates[diagnostic]);
+        if (eligible >= 0 && eligible != diagnostic) shortlist.push_back(trial.candidates[eligible]);
+    }
+    trial.candidates = std::move(shortlist);
+    trial.best_index = -1;
+    for (size_t i = 0; i < trial.candidates.size(); ++i)
+        if (trial.candidates[i].id == selectedId) trial.best_index = i;
     std::lock_guard<std::mutex> lock(gTemplateMutex);
     gTrial = std::move(trial);
     return TrialJson(gTrial);
@@ -1482,6 +1565,7 @@ std::string CommitContextTemplateAction(const std::string &)
     }
     active << profile << '\n';
     history << "{\"committed_at_ms\":" << NowMs() << ",\"candidate_id\":" << candidate.id
+        << ",\"module_search\":" << TrialJson(gTrial)
         << ",\"template\":" << profile << ",\"baseline\":" << MetricsJson(gTrial.baseline)
         << ",\"candidate\":" << MetricsJson(candidate.metrics) << "}\n";
     const int committedId = candidate.id;
