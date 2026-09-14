@@ -89,6 +89,8 @@ decision_reason
 
 ## 观测有效性与 GPS 慢刷新
 
+历史摘要的 episode_catalog 提供实际存在的 episode_id、标签及有效高度样本数。选择正负例时逐字使用该清单，禁止猜测 ID；读取 height_comparison 后，检查正负样本范围重叠和至少一条有效正例、一条有效负例的动态时序。累计最大下降是完整记录的事后描述，不能代替在线前缀证据；缺测 null 不得当作零。依据对照自行提出假设，并用工具验证，不能仅凭整体分数上升宣称高度规律成立。
+
 原语结果为 TRUE/FALSE/UNKNOWN。UNKNOWN 不是 FALSE，不能取反为反证，不能推进序列。目录 events 每项提供 id、required_signal、availability、temporal_kind；没有先天正负类别。当前 motion/radio 历史仍缺完整有效性元数据，不能声称所有通道缺测问题已解决。
 
 GPS 只有两个不同采样时间、有效定位且质量足够时才能解释外向或无外向。重复缓存、首次定位、低质量、长期未更新、缺少采样时间均不能证明 no_geo_outbound。5秒或更慢更新应按真实采样间隔解释，不能用 tick 间隔冒充 GPS 间隔。旧 policy 历史未记录质量和时间字段时，GPS 原语为 UNKNOWN，不得补造。

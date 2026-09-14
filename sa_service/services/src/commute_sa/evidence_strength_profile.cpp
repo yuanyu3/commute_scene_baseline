@@ -38,6 +38,10 @@ struct EpisodeChannel {
 };
 
 struct Episode {
+    std::string episode_id;
+    int ticks = 0;
+    int height_ticks = 0;
+    double max_descent_m = 0.0;
     std::string label;
     bool legacy_anchor_mapping = false;
     std::map<std::string, EpisodeChannel> channels;
@@ -330,6 +334,15 @@ std::map<std::string, Episode> LoadEpisodes(const std::string &anchorId, const s
         const std::string key = episodeId + ":" + std::to_string(static_cast<int64_t>(outcome));
         if (aborted.count(key) != 0) continue;  // structural return, not a strength negative
         auto &ep = episodes[key];
+        ep.episode_id = episodeId;
+        ++ep.ticks;
+        bool baroAvailable = false;
+        double descent = 0.0;
+        if (ExtractBool(line, "obs_baro_available", &baroAvailable) && baroAvailable &&
+            ExtractNumber(line, "baro_descent_m", &descent) && std::isfinite(descent)) {
+            ++ep.height_ticks;
+            ep.max_descent_m = std::max(ep.max_descent_m, descent);
+        }
         ep.label = label;
         ep.legacy_anchor_mapping = ep.legacy_anchor_mapping || rowAnchor.empty();
         for (const auto &name : Channels()) {
@@ -567,7 +580,40 @@ std::string GetPersonalizationHistorySummaryAction(const std::string &paramsJson
             << ",\"coverage\":" << (episodes.empty() ? 0.0 : valid / static_cast<double>(episodes.size()))
             << '}';
     }
-    out << "},\"duration_stats\":{\"PRE_LEAVE\":" << durationJson("PRE_LEAVE")
+    out << "},\"episode_catalog\":[";
+    bool firstEpisode = true;
+    std::map<std::string, std::vector<double>> heights;
+    for (const auto &entry : episodes) {
+        const auto &ep = entry.second;
+        if (!firstEpisode) out << ',';
+        firstEpisode = false;
+        out << "{\"episode_id\":\"" << Esc(ep.episode_id) << "\",\"label\":\"" << Esc(ep.label)
+            << "\",\"ticks\":" << ep.ticks << ",\"height_valid_ticks\":" << ep.height_ticks
+            << ",\"max_descent_m\":";
+        if (ep.height_ticks) {
+            out << ep.max_descent_m;
+            heights[IsPositive(ep.label) ? "positive" : "negative"].push_back(ep.max_descent_m);
+        } else out << "null";
+        out << '}';
+    }
+    out << "],\"height_comparison\":{";
+    bool firstGroup = true;
+    for (const auto &group : {"positive", "negative"}) {
+        auto values = heights[group];
+        std::sort(values.begin(), values.end());
+        if (!firstGroup) out << ',';
+        firstGroup = false;
+        out << "\"" << group << "\":{\"n\":" << values.size() << ",\"min_m\":";
+        if (values.empty()) out << "null,\"median_m\":null,\"max_m\":null";
+        else {
+            const size_t n = values.size();
+            out << values.front() << ",\"median_m\":" << (values[(n-1)/2] + values[n/2])/2
+                << ",\"max_m\":" << values.back();
+        }
+        out << '}';
+    }
+    out << ",\"scope\":\"Whole-episode descriptive maxima, not online readiness or independent trips. Missing height is null. ABORTED_LEAVE interpretations excluded from both groups; inspect return candidates separately. Use catalog IDs for exact timelines and check overlap and timing before proposing a threshold.\"}"
+        << ",\"duration_stats\":{\"PRE_LEAVE\":" << durationJson("PRE_LEAVE")
         << ",\"LEAVING\":" << durationJson("LEAVING") << "},\"migration\":{"
         << "\"legacy_episode_count_mapped_from_role\":" << legacyMapped
         << ",\"mapping\":\"" << Esc(legacySide) << " -> " << Esc(anchor)

@@ -63,6 +63,7 @@
 | 统一事实原语、组合校验与 GPS 慢刷新 | `EVENT_CATALOG_SAFETY.md` |
 | 当前 Agent 模板个性化 | `CONTEXT_TEMPLATE_PERSONALIZATION.md` |
 | 模块组合隔离、候选校准与多轮尝试 | `MODULE_COMBINATION_SEARCH.md` |
+| Agent 可查询的 episode ID 与正负高度对照 | `EPISODE_HEIGHT_COMPARISON.md` |
 | 逐 tick 上下文向量、前缀就绪与独立强度校准 | `CONTEXT_ENGINE.md` |
 | 旧直接改参流程（消融对照） | `AGENT_PERSONALIZATION.md`、`AGENT_SEMANTICS.md` |
 | 锚点和坐标 | `ANCHOR_INFERENCE.md`、`CRS_UNIFICATION.md` |
