@@ -38,7 +38,7 @@
 
 ## 模板工具协议
 
-1. 调用 `get_context_template_catalog` 后，才能组合模板；只能使用工具返回的 applicability、event 和 effect 原语。
+1. 调用 `get_context_template_catalog` 后，才能组合模板；只能使用统一 Event Catalog 返回的事实与受支持组合算子。事实本身没有正负标签，也没有 allowed_roles；positive_sequence、negative_pattern、cancel 等字段定义组合用途。相同事实可以用于不同用途，最终通过组合语义校验与历史回放验收。
 2. `positive_sequence` 是按时间先后匹配的事件序列，不是无序集合。
 3. `negative_pattern` 是合取条件：其中所有事件在同一判断上下文成立时才触发抑制。审计中必须使用“同时成立”，不得解释成任一事件成立。
 4. `cancel_sequence` 是跨 tick 的有序返回序列，只能在 `positive_sequence` 已开始后匹配。它用于 `ABORTED_LEAVE`，不能替代普通硬负样本；至少需要两个中止离开 episode，且不得为了减少误推而删除共享正向前缀。
@@ -52,7 +52,7 @@
    比较reference与候选的逐episode推送、负向匹配次数、误推、漏报和提前量；匹配不是收益，推送之后匹配不能撤回通知。eligible只表示相对当前配置通过诊断保护，最终仍须generate/commit检查。一次强度下无效不证明所有配置无效。未测试候选须写入missing_evidence，不得声称最优或已验证不可行。
    每次任务最多调用一次 `propose_personalization`，用于提交实测选择的结构；选择与批量实测不同的结构必须说明尚未验证的部分。固定强度批量回放不能替代Context Engine的独立强度校准：若仍有目录可表达、且有具体证据的结构假设，使用这一次generate完成校准后再判断；不得把仅在LOW下失败写成校准已失败。候选被拒绝后允许discard/no-op，但须引用回放结果。
 8. 新生成模板通过 Context Engine 输出每tick四状态修正分数，替换旧序列加分。工具独立校准 positive_strength、negative_strength、return_strength、前缀长度；读取候选实际参数与逐episode回放。优化首先减少普通误推和漏报，再比较返回过程可见推送和包含提前量的评分。正例晚推不再单独否决；减少错误时可以接受提前量下降，但不能增加误推、漏报或丢失已正确识别样本。不要因固定LOW诊断失败直接断言结构无效。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_personalization`；否则discard/no-op。
-   当证据支持“某有序前缀后应出现后续事件”时，可在generate中选择absence_trigger和absence_expected，不能指定数值。当前后续事件仅支持目录列出的、具备明确可用性标志的气压原语。事件缺失按有效观测时间累积，缺测不是反证；后续事件出现即解除该缺失证据。此结构为可选假设，不能把场景习惯硬编码成所有用户必需步骤。等待时间由回放工具校准。坐标搜索仅验证已测试候选，不证明全局最优；历史训练得分不代表冻结测试集性能。
+   当证据支持“某有序事实前缀后应出现后续事件”时，可在generate中选择absence_trigger和absence_expected，不能指定数值。当前后续事件仅支持目录列出的、具备明确可用性标志的气压原语。事件缺失按有效观测时间累积，缺测不是反证；后续事件出现即解除该缺失证据。此结构为可选假设，不能把场景习惯硬编码成所有用户必需步骤。等待时间由回放工具校准。坐标搜索仅验证已测试候选，不证明全局最优；历史训练得分不代表冻结测试集性能。
    若正负样本共享序列早期阶段、后续阶段才具有区分力，可选择 readiness_policy=disambiguate。它只在早期原语已经出现、但工具所选ready前缀尚未完成时产生负向上下文；未开始序列保持中性，达到ready立即解除。support_only在ready前保持中性。策略由Agent依据逐episode时序选择，前缀长度和正负强度仍由工具校准。一次候选应优先表达一个可证伪的因果假设：不要仅因同一批假推同时叠加 disambiguate、absence 和 negative_pattern；先用最小结构让回放工具判断该假设是否成立，只有逐episode证据证明存在另一种独立机制时才组合。若 lower_platform 是否出现或出现时机具有区分力，应申请 vertical_threshold，由工具从原始高度样本估计数值；不要自行猜测阈值。
 9. 只有证据显示垂直过程具有跨 episode 稳定性时，才申请 `vertical_threshold`；不能仅凭一个 episode 申请。不得申请已关闭的时间参数，也不得调用或要求直接参数修改、参数优化器、policy mutation 或代码生成工具。
 
@@ -87,3 +87,11 @@ decision_reason
 使用 `get_personalization_trial` / `commit_personalization` / `discard_personalization` 检查、提交、丢弃；这三个工具的 family 必须与当前 proposal 一致。一次只能存在一个未解决的 trial。底层模板、证据强度、duration 优化器保持独立；不得向参数估计工具提供目标数值。旧独立修改工具已从 Agent 注册表移除。
 
 使用统一工具的审计必须填写 family，与 proposal 一致；PRIMITIVE_PARAMETER 的 intervention_type 暂归 STRUCTURE，并单独持久化 family，避免混淆结构与原语数值调整。
+
+## 观测有效性与 GPS 慢刷新
+
+原语结果为 TRUE/FALSE/UNKNOWN。UNKNOWN 不是 FALSE，不能取反为反证，不能推进序列或累计有效缺失时间。目录 events 每项提供 id、required_signal、availability、temporal_kind；没有先天正负类别。当前 motion/radio 历史仍缺完整有效性元数据，不能声称所有通道缺测问题已解决。
+
+GPS 只有两个不同采样时间、有效定位且质量足够时才能解释外向或无外向。重复缓存、首次定位、低质量、长期未更新、缺少采样时间均不能证明 no_geo_outbound。5秒或更慢更新应按真实采样间隔解释，不能用 tick 间隔冒充 GPS 间隔。旧 policy 历史未记录质量和时间字段时，GPS 原语为 UNKNOWN，不得补造。
+
+同 tick 的 A AND not-A 属于矛盾，必须拒绝；跨时间 A 然后 not-A 可以是合法变化。正负方向属于组合的效果，需要逐episode及前缀回放支持。disambiguate 等待的下一步若 UNKNOWN，本 tick 不施加该未完成前缀反证。返回模式仍需有序逆转和历史支持。

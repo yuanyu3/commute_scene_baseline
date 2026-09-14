@@ -31,7 +31,7 @@ public:
     void OnBaro(int64_t tMs, double pressureHpa);
 
     TickDecision OnTick(int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid,
-        int32_t gpsSourceType = 0);
+        int32_t gpsSourceType = 0, int64_t gpsObservedAtMs = 0);
 
     SceneEngine *Engine();
     RadioEvidence *Radio();

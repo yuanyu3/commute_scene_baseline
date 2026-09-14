@@ -1,4 +1,6 @@
 #include "commute_sa/context_engine.h"
+#include "commute_sa/event_catalog.h"
+#include "commute_sa/scene_engine.h"
 #include "commute_sa/context_template.h"
 #include "commute_sa/product_store.h"
 #include "commute_sa/theta_eval.h"
@@ -12,6 +14,42 @@ void Check(bool ok, const char *message) { if (!ok) throw std::runtime_error(mes
 int main()
 {
     using namespace commute_sa;
+    LeaveObservation gps;
+    Check(EvaluateEventFact("no_geo_outbound", gps) == EventTruth::Unknown, "old/missing GPS is unknown");
+    gps.geo_observation_known = true;
+    gps.geo_fix_age_s = 0;
+    gps.geo_fix_interval_s = 20;
+    gps.geo_reliability = 1;
+    Check(EvaluateEventFact("no_geo_outbound", gps) == EventTruth::True, "slow fresh pair supports low evidence");
+    gps.geo_fix_age_s = 31;
+    Check(EvaluateEventFact("no_geo_outbound", gps) == EventTruth::Unknown, "stale is not stationary");
+    gps.geo_fix_age_s = 0; gps.geo_fix_interval_s = 0;
+    Check(EvaluateEventFact("geo_outbound", gps) == EventTruth::Unknown, "cached fix is not new evidence");
+    gps.geo_fix_interval_s = 121;
+    Check(EvaluateEventFact("no_geo_outbound", gps) == EventTruth::Unknown, "long gap cannot infer absence");
+    gps.geo_fix_interval_s = 5; gps.geo_reliability = .1;
+    Check(EvaluateEventFact("no_geo_outbound", gps) == EventTruth::Unknown, "low accuracy cannot infer absence");
+    Check(!EventConjunctionValid({"geo_outbound", "no_geo_outbound"}), "contradictory conjunction");
+    Check(!EventConjunctionValid({"lower_platform", "no_baro_descent"}), "contradictory baro conjunction");
+    Check(EventConjunctionValid({"walking", "no_geo_outbound"}), "facts have no predefined polarity");
+    Check(EvaluateEventFact("no_baro_descent", gps) == EventTruth::Unknown, "missing baro");
+    AnchorSet anchors = DefaultAnchors();
+    SceneEngine engine(anchors);
+    TickFeatures f;
+    f.t_ms = f.gps_observed_at_ms = 100000;
+    f.has_gps = true; f.acc = 10;
+    f.lat = anchors.company.lat; f.lon = anchors.company.lon;
+    Check(!engine.Step(f).hsmm_obs_company.geo_observation_known, "first fix needs a pair");
+    f.t_ms = 105000; // tick repeats the cached fix
+    Check(!engine.Step(f).hsmm_obs_company.geo_observation_known, "repeated source timestamp unknown");
+    f.t_ms = f.gps_observed_at_ms = 120000;
+    Check(engine.Step(f).hsmm_obs_company.geo_observation_known, "20s GPS refresh remains usable");
+    f.t_ms = 151000;
+    Check(!engine.Step(f).hsmm_obs_company.geo_observation_known, "31s stale fix expires");
+    f.t_ms = f.gps_observed_at_ms = 300000;
+    Check(!engine.Step(f).hsmm_obs_company.geo_observation_known, "recovery after long gap needs next fix");
+    f.t_ms = f.gps_observed_at_ms = 305000;
+    Check(engine.Step(f).hsmm_obs_company.geo_observation_known, "second fresh fix restores observability");
     ReplayEpisodeSummary baseline, candidate;
     baseline.key = candidate.key = "positive";
     baseline.positive = candidate.positive = true;

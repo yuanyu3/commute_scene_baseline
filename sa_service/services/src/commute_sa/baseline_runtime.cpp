@@ -159,7 +159,7 @@ void BaselineRuntime::OnBaro(int64_t tMs, double pressureHpa)
 }
 
 TickDecision BaselineRuntime::OnTick(
-    int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid, int32_t gpsSourceType)
+    int64_t tMs, bool hasGps, double lat, double lon, double accM, bool gpsValid, int32_t gpsSourceType, int64_t gpsObservedAtMs)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     TickDecision empty;
@@ -175,6 +175,7 @@ TickDecision BaselineRuntime::OnTick(
     feat.lon = lon;
     feat.acc = accM;
     feat.gps_source_type = gpsSourceType;
+    feat.gps_observed_at_ms = gpsObservedAtMs;
     feat.walking = walking_;
     feat.has_walk_started = hasWalkStarted_;
     feat.walk_started_at_ms = walkStartedAtMs_;

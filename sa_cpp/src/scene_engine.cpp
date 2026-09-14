@@ -100,10 +100,15 @@ Relation SceneEngine::RelTo(const TickFeatures &feat, const Anchor &anchor, doub
 
 bool SceneEngine::GpsFixUsable(const TickFeatures &feat) const
 {
+    if (feat.gps_observed_at_ms > 0 && feat.gps_observed_at_ms < prevGpsObservedMs_) return false;
+    if (feat.gps_observed_at_ms > 0 &&
+        (feat.gps_observed_at_ms > feat.t_ms || feat.t_ms - feat.gps_observed_at_ms > 30000))
+        return false;
     if (!feat.has_gps) {
         return false;
     }
-    if (feat.acc > theta_.max_gps_acc_m) {
+    if (!std::isfinite(feat.acc) || feat.acc < 0 || !std::isfinite(feat.lat) ||
+        !std::isfinite(feat.lon) || feat.acc > theta_.max_gps_acc_m) {
         return false;
     }
     return true;
@@ -124,7 +129,9 @@ double SceneEngine::GpsReliability(const TickFeatures &feat, bool hasDist, doubl
     const double zeroAcc = std::max(startAcc + 1.0, theta_.gps_low_quality_zero_m);
     double reliability = feat.acc <= startAcc ? 1.0 : Clip01((zeroAcc - feat.acc) / (zeroAcc - startAcc));
     if (hasDist && prevDist.has_value() && prevTMs_.has_value() && feat.t_ms > *prevTMs_) {
-        const double dt = static_cast<double>(feat.t_ms - *prevTMs_) / 1000.0;
+        const double dt = feat.gps_observed_at_ms > prevGpsObservedMs_ && prevGpsObservedMs_ > 0 ?
+            static_cast<double>(feat.gps_observed_at_ms - prevGpsObservedMs_) / 1000.0 :
+            static_cast<double>(feat.t_ms - *prevTMs_) / 1000.0;
         const double radialSpeed = std::abs(distM - *prevDist) / std::max(dt, 0.001);
         const double startSpeed = std::max(0.0, theta_.gps_jump_speed_start_mps);
         const double zeroSpeed = std::max(startSpeed + 0.1, theta_.gps_jump_speed_zero_mps);
@@ -267,6 +274,16 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const Theta &e
     out.observation.t_ms = feat.t_ms;
     out.observation.pdr_outbound = sPdr;
     out.observation.geo_outbound = sGeo;
+    out.observation.geo_fix_age_s = feat.gps_observed_at_ms > 0 ?
+        (feat.t_ms - feat.gps_observed_at_ms) / 1000.0 : -1.0;
+    out.observation.geo_fix_interval_s = prevGpsObservedMs_ > 0 ?
+        (feat.gps_observed_at_ms - prevGpsObservedMs_) / 1000.0 : -1.0;
+    out.observation.geo_reliability = gpsReliability;
+    out.observation.geo_observation_known = useGeo && hasDist && prevDist.has_value() &&
+        prevGpsReliable_ && feat.gps_observed_at_ms > prevGpsObservedMs_ &&
+        prevGpsObservedMs_ > 0 && out.observation.geo_fix_interval_s <= 120 &&
+        out.observation.geo_fix_age_s >= 0 && out.observation.geo_fix_age_s <= 30 &&
+        gpsReliability >= 0.5;
     out.observation.wifi_detach = sWifi;
     out.observation.cell_detach = sCell;
     out.observation.ble_detach = sBle;
@@ -292,6 +309,11 @@ SceneEngine::ObservationResult SceneEngine::BuildLeaveObservation(const Theta &e
 
 TickDecision SceneEngine::Step(const TickFeatures &feat)
 {
+    if (prevTMs_.has_value() && feat.t_ms < *prevTMs_) {
+        prevGpsObservedMs_ = 0;
+        prevGpsReliable_ = false;
+        prevDistHome_.reset(); prevDistCompany_.reset();
+    }
     if (wasWalking_ && !feat.walking) {
         lastWalkStopMs_ = feat.t_ms;
     }
@@ -561,6 +583,11 @@ TickDecision SceneEngine::Step(const TickFeatures &feat)
         prevDistCompany_ = dCo;
     }
     prevTMs_ = feat.t_ms;
+    if (feat.gps_observed_at_ms > prevGpsObservedMs_ && feat.gps_observed_at_ms <= feat.t_ms) {
+        prevGpsObservedMs_ = feat.gps_observed_at_ms;
+        prevGpsReliable_ = GpsFixUsable(feat) &&
+            std::max(gpsReliabilityHome, gpsReliabilityCompany) >= 0.5;
+    }
 
     TickDecision d;
     d.scene = newScene;

@@ -49,6 +49,7 @@ using TickTsMs = int64_t;
 struct TickFeatures {
     TickTsMs t_ms = 0;
     bool has_gps = false;
+    TickTsMs gps_observed_at_ms = 0;
     double lat = 0.0;
     double lon = 0.0;
     double acc = 0.0;
@@ -168,6 +169,8 @@ private:
     Relation prevRelHome_ = Relation::kUnknown;
     Relation prevRelCompany_ = Relation::kUnknown;
     std::optional<TickTsMs> prevTMs_;
+    TickTsMs prevGpsObservedMs_ = 0;
+    bool prevGpsReliable_ = false;
     int approachHomeStreak_ = 0;
     int approachCompanyStreak_ = 0;
     bool wasApproachHome_ = false;

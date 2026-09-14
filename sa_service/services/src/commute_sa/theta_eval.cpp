@@ -478,6 +478,10 @@ bool LoadHsmmEpisodes(const std::string &rootDir, int64_t sinceMs, int maxEpisod
         ExtractNumber(line, "obs_walking", &tick.obs.walking);
         ExtractNumber(line, "obs_pdr_outbound", &tick.obs.pdr_outbound);
         ExtractNumber(line, "obs_geo_outbound", &tick.obs.geo_outbound);
+        ExtractBool(line, "obs_geo_observation_known", &tick.obs.geo_observation_known);
+        ExtractNumber(line, "obs_geo_fix_age_s", &tick.obs.geo_fix_age_s);
+        ExtractNumber(line, "obs_geo_fix_interval_s", &tick.obs.geo_fix_interval_s);
+        ExtractNumber(line, "obs_geo_reliability", &tick.obs.geo_reliability);
         ExtractNumber(line, "obs_wifi_detach", &tick.obs.wifi_detach);
         ExtractNumber(line, "obs_cell_detach", &tick.obs.cell_detach);
         ExtractNumber(line, "obs_ble_detach", &tick.obs.ble_detach);

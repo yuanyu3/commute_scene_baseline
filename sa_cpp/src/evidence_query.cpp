@@ -1271,7 +1271,7 @@ const std::vector<std::string> &TimelineValues()
 {
     static const std::vector<std::string> fields {
         "walking", "pdr_outbound", "geo_outbound", "wifi_detach", "cell_detach",
-        "ble_detach", "time_prior", "baro_descending", "baro_lower_platform",
+        "ble_detach", "time_prior", "geo_fix_age_s", "geo_fix_interval_s", "geo_reliability", "baro_descending", "baro_lower_platform",
         "baro_ascending", "vertical_closure"
     };
     return fields;
@@ -1280,7 +1280,7 @@ const std::vector<std::string> &TimelineValues()
 const std::vector<std::string> &TimelineFlags()
 {
     static const std::vector<std::string> fields {
-        "inside", "near", "outside", "approaching", "attached"
+        "inside", "near", "outside", "approaching", "attached", "geo_observation_known"
     };
     return fields;
 }
@@ -1353,6 +1353,15 @@ bool LoadSemanticEpisode(const std::string &root, const std::string &params,
             bool value = false;
             if (ExtractBool(line, ("obs_" + field).c_str(), &value)) row.flag[field] = value;
         }
+        // A numeric cached zero is not an observed GPS absence.
+        if (!row.flag["geo_observation_known"] ||
+            row.value.find("geo_fix_age_s") == row.value.end() ||
+            row.value.find("geo_fix_interval_s") == row.value.end() ||
+            row.value.find("geo_reliability") == row.value.end() ||
+            !(row.value["geo_fix_age_s"] >= 0 && row.value["geo_fix_age_s"] <= 30 &&
+              row.value["geo_fix_interval_s"] > 0 && row.value["geo_fix_interval_s"] <= 120 &&
+              row.value["geo_reliability"] >= .5))
+            row.value.erase("geo_outbound");
         const char *modelFields[] = {"preleave_probability", "leaving_probability", "hits", "lead_s", "pdr_net_out_m"};
         for (const char *field : modelFields) {
             double value = 0.0;

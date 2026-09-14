@@ -1,5 +1,9 @@
 # Context Engine：逐 tick 四状态上下文证据
 
+当前统一事实目录、UNKNOWN 语义和 GPS 有效性规则见
+[EVENT_CATALOG_SAFETY.md](EVENT_CATALOG_SAFETY.md)。原语没有先天正负标签；
+组合决定用途，GPS 缺测或重复缓存不构成无外向反证。
+
 ## 当前优化优先级
 
 用户明确要求正确率优先。候选搜索和最终选择按以下顺序比较：普通假推数 + 漏报数、

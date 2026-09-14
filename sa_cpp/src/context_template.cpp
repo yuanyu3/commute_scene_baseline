@@ -1,3 +1,4 @@
+#include "commute_sa/event_catalog.h"
 #include "commute_sa/context_template.h"
 #include "commute_sa/context_engine.h"
 
@@ -262,9 +263,11 @@ std::string JoinCsv(const std::vector<std::string> &values)
 
 const std::set<std::string> &SupportedEvents()
 {
-    static const std::set<std::string> events = {"walking", "pdr_outbound", "geo_outbound", "wifi_detach",
-        "cell_detach", "ble_detach", "baro_descending", "lower_platform", "outside", "approaching",
-        "attached", "baro_ascending", "vertical_closure", "no_baro_descent", "no_geo_outbound"};
+    static const std::set<std::string> events = [] {
+        std::set<std::string> result;
+        for (const auto &event : EventCatalog()) result.insert(event.id);
+        return result;
+    }();
     return events;
 }
 
@@ -510,24 +513,7 @@ std::string JoinCancelPaths(const std::vector<std::vector<std::string>> &paths)
 
 bool EventActive(const std::string &event, const LeaveObservation &obs)
 {
-    if (event == "walking") return obs.walking >= 0.5;
-    if (event == "pdr_outbound") return obs.pdr_outbound >= 0.5;
-    if (event == "geo_outbound") return obs.geo_outbound >= 0.5;
-    if (event == "wifi_detach") return obs.wifi_detach >= 0.5;
-    if (event == "cell_detach") return obs.cell_detach >= 0.5;
-    if (event == "ble_detach") return obs.ble_detach >= 0.5;
-    if (event == "baro_descending") return obs.baro_descending >= 0.5;
-    if (event == "lower_platform") return obs.baro_lower_platform >= 0.5;
-    if (event == "baro_ascending") return obs.baro_available && obs.baro_ascending >= 0.5;
-    if (event == "vertical_closure") return obs.baro_available && obs.vertical_closure >= 0.5;
-    if (event == "outside") return obs.outside;
-    if (event == "approaching") return obs.approaching;
-    if (event == "attached") return obs.attached;
-    if (event == "no_baro_descent") {
-        return obs.baro_available && obs.baro_descending < 0.25 && obs.baro_lower_platform < 0.5;
-    }
-    if (event == "no_geo_outbound") return obs.geo_outbound < 0.25;
-    return false;
+    return EvaluateEventFact(event, obs) == EventTruth::True;
 }
 
 bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs, TemplateRuntimeState *state)
@@ -562,7 +548,8 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
             EventActive(spec.absence_trigger[state->absence_index], *obs)) ++state->absence_index;
         obs->context_absence = state->absence_clock.Step(obs->t_ms,
             !obs->outside && !spec.absence_trigger.empty() && state->absence_index == spec.absence_trigger.size(),
-            obs->baro_available, EventActive(spec.absence_expected, *obs), spec.absence_wait_s);
+            EvaluateEventFact(spec.absence_expected, *obs) != EventTruth::Unknown,
+            EventActive(spec.absence_expected, *obs), spec.absence_wait_s);
         obs->context_wait_s = state->absence_clock.valid_s;
     }
     if (state->cancel_until_ms > 0) {
@@ -605,7 +592,8 @@ bool ApplySpec(const TemplateSpec &spec, double strength, LeaveObservation *obs,
         }
         if (spec.context_engine && spec.readiness_policy == "disambiguate" &&
             spec.ready_prefix_length > 1 && state->positive_index > 0 &&
-            state->positive_index < static_cast<size_t>(spec.ready_prefix_length)) {
+            state->positive_index < static_cast<size_t>(spec.ready_prefix_length) &&
+            EvaluateEventFact(spec.positive_sequence[state->positive_index], *obs) != EventTruth::Unknown) {
             // An observed precursor is ambiguous until the Agent-selected
             // discriminating prefix arrives. This is context evidence, not a gate.
             obs->context_absence = 1.0;
@@ -688,7 +676,7 @@ bool ParseAbsence(const std::string &json, TemplateSpec *spec)
     const std::set<std::string> expected {"baro_descending", "lower_platform", "baro_ascending", "vertical_closure"};
     if (!expected.count(spec->absence_expected)) return false;
     for (const auto &e : spec->absence_trigger)
-        if (!SupportedEvents().count(e) || e.rfind("no_", 0) == 0 || e == spec->absence_expected) return false;
+        if (!SupportedEvents().count(e) || e == spec->absence_expected) return false;
     return true;
 }
 
@@ -767,6 +755,9 @@ void LoadActiveTemplateLocked()
     ExtractNumber(json, "baro_min_descent_m", &spec.baro_min_descent_m);
     if (ExtractNumber(json, "baro_sample_count", &count)) spec.baro_sample_count = static_cast<int>(count);
     if (strength <= 0.0 || strength > 1.0) return;
+    if (!EventConjunctionValid(spec.negative_pattern)) return;
+    std::vector<std::vector<std::string>> checkedReturn;
+    if (!spec.cancel_sequence.empty() && !ParseCancelPaths(JoinCsv(spec.cancel_sequence), &checkedReturn)) return;
     for (const auto &event : spec.positive_sequence) if (SupportedEvents().count(event) == 0) return;
     for (const auto &event : spec.cancel_sequence) if (SupportedEvents().count(event) == 0) return;
     for (const auto &event : spec.negative_pattern) if (SupportedEvents().count(event) == 0) return;
@@ -974,7 +965,7 @@ std::string TrialJson(const Trial &trial)
 
 std::string GetContextTemplateCatalogAction(const std::string &)
 {
-    return "{\"ok\":true,\"schema_version\":7,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
+    std::string result = "{\"ok\":true,\"schema_version\":8,\"design\":\"Agent composes supported primitives and requests parameter families; C++ estimates all numeric values\","
            "\"cancel_paths\":{\"syntax\":\"ordered comma-separated events; pipe separates up to 3 alternative paths; mutually exclusive with cancel_sequence\","
            "\"validation\":\"each path needs baro_ascending before vertical_closure, or geo_outbound before approaching ending in attached; <=6 events per path\","
            "\"fusion\":\"any completed path; no additive sensor votes; redundant prefix extensions removed; 180s path expiry; fresh departure for 10s releases 120s hold\","
@@ -982,23 +973,20 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"applicability\":[\"always\",\"baro_ready\"],"
            "\"context_engine\":{\"output\":\"bounded additive log evidence c_t[AT,PRE,LEAVE,OUT], replaces legacy sequence emission\","
            "\"readiness_policy\":\"support_only is neutral before ready; disambiguate treats an observed but incomplete calibrated prefix as negative context until ready. Agent selects policy, C++ selects prefix and strength. It is additive evidence, not a hard gate.\","
-           "\"absence_trigger\":\"optional comma-separated ordered positive events, <=6; paired with absence_expected; expected cannot be in trigger\","
+           "\"absence_trigger\":\"optional comma-separated ordered facts, <=6; paired with absence_expected; expected cannot be in trigger\","
            "\"absence_expected\":\"baro_descending|lower_platform|baro_ascending|vertical_closure; only events with explicit availability supported in v1\","
            "\"absence_semantics\":\"after trigger, consecutive available intervals accumulate valid seconds; score ramps to one at fitted wait; missing observations emit zero and do not count; expected event latches satisfaction until context reset\","
            "\"lifecycle\":\"30s tick gap or clock reversal resets context; 600s lifetime; outside and completed return reset absence; legacy product guards retained\","
            "\"calibration\":\"deterministic two-pass coordinate search: independent positive/negative/return strengths 0,0.2,0.6,1.2,2.4; absence wait 10,30,60,120s; causal prefix selection; no global optimum claim\"},"
-           "\"events\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\","
-           "\"ble_detach\",\"baro_descending\",\"lower_platform\",\"outside\",\"approaching\","
-           "\"attached\",\"baro_ascending\",\"vertical_closure\",\"no_baro_descent\",\"no_geo_outbound\"],"
            "\"event_semantics\":{"
-           "\"scope\":\"All events are predicates on the CURRENT tick. An event at one tick does not imply its presence or absence throughout an episode. Continuous values above zero are not necessarily active.\","
+           "\"scope\":\"Facts are role-neutral predicates with TRUE/FALSE/UNKNOWN on the CURRENT tick. An event at one tick does not imply its presence or absence throughout an episode. Continuous values above zero are not necessarily active.\","
            "\"threshold_0_5\":[\"walking\",\"pdr_outbound\",\"geo_outbound\",\"wifi_detach\",\"cell_detach\",\"ble_detach\",\"baro_descending\"],"
            "\"lower_platform\":\"baro_lower_platform >= 0.5; not a fixed floor number\","
            "\"baro_ascending\":\"baro_available AND baro_ascending >= 0.5\","
            "\"vertical_closure\":\"baro_available AND vertical_closure >= 0.5\","
            "\"boolean_fields\":[\"outside\",\"approaching\",\"attached\"],"
-           "\"no_baro_descent\":\"baro_available AND baro_descending < 0.25 AND baro_lower_platform < 0.5. Missing baro is FALSE, not evidence of no descent. Example: descending=0.1 and lower_platform=0 with available baro is TRUE, even if an earlier tick descended.\","
-           "\"no_geo_outbound\":\"geo_outbound < 0.25. No separate GPS availability check in this predicate: zero may mean missing or unreliable GPS; it does NOT prove physical stationarity.\","
+           "\"no_baro_descent\":\"baro_available AND baro_descending < 0.25 AND baro_lower_platform < 0.5. Missing baro is UNKNOWN, not evidence of no descent. Example: descending=0.1 and lower_platform=0 with available baro is TRUE, even if an earlier tick descended.\","
+           "\"no_geo_outbound\":\"geo_outbound < 0.25. Requires a fresh reliable distinct fix pair; missing, cached, stale or unknown-quality observations are UNKNOWN. Low outbound evidence does not prove physical stationarity.\","
            "\"composition\":\"negative_pattern is AND at the same tick, not episode-wide absence. positive_sequence and cancel paths are ordered across ticks. Whole-episode presence and bin mean cannot replace exact predicate evaluation.\"},"
            "\"candidate_exploration\":\"Use evaluate_negative_pattern_candidates before rejecting an expressible promising negative pattern. Pipe separates candidates; comma separates conjuncts. Evaluation is read-only and does not consume the one generation allowance.\","
            "\"effects\":{\"positive_sequence\":\"emit progress/completion and replay-calibrated prefix readiness; readiness replaces, never adds to, legacy positive evidence\","
@@ -1009,6 +997,20 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"disabled_parameter_families\":{\"departure_time\":\"disabled while collection timestamps are not representative of normal behavior\"},"
            "\"ready_prefix_length\":\"C++ evaluates legacy mode and each causal prefix; agent supplies sequence only\","
            "\"strengths\":\"LOW|MEDIUM|HIGH warm start, then independent channel coordinate search; consult context_engine.calibration; all candidates pass the existing per-episode commit guards\"}";
+    std::ostringstream facts;
+    facts << ",\"events\":[";
+    for (size_t i = 0; i < EventCatalog().size(); ++i) {
+        if (i) facts << ',';
+        const auto &e = EventCatalog()[i];
+        facts << "{\"id\":\"" << e.id << "\",\"required_signal\":\"" << e.signal
+              << "\",\"availability\":\"" << Esc(e.availability)
+              << "\",\"temporal_kind\":\"tick_predicate\"}";
+    }
+    facts << "],\"composition_validation\":\"Reject contradictory simultaneous conjunctions; ordered A then not-A is allowed. UNKNOWN never proves absence. Return paths require ordered reversal and history support.\","
+          << "\"gps_validity\":{\"max_fix_age_s\":30,\"max_pair_interval_s\":120,\"min_reliability\":0.5,"
+             "\"repeated_fix\":\"UNKNOWN; do not count as new evidence\"}}";
+    result.pop_back();
+    return result + facts.str();
 }
 
 std::string GetAbortedLeaveCandidatesAction(const std::string &paramsJson)
@@ -1347,7 +1349,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         }
     }
     for (const auto &event : spec.positive_sequence) {
-        if (SupportedEvents().count(event) == 0 || event.rfind("no_", 0) == 0) {
+        if (SupportedEvents().count(event) == 0) {
             return "{\"ok\":false,\"error\":\"unsupported positive event\",\"event\":\"" + Esc(event) + "\"}";
         }
     }
@@ -1357,7 +1359,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         }
     }
     for (const auto &event : spec.cancel_sequence) {
-        if (SupportedEvents().count(event) == 0 || event.rfind("no_", 0) == 0) {
+        if (SupportedEvents().count(event) == 0) {
             return "{\"ok\":false,\"error\":\"unsupported cancel event\",\"event\":\"" + Esc(event) + "\"}";
         }
     }
@@ -1366,6 +1368,11 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
         return "{\"ok\":false,\"error\":\"template primitive budget exceeded\",\"max_per_clause\":6}";
     }
 
+    if (!EventConjunctionValid(spec.negative_pattern))
+        return R"({"ok":false,"error":"contradictory simultaneous facts in negative_pattern"})";
+    std::vector<std::vector<std::string>> checkedReturn;
+    if (!spec.cancel_sequence.empty() && !ParseCancelPaths(JoinCsv(spec.cancel_sequence), &checkedReturn))
+        return R"({"ok":false,"error":"cancel_sequence requires ordered physical reversal"})";
     const Theta theta = CurrentTheta();
     EstimateRequestedParameters(&spec);
     std::vector<ReplayEpisodeSummary> baselineEpisodes, incumbentEpisodes;
@@ -1601,6 +1608,8 @@ std::string EvaluateNegativePatternCandidatesAction(const std::string &args)
         auto events = SplitCsv(part);
         if (events.empty() || events.size() > 6)
             return "{\"ok\":false,\"error\":\"each candidate needs 1..6 events\"}";
+        if (!EventConjunctionValid(events))
+            return R"({"ok":false,"error":"contradictory simultaneous facts"})";
         std::set<std::string> unique;
         for (const auto &event : events) {
             if (!SupportedEvents().count(event) || !unique.insert(event).second)

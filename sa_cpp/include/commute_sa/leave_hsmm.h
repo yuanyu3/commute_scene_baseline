@@ -28,6 +28,11 @@ struct LeaveObservation {
     double walking = 0.0;
     double pdr_outbound = 0.0;
     double geo_outbound = 0.0;
+    // Unknown by default, including old history without source timestamps.
+    bool geo_observation_known = false;
+    double geo_fix_age_s = -1.0;
+    double geo_fix_interval_s = -1.0;
+    double geo_reliability = 0.0;
     double wifi_detach = 0.0;
     double cell_detach = 0.0;
     double ble_detach = 0.0;

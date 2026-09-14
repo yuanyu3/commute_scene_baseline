@@ -330,6 +330,10 @@ void ProductStore::FlushPolicyHistoryLocked(const std::string &side, const std::
             << ",\"obs_walking\":" << row.hsmm_obs.walking
             << ",\"obs_pdr_outbound\":" << row.hsmm_obs.pdr_outbound
             << ",\"obs_geo_outbound\":" << row.hsmm_obs.geo_outbound
+            << ",\"obs_geo_observation_known\":" << (row.hsmm_obs.geo_observation_known ? "true" : "false")
+            << ",\"obs_geo_fix_age_s\":" << row.hsmm_obs.geo_fix_age_s
+            << ",\"obs_geo_fix_interval_s\":" << row.hsmm_obs.geo_fix_interval_s
+            << ",\"obs_geo_reliability\":" << row.hsmm_obs.geo_reliability
             << ",\"obs_wifi_detach\":" << row.hsmm_obs.wifi_detach
             << ",\"obs_cell_detach\":" << row.hsmm_obs.cell_detach
             << ",\"obs_ble_detach\":" << row.hsmm_obs.ble_detach

@@ -60,6 +60,7 @@
 | Wi-Fi / Cell / BLE 证据 | `RADIO_EVIDENCE.md` |
 | PDR 证据 | `PDR_EVIDENCE.md` |
 | 个性化统一入口、各参数族与清理边界 | `PERSONALIZATION_ENTRY.md` |
+| 统一事实原语、组合校验与 GPS 慢刷新 | `EVENT_CATALOG_SAFETY.md` |
 | 当前 Agent 模板个性化 | `CONTEXT_TEMPLATE_PERSONALIZATION.md` |
 | 逐 tick 上下文向量、条件缺失与独立强度校准 | `CONTEXT_ENGINE.md` |
 | 旧直接改参流程（消融对照） | `AGENT_PERSONALIZATION.md`、`AGENT_SEMANTICS.md` |
