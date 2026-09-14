@@ -995,16 +995,28 @@ std::string SubmitAgentAnalysisAction(const std::string &paramsJson)
             return "{\"ok\":false,\"error\":\"tool_name, tool_result and replay_result required for an intervention\"}";
         }
         const std::set<std::string> structureTools {
+            "propose_personalization", "commit_personalization", "discard_personalization",
             "diagnose_context_template", "evaluate_negative_pattern_candidates", "generate_context_template", "commit_context_template",
             "discard_context_template"
         };
         const std::set<std::string> strengthTools {
+            "propose_personalization", "commit_personalization", "discard_personalization",
             "estimate_evidence_strength", "commit_evidence_strength_candidate",
             "discard_evidence_strength_candidate"
         };
         const std::set<std::string> durationTools {
+            "propose_personalization", "commit_personalization", "discard_personalization",
             "fit_duration_prior", "commit_duration_prior_candidate", "discard_duration_prior_candidate"
         };
+        std::string family;
+        const bool unified = toolName == "propose_personalization" ||
+            toolName == "commit_personalization" || toolName == "discard_personalization";
+        if (unified) {
+            ExtractString(paramsJson, "family", &family);
+            const std::string expected = family == "PRIMITIVE_PARAMETER" ? "STRUCTURE" : family;
+            if (expected != interventionType || family.empty())
+                return R"({"ok":false,"error":"family must match intervention_type; primitive parameter uses STRUCTURE audit"})";
+        }
         const bool toolMatches =
             (interventionType == "STRUCTURE" && structureTools.find(toolName) != structureTools.end()) ||
             (interventionType == "EVIDENCE_STRENGTH" && strengthTools.find(toolName) != strengthTools.end()) ||
@@ -1040,6 +1052,9 @@ std::string SubmitAgentAnalysisAction(const std::string &paramsJson)
             << ",\"tool_result\":\"" << Esc(toolResult) << "\""
             << ",\"replay_result\":\"" << Esc(replayResult) << "\"";
     }
+    std::string auditFamily;
+    if (ExtractString(paramsJson, "family", &auditFamily))
+        normalized << R"(,"family":")" << Esc(auditFamily) << '"';
     normalized << '}';
     const std::string auditId = ProductStore::GetInstance().AppendAudit(NowMs(),
         "structured_agent_analysis type=" + interventionType + " anchor=" + anchorId + " decision=" + decision,

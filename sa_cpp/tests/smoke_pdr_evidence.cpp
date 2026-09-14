@@ -58,7 +58,6 @@ int main()
     theta.focus_side = "company";
     theta.enter_leave = 0.50;
     theta.min_evidence = 2;
-    theta.arm_delay_s = 0.0;
     theta.w_time = 0.0;  // ignore clock prior for smoke
     theta.hsmm_preleave_min_s = 5.0;
     theta.hsmm_preleave_mean_s = 20.0;

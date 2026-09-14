@@ -17,7 +17,6 @@ int main()
     theta.focus_side = "company";
     theta.lead_min_s = 90.0;
     theta.lead_max_s = 240.0;
-    theta.arm_delay_s = 20.0;
     theta.min_evidence = 2;
     theta.enter_leave = 0.5;
 
@@ -136,7 +135,6 @@ int main()
     // Legacy timing fields may still be present in theta.json, but neither a
     // just-started walk nor an ETA above lead_max may block a valid candidate.
     Theta noTimingGateTheta = theta;
-    noTimingGateTheta.arm_delay_s = 3600.0;
     noTimingGateTheta.lead_max_s = 1.0;
     SceneEngine hsmmEngine(anchors, noTimingGateTheta);
     TickFeatures fp;

@@ -1,116 +1,58 @@
 {
-
   "name": "commute_policy_personalizer",
-
   "framework": "jiuwen",
-
   "agent_type": "REACT",
-
   "max_turn": 80,
-
   "stream": false,
-
   "description": "Low-frequency constrained personalization across structure, evidence strength and HSMM duration. Not per tick.",
-
   "system_prompt_file": "system_prompt.md",
-
   "tools": {
-
     "evidence": [
-
       "get_theta",
-
       "get_anchors",
-
       "get_error_stats",
-
       "get_leave_episode",
-
       "get_leave_window_samples",
-
       "get_leave_sensor_summary",
-
       "get_episode_semantic_timeline",
-
       "get_episode_dynamic_diagnostics",
-
       "diagnose_context_template",
       "evaluate_negative_pattern_candidates",
-
       "get_current_user_anchor_profile",
-
       "get_personalization_history_summary"
-
     ],
-
     "action": [
-
       "get_context_template_catalog",
       "get_aborted_leave_candidates",
-
       "get_active_context_template",
-
       "propose_aborted_leave_interpretation",
-
-      "generate_context_template",
-
-      "get_context_template_trial",
-
-      "commit_context_template",
-
-      "discard_context_template",
-
-      "estimate_evidence_strength",
-
-      "get_evidence_strength_trial",
-
-      "commit_evidence_strength_candidate",
-
-      "discard_evidence_strength_candidate",
-
-      "fit_duration_prior",
-
-      "get_duration_prior_trial",
-
-      "commit_duration_prior_candidate",
-
-      "discard_duration_prior_candidate",
-
       "submit_agent_analysis",
-
-      "request_anchor_reestimate"
-
+      "request_anchor_reestimate",
+      "propose_personalization",
+      "get_personalization_trial",
+      "commit_personalization",
+      "discard_personalization"
     ]
-
   },
-
   "trigger": {
-
-    "modes": ["AFTER_PUSH", "DAY_END", "manual"],
-
+    "modes": [
+      "AFTER_PUSH",
+      "DAY_END",
+      "manual"
+    ],
     "after_push_settle_s": 1200
-
   },
-
   "constraints": {
     "max_template_generations_per_invoke": 1,
     "direct_numeric_targets_forbidden": true,
     "require_error_evidence": true,
     "require_eval_before_commit": true
-
   },
-
   "integration": {
-
     "register": "sa_agent::RegisterEvidenceTools + RegisterActionTools + Agent.AddTools",
-
     "query": "commute_sa::EvidenceQuery",
-
     "actions": "commute_sa::context_template + evidence_strength_profile + duration_profile + typed audit",
-
     "host": "OHOS SA ProactiveAgentBusinessModule::TryInitializeAgent"
-
   }
-
 }
 

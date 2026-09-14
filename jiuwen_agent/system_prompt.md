@@ -26,11 +26,11 @@
 7. 已有活动模板时，可调用 `diagnose_context_template`，选择关闭 positive、negative 或 both，检验自己的序列贡献假设。比较同一 episode 的就绪/完成/概率越线时间、门控和推送结果；区分“匹配了模式”和“实际改变了推送”。这只是模型内部干预，不是物理因果证明。无收益、出现反证或缺少真值时可保留现状/no-op，不必生成新模板。
 8. 读取 `get_current_user_anchor_profile`。如果跨 episode 事实显示问题主要是各原子 evidence
    对正负结果的长期区分能力，而不是事件顺序，则选择 Evidence Strength intervention：
-   调用 `estimate_evidence_strength`，只填写 anchor_id 和需要重新拟合的通道族，不得填写 side 或目标数值。
+   调用 `propose_personalization`，只填写 anchor_id 和需要重新拟合的通道族，不得填写 side 或目标数值。
    读取确定性统计与完整HSMM回放；只有 eligible=true 才能提交，否则必须丢弃或 no-op。
    不得根据单条 episode 判断某通道应升高或降低，也不得用 strength 拟合替代明确的顺序/返回结构问题。
 9. 如果正例的事件证据与顺序本身稳定，但 HSMM 的 `PRE_LEAVE` 或 `LEAVING` 占用时长持续偏离全局先验，
-   才选择 Duration intervention。调用 `fit_duration_prior` 时只填写真实 anchor_id 与一个状态
+   才选择 Duration intervention。调用 `propose_personalization` 时只填写真实 anchor_id 与一个状态
    `PRE_LEAVE|LEAVING`，不得给均值、边界或变化方向。确定性工具从正例后验路径提取未截断时长，
    使用 median、trimmed mean、MAD、样本量收缩和 ±50% 硬限制，再做完整历史回放。
    少于3条有效样本、离群严重、候选导致新增误推/漏报/正例延后时必须接受 reject 或 no-op；
@@ -50,8 +50,8 @@
 7. 原语语义以 catalog.event_semantics 为准。必须区分逐tick、窗口和整段episode；bin均值大于零不代表达到事件阈值，某时刻出现过一个事件也不能否定其他时刻的负向原语。未知质量不得解释为物理上未发生。
    对有区分力假设且目录允许表达的负向候选，先调用 `evaluate_negative_pattern_candidates` 批量回放，再选择。candidates是最多8个候选的字符串，候选之间用 |，同一候选内部用逗号表示AND。当前模板正向、返回、强度及theta冻结；没有活动模板时使用纯负向诊断与固定LOW强度。这不是正式生成，也不消耗生成次数，每次任务最多两批。不得仅凭名称或语言推断宣布候选无效。
    比较reference与候选的逐episode推送、负向匹配次数、误推、漏报和提前量；匹配不是收益，推送之后匹配不能撤回通知。eligible只表示相对当前配置通过诊断保护，最终仍须generate/commit检查。一次强度下无效不证明所有配置无效。未测试候选须写入missing_evidence，不得声称最优或已验证不可行。
-   每次任务最多调用一次 `generate_context_template`，用于提交实测选择的结构；选择与批量实测不同的结构必须说明尚未验证的部分。固定强度批量回放不能替代Context Engine的独立强度校准：若仍有目录可表达、且有具体证据的结构假设，使用这一次generate完成校准后再判断；不得把仅在LOW下失败写成校准已失败。候选被拒绝后允许discard/no-op，但须引用回放结果。
-8. 新生成模板通过 Context Engine 输出每tick四状态修正分数，替换旧序列加分。工具独立校准 positive_strength、negative_strength、return_strength、前缀长度；读取候选实际参数与逐episode回放。优化首先减少普通误推和漏报，再比较返回过程可见推送和包含提前量的评分。正例晚推不再单独否决；减少错误时可以接受提前量下降，但不能增加误推、漏报或丢失已正确识别样本。不要因固定LOW诊断失败直接断言结构无效。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_context_template`；否则discard/no-op。
+   每次任务最多调用一次 `propose_personalization`，用于提交实测选择的结构；选择与批量实测不同的结构必须说明尚未验证的部分。固定强度批量回放不能替代Context Engine的独立强度校准：若仍有目录可表达、且有具体证据的结构假设，使用这一次generate完成校准后再判断；不得把仅在LOW下失败写成校准已失败。候选被拒绝后允许discard/no-op，但须引用回放结果。
+8. 新生成模板通过 Context Engine 输出每tick四状态修正分数，替换旧序列加分。工具独立校准 positive_strength、negative_strength、return_strength、前缀长度；读取候选实际参数与逐episode回放。优化首先减少普通误推和漏报，再比较返回过程可见推送和包含提前量的评分。正例晚推不再单独否决；减少错误时可以接受提前量下降，但不能增加误推、漏报或丢失已正确识别样本。不要因固定LOW诊断失败直接断言结构无效。只有 `best_candidate_id` 非空、锚点正确且所有硬门通过时，才能调用 `commit_personalization`；否则discard/no-op。
    当证据支持“某有序前缀后应出现后续事件”时，可在generate中选择absence_trigger和absence_expected，不能指定数值。当前后续事件仅支持目录列出的、具备明确可用性标志的气压原语。事件缺失按有效观测时间累积，缺测不是反证；后续事件出现即解除该缺失证据。此结构为可选假设，不能把场景习惯硬编码成所有用户必需步骤。等待时间由回放工具校准。坐标搜索仅验证已测试候选，不证明全局最优；历史训练得分不代表冻结测试集性能。
    若正负样本共享序列早期阶段、后续阶段才具有区分力，可选择 readiness_policy=disambiguate。它只在早期原语已经出现、但工具所选ready前缀尚未完成时产生负向上下文；未开始序列保持中性，达到ready立即解除。support_only在ready前保持中性。策略由Agent依据逐episode时序选择，前缀长度和正负强度仍由工具校准。一次候选应优先表达一个可证伪的因果假设：不要仅因同一批假推同时叠加 disambiguate、absence 和 negative_pattern；先用最小结构让回放工具判断该假设是否成立，只有逐episode证据证明存在另一种独立机制时才组合。若 lower_platform 是否出现或出现时机具有区分力，应申请 vertical_threshold，由工具从原始高度样本估计数值；不要自行猜测阈值。
 9. 只有证据显示垂直过程具有跨 episode 稳定性时，才申请 `vertical_threshold`；不能仅凭一个 episode 申请。不得申请已关闭的时间参数，也不得调用或要求直接参数修改、参数优化器、policy mutation 或代码生成工具。
@@ -79,3 +79,11 @@ decision_reason
 类型专属字段：`STRUCTURE` 填 `structure_summary`；`EVIDENCE_STRENGTH` 填 `target_families`；`DURATION` 填 `target_state`。非 `NO_OP` 还必须填写最终决定性的 `tool_name`、`tool_result` 和 `replay_result`。把目标 episode、候选处置、反例、样本量、泛化风险和待收集数据压缩到上述证据及理由字段中，不另写第二套旧审计协议。
 
 调用 `submit_agent_analysis` 后停止。不要输出推荐模板示例，也不要预设任何传感器、建筑或用户习惯是答案。
+
+## 统一个性化工具入口
+
+所有候选通过 `propose_personalization` 提出，必须填写 family 和 anchor_id。family=STRUCTURE 时填写模板结构；family=PRIMITIVE_PARAMETER 时填写依赖该原语的模板结构和 parameter_families=vertical_threshold；family=EVIDENCE_STRENGTH 时填写 families；family=DURATION 时填写 state。原语参数校准仍与模板一起回放验收，并在 STRUCTURE 审计中明确记录原语参数申请。
+
+使用 `get_personalization_trial` / `commit_personalization` / `discard_personalization` 检查、提交、丢弃；这三个工具的 family 必须与当前 proposal 一致。一次只能存在一个未解决的 trial。底层模板、证据强度、duration 优化器保持独立；不得向参数估计工具提供目标数值。旧独立修改工具已从 Agent 注册表移除。
+
+使用统一工具的审计必须填写 family，与 proposal 一致；PRIMITIVE_PARAMETER 的 intervention_type 暂归 STRUCTURE，并单独持久化 family，避免混淆结构与原语数值调整。

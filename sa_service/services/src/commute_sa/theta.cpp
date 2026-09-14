@@ -153,9 +153,6 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     if (ExtractNumber(json, "leave_window_min", &v)) {
         t.leave_window_min = v;
     }
-    if (ExtractNumber(json, "arm_delay_s", &v)) {
-        t.arm_delay_s = v;
-    }
     if (ExtractNumber(json, "hsmm_preleave_min_s", &v)) {
         t.hsmm_preleave_min_s = v;
     }
@@ -194,9 +191,6 @@ bool LoadThetaFromFile(const std::string &path, Theta *out, std::string *err)
     }
     if (ExtractNumber(json, "max_gps_acc_m", &v)) {
         t.max_gps_acc_m = v;
-    }
-    if (ExtractNumber(json, "allow_network_dwell_acc_m", &v)) {
-        t.allow_network_dwell_acc_m = v;
     }
     if (ExtractNumber(json, "gps_low_quality_start_m", &v)) {
         t.gps_low_quality_start_m = v;

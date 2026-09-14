@@ -573,7 +573,6 @@ bool ProductStore::SaveTheta(const Theta &theta) const
         << "  \"weekday_leave_home_hour\": " << theta.weekday_leave_home_hour << ",\n"
         << "  \"weekday_leave_company_hour\": " << theta.weekday_leave_company_hour << ",\n"
         << "  \"leave_window_min\": " << theta.leave_window_min << ",\n"
-        << "  \"arm_delay_s\": " << theta.arm_delay_s << ",\n"
         << "  \"hsmm_preleave_min_s\": " << theta.hsmm_preleave_min_s << ",\n"
         << "  \"hsmm_preleave_mean_s\": " << theta.hsmm_preleave_mean_s << ",\n"
         << "  \"hsmm_preleave_max_s\": " << theta.hsmm_preleave_max_s << ",\n"
@@ -587,7 +586,6 @@ bool ProductStore::SaveTheta(const Theta &theta) const
         << "  \"min_away_s\": " << theta.min_away_s << ",\n"
         << "  \"push_cooldown_s\": " << theta.push_cooldown_s << ",\n"
         << "  \"max_gps_acc_m\": " << theta.max_gps_acc_m << ",\n"
-        << "  \"allow_network_dwell_acc_m\": " << theta.allow_network_dwell_acc_m << ",\n"
         << "  \"focus_side\": \"" << theta.focus_side << "\"\n"
         << "}\n";
     return out.good();

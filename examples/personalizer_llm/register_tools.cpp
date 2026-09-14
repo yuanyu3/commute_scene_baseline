@@ -89,10 +89,6 @@ std::string ProposeAbortedLeave(const std::string &p)
 {
     return commute_sa::ProposeAbortedLeaveInterpretationAction(p);
 }
-std::string GenerateTemplate(const std::string &p) { return commute_sa::GenerateContextTemplateAction(p); }
-std::string GetTemplateTrial(const std::string &p) { return commute_sa::GetContextTemplateTrialAction(p); }
-std::string CommitTemplate(const std::string &p) { return commute_sa::CommitContextTemplateAction(p); }
-std::string DiscardTemplate(const std::string &p) { return commute_sa::DiscardContextTemplateAction(p); }
 std::string GetActiveTemplate(const std::string &p) { return commute_sa::GetActiveContextTemplateAction(p); }
 }  // namespace
 
@@ -127,7 +123,8 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"start_ms", "optional inclusive window start", "integer", false},
             {"end_ms", "optional inclusive window end", "integer", false}}, &GetDynamicDiagnostics);
     Reg("submit_agent_analysis", "Persist the final typed Agent intervention decision for auditable ablation",
-        {{"intervention_type", "STRUCTURE|EVIDENCE_STRENGTH|DURATION|NO_OP", "string", true},
+        {{"family", "required with unified tools; STRUCTURE|PRIMITIVE_PARAMETER|EVIDENCE_STRENGTH|DURATION", "string", false},
+            {"intervention_type", "STRUCTURE|EVIDENCE_STRENGTH|DURATION|NO_OP", "string", true},
             {"anchor_id", "exact anchor id", "string", true},
             {"decision", "COMMITTED|REJECTED|DISCARDED|NO_OP", "string", true},
             {"context_name", "context", "string", true}, {"primary_cause", "cause", "string", true},
@@ -165,12 +162,15 @@ std::vector<std::string> RegisterPersonalizerTools()
         {{"anchor_id", "exact anchor id", "string", true},
          {"candidates", "1..8 pipe-separated patterns, each 1..6 comma-separated catalog events", "string", true}},
         &commute_sa::EvaluateNegativePatternCandidatesAction);
-    Reg("generate_context_template",
+    Reg("propose_personalization",
         "Validate an Agent-composed event sequence, deterministically estimate requested parameter families, replay strengths, and stage the best safe template",
-        {{"template_name", "new stable identifier", "string", true},
+        {{"family", "STRUCTURE|PRIMITIVE_PARAMETER|EVIDENCE_STRENGTH|DURATION", "string", true},
+            {"families", "evidence channels for EVIDENCE_STRENGTH", "string", false},
+            {"state", "PRE_LEAVE|LEAVING for DURATION", "string", false},
+            {"template_name", "new stable identifier", "string", false},
             {"anchor_id", "context anchor identifier", "string", true},
-            {"applicability", "always|baro_ready", "string", true},
-            {"positive_sequence", "comma-separated supported events in temporal order", "string", true},
+            {"applicability", "always|baro_ready", "string", false},
+            {"positive_sequence", "comma-separated supported events in temporal order", "string", false},
             {"readiness_policy", "support_only|disambiguate; latter suppresses an observed incomplete calibrated prefix", "string", false},
             {"cancel_sequence", "optional ordered return events after the positive prefix starts", "string", false},
             {"cancel_paths", "optional alternatives: comma-ordered events, pipe-separated paths; see catalog; excludes cancel_sequence", "string", false},
@@ -178,14 +178,14 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"absence_trigger", "optional ordered positive events starting an expected-event clock; paired with absence_expected", "string", false},
             {"absence_expected", "optional expected baro_descending|lower_platform|baro_ascending|vertical_closure; valid-time absence only; tools fit wait and separate strengths", "string", false},
             {"parameter_families", "optional vertical_threshold; departure_time is disabled; C++ estimates values", "string", false},
-            {"rationale", "evidence-grounded explanation", "string", true}},
-        &GenerateTemplate);
-    Reg("get_context_template_trial", "Inspect generated template, replay candidates, and hard-guard results", {},
-        &GetTemplateTrial);
-    Reg("commit_context_template", "Persist only the best generated template candidate that passed C++ guards", {},
-        &CommitTemplate);
-    Reg("discard_context_template", "Discard the staged template without changing the active context profile", {},
-        &DiscardTemplate);
+            {"rationale", "evidence-grounded explanation", "string", false}},
+        &commute_sa::ProposePersonalizationAction);
+    Reg("get_personalization_trial", "Inspect current family trial",
+        {{"family", "same family as proposal", "string", true}}, &commute_sa::GetPersonalizationTrialAction);
+    Reg("commit_personalization", "Commit replay-approved current family",
+        {{"family", "same family as proposal", "string", true}}, &commute_sa::CommitPersonalizationAction);
+    Reg("discard_personalization", "Discard current family trial",
+        {{"family", "same family as proposal", "string", true}}, &commute_sa::DiscardPersonalizationAction);
     Reg("get_active_context_template", "Return the currently persisted executable context template", {},
         &GetActiveTemplate);
     Reg("get_current_user_anchor_profile", "Return committed anchor-specific profile or global fallback",
@@ -195,28 +195,6 @@ std::vector<std::string> RegisterPersonalizerTools()
         "Return outcome, primitive and duration facts grouped only by anchor id; no recommendation",
         {{"anchor_id", "exact anchor id", "string", true}},
         &commute_sa::GetPersonalizationHistorySummaryAction);
-    Reg("estimate_evidence_strength",
-        "Deterministically fit selected channel strengths from labeled history and stage a replay-checked candidate",
-        {{"anchor_id", "exact anchor id", "string", true},
-            {"families", "comma-separated walking,pdr,geo,wifi,cell,ble,time,baro; empty means all", "string", false}},
-        &commute_sa::EstimateEvidenceStrengthAction);
-    Reg("get_evidence_strength_trial", "Inspect the staged evidence-strength candidate", {},
-        &commute_sa::GetEvidenceStrengthTrialAction);
-    Reg("commit_evidence_strength_candidate", "Commit only a replay-safe anchor-specific candidate", {},
-        &commute_sa::CommitEvidenceStrengthCandidateAction);
-    Reg("discard_evidence_strength_candidate", "Discard the staged strength candidate", {},
-        &commute_sa::DiscardEvidenceStrengthCandidateAction);
-    Reg("fit_duration_prior",
-        "Robustly fit one HSMM state duration from labeled history and stage a replay-checked candidate",
-        {{"anchor_id", "exact anchor id", "string", true},
-            {"state", "PRE_LEAVE|LEAVING", "string", true}},
-        &commute_sa::FitDurationPriorAction);
-    Reg("get_duration_prior_trial", "Inspect the staged duration candidate", {},
-        &commute_sa::GetDurationPriorTrialAction);
-    Reg("commit_duration_prior_candidate", "Commit only a replay-safe anchor-specific duration candidate", {},
-        &commute_sa::CommitDurationPriorCandidateAction);
-    Reg("discard_duration_prior_candidate", "Discard the staged duration candidate", {},
-        &commute_sa::DiscardDurationPriorCandidateAction);
     Reg("request_anchor_reestimate", "Queue anchor re-inference",
         {{"which", "home|company|both", "string", true}}, &ReqAnchor);
 
@@ -224,13 +202,10 @@ std::vector<std::string> RegisterPersonalizerTools()
         "get_leave_sensor_summary", "get_episode_semantic_timeline", "get_episode_dynamic_diagnostics",
         "request_anchor_reestimate", "submit_agent_analysis",
         "get_context_template_catalog", "get_aborted_leave_candidates",
-        "propose_aborted_leave_interpretation", "diagnose_context_template", "evaluate_negative_pattern_candidates", "generate_context_template", "get_context_template_trial",
-        "commit_context_template", "discard_context_template", "get_active_context_template",
+        "propose_aborted_leave_interpretation", "diagnose_context_template", "evaluate_negative_pattern_candidates", "propose_personalization", "get_personalization_trial",
+        "commit_personalization", "discard_personalization", "get_active_context_template",
         "get_current_user_anchor_profile", "get_personalization_history_summary",
-        "estimate_evidence_strength", "get_evidence_strength_trial",
-        "commit_evidence_strength_candidate", "discard_evidence_strength_candidate",
-        "fit_duration_prior", "get_duration_prior_trial", "commit_duration_prior_candidate",
-        "discard_duration_prior_candidate"};
+        };
 }
 
 }  // namespace personalizer

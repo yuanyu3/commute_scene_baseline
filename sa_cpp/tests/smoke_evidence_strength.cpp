@@ -126,6 +126,14 @@ int main()
         return 8;
     }
 
+    // Dispatcher must reject cross-family commits and overlapping proposals.
+    const std::string invalid = commute_sa::ProposePersonalizationAction(R"({"family":"arbitrary"})");
+    if (invalid.find("error") == std::string::npos) return 9;
+    commute_sa::ProposePersonalizationAction(R"({"family":"DURATION","anchor_id":"missing","state":"PRE_LEAVE"})");
+    if (commute_sa::CommitPersonalizationAction(R"({"family":"EVIDENCE_STRENGTH"})").find("error") == std::string::npos) return 10;
+    if (commute_sa::ProposePersonalizationAction(R"({"family":"STRUCTURE"})").find("resolve the current trial") == std::string::npos) return 11;
+    commute_sa::DiscardPersonalizationAction(R"({"family":"DURATION"})");
+    if (commute_sa::ProposePersonalizationAction(R"({"family":"PRIMITIVE_PARAMETER"})").find("vertical_threshold") == std::string::npos) return 12;
     std::cout << "ok\n";
     return 0;
 }

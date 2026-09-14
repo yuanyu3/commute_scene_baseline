@@ -4,16 +4,16 @@
   "exit_leave": 0.45,
   "min_evidence": 1,
   "evidence_strength": {
-    "walking": 1.0,
+    "walking": 1,
     "pdr": 0.85,
     "geo": 0.85,
     "wifi": 0.61,
     "cell": 0.49,
-    "ble": 0.0,
+    "ble": 0,
     "time": 0.85,
     "baro": 0.85
   },
-  "baro_min_descent_m": 12.0,
+  "baro_min_descent_m": 12,
   "thr_walk": 0.5,
   "thr_pdr": 0.5,
   "thr_geo": 0.5,
@@ -21,12 +21,11 @@
   "thr_cell": 0.5,
   "thr_ble": 0.5,
   "thr_time": 0.5,
-  "thr_wifi_jaccard": 0.30,
-  "radio_suppress_after_approach_s": 120.0,
+  "thr_wifi_jaccard": 0.3,
+  "radio_suppress_after_approach_s": 120,
   "weekday_leave_home_hour": 8.25,
   "weekday_leave_company_hour": 18.2,
   "leave_window_min": 25,
-  "arm_delay_s": 25,
   "hsmm_preleave_min_s": 10,
   "hsmm_preleave_mean_s": 90,
   "hsmm_preleave_max_s": 300,
@@ -40,31 +39,93 @@
   "away_confirm_s": 180,
   "min_away_s": 1200,
   "push_cooldown_s": 1800,
-  "max_gps_acc_m": 80.0,
-  "allow_network_dwell_acc_m": 120.0,
-  "gps_low_quality_start_m": 20.0,
-  "gps_low_quality_zero_m": 120.0,
-  "gps_jump_speed_start_mps": 3.0,
-  "gps_jump_speed_zero_mps": 15.0,
+  "max_gps_acc_m": 80,
+  "gps_low_quality_start_m": 20,
+  "gps_low_quality_zero_m": 120,
+  "gps_jump_speed_start_mps": 3,
+  "gps_jump_speed_zero_mps": 15,
   "gps_approach_min_reliability": 0.5,
   "focus_side": "company",
   "param_limits": {
-    "enter_leave": {"min": 0.4, "max": 0.85, "step": 0.03},
-    "min_evidence": {"min": 1, "max": 4, "step": 1},
-    "arm_delay_s": {"min": 0, "max": 90, "step": 5},
-    "hsmm_preleave_mean_s": {"min": 20, "max": 240, "step": 10},
-    "hsmm_leaving_mean_s": {"min": 20, "max": 360, "step": 10},
-    "leave_window_min": {"min": 15, "max": 180, "step": 15},
-    "w_pdr": {"min": 0.0, "max": 1.0, "step": 0.05},
-    "w_time": {"min": 0.0, "max": 1.0, "step": 0.05},
-    "w_wifi": {"min": 0.0, "max": 1.0, "step": 0.05},
-    "w_cell": {"min": 0.0, "max": 1.0, "step": 0.05},
-    "w_ble": {"min": 0.0, "max": 1.0, "step": 0.05},
-    "w_baro": {"min": 0.0, "max": 1.0, "step": 0.05},
-    "thr_wifi": {"min": 0.3, "max": 0.8, "step": 0.05},
-    "thr_cell": {"min": 0.3, "max": 0.8, "step": 0.05},
-    "w_geo": {"min": 0.0, "max": 1.0, "step": 0.05},
-    "walk_hold_s": {"min": 0, "max": 600, "step": 30},
-    "weekday_leave_company_hour": {"min": 11.0, "max": 21.0, "step": 0.1}
+    "enter_leave": {
+      "min": 0.4,
+      "max": 0.85,
+      "step": 0.03
+    },
+    "min_evidence": {
+      "min": 1,
+      "max": 4,
+      "step": 1
+    },
+    "hsmm_preleave_mean_s": {
+      "min": 20,
+      "max": 240,
+      "step": 10
+    },
+    "hsmm_leaving_mean_s": {
+      "min": 20,
+      "max": 360,
+      "step": 10
+    },
+    "leave_window_min": {
+      "min": 15,
+      "max": 180,
+      "step": 15
+    },
+    "w_pdr": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "w_time": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "w_wifi": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "w_cell": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "w_ble": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "w_baro": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "thr_wifi": {
+      "min": 0.3,
+      "max": 0.8,
+      "step": 0.05
+    },
+    "thr_cell": {
+      "min": 0.3,
+      "max": 0.8,
+      "step": 0.05
+    },
+    "w_geo": {
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    },
+    "walk_hold_s": {
+      "min": 0,
+      "max": 600,
+      "step": 30
+    },
+    "weekday_leave_company_hour": {
+      "min": 11,
+      "max": 21,
+      "step": 0.1
+    }
   }
 }

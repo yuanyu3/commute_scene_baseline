@@ -1,4 +1,5 @@
 #include "commute_sa/evidence_strength_profile.h"
+#include "commute_sa/context_template.h"
 
 #include "commute_sa/anchors.h"
 #include "commute_sa/product_store.h"
@@ -471,12 +472,6 @@ Theta ApplyCommittedUserAnchorProfile(const Theta &global, const std::string &re
     return effective;
 }
 
-Theta ApplyCommittedEvidenceStrengthProfile(
-    const Theta &global, const std::string &side, const std::string &anchorId)
-{
-    (void)side;
-    return ApplyCommittedUserAnchorProfile(global, anchorId);
-}
 
 std::string GetUserAnchorProfileAction(const std::string &paramsJson)
 {
@@ -864,5 +859,60 @@ std::string DiscardDurationPriorCandidateAction(const std::string &)
     gDurationTrial = DurationTrial {};
     return "{\"ok\":true,\"discarded\":" + std::string(active ? "true" : "false") + "}";
 }
+
+
+namespace {
+std::mutex dispatchMutex;
+std::string dispatchFamily;
+
+std::string DispatchPersonalization(const std::string &params, int operation)
+{
+    std::lock_guard<std::mutex> lock(dispatchMutex);
+    std::string family;
+    ExtractString(params, "family", &family);
+    if (family != "STRUCTURE" && family != "PRIMITIVE_PARAMETER" &&
+        family != "EVIDENCE_STRENGTH" && family != "DURATION")
+        return R"({"ok":false,"error":"family must be STRUCTURE|PRIMITIVE_PARAMETER|EVIDENCE_STRENGTH|DURATION"})";
+    if (operation == 0 && !dispatchFamily.empty())
+        return R"({"ok":false,"error":"resolve the current trial before proposing another"})";
+    if (operation != 0 && family != dispatchFamily)
+        return R"({"ok":false,"error":"no current trial for this family"})";
+
+    std::string result;
+    if (family == "EVIDENCE_STRENGTH") {
+        result = operation == 0 ? EstimateEvidenceStrengthAction(params) :
+            operation == 1 ? GetEvidenceStrengthTrialAction(params) :
+            operation == 2 ? CommitEvidenceStrengthCandidateAction(params) :
+                             DiscardEvidenceStrengthCandidateAction(params);
+    } else if (family == "DURATION") {
+        result = operation == 0 ? FitDurationPriorAction(params) :
+            operation == 1 ? GetDurationPriorTrialAction(params) :
+            operation == 2 ? CommitDurationPriorCandidateAction(params) :
+                             DiscardDurationPriorCandidateAction(params);
+    } else {
+        if (operation == 0) {
+            std::string requested;
+            ExtractString(params, "parameter_families", &requested);
+            if (family == "PRIMITIVE_PARAMETER" && requested != "vertical_threshold")
+                return R"({"ok":false,"error":"PRIMITIVE_PARAMETER requires parameter_families=vertical_threshold and template fields"})";
+            if (family == "STRUCTURE" && !requested.empty())
+                return R"({"ok":false,"error":"use PRIMITIVE_PARAMETER for template primitive calibration"})";
+        }
+        result = operation == 0 ? GenerateContextTemplateAction(params) :
+            operation == 1 ? GetContextTemplateTrialAction(params) :
+            operation == 2 ? CommitContextTemplateAction(params) :
+                             DiscardContextTemplateAction(params);
+    }
+    // Preserve failed trials for inspection/discard; never commit a different backend.
+    if (operation == 0) dispatchFamily = family;
+    if (operation == 3 || (operation == 2 && result.find(R"("ok":true)") != std::string::npos))
+        dispatchFamily.clear();
+    return result;
+}
+}
+std::string ProposePersonalizationAction(const std::string &p) { return DispatchPersonalization(p, 0); }
+std::string GetPersonalizationTrialAction(const std::string &p) { return DispatchPersonalization(p, 1); }
+std::string CommitPersonalizationAction(const std::string &p) { return DispatchPersonalization(p, 2); }
+std::string DiscardPersonalizationAction(const std::string &p) { return DispatchPersonalization(p, 3); }
 
 }  // namespace commute_sa

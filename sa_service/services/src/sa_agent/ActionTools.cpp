@@ -64,22 +64,6 @@ std::string CallDiagnoseContextTemplate(const std::string &p)
 {
     return commute_sa::DiagnoseContextTemplateOnHistoryAction(p);
 }
-std::string CallGenerateContextTemplate(const std::string &p)
-{
-    return commute_sa::GenerateContextTemplateAction(p);
-}
-std::string CallGetContextTemplateTrial(const std::string &p)
-{
-    return commute_sa::GetContextTemplateTrialAction(p);
-}
-std::string CallCommitContextTemplate(const std::string &p)
-{
-    return commute_sa::CommitContextTemplateAction(p);
-}
-std::string CallDiscardContextTemplate(const std::string &p)
-{
-    return commute_sa::DiscardContextTemplateAction(p);
-}
 std::string CallGetActiveContextTemplate(const std::string &p)
 {
     return commute_sa::GetActiveContextTemplateAction(p);
@@ -92,26 +76,6 @@ std::string CallGetPersonalizationHistorySummary(const std::string &p)
 {
     return commute_sa::GetPersonalizationHistorySummaryAction(p);
 }
-std::string CallEstimateEvidenceStrength(const std::string &p)
-{
-    return commute_sa::EstimateEvidenceStrengthAction(p);
-}
-std::string CallGetEvidenceStrengthTrial(const std::string &p)
-{
-    return commute_sa::GetEvidenceStrengthTrialAction(p);
-}
-std::string CallCommitEvidenceStrength(const std::string &p)
-{
-    return commute_sa::CommitEvidenceStrengthCandidateAction(p);
-}
-std::string CallDiscardEvidenceStrength(const std::string &p)
-{
-    return commute_sa::DiscardEvidenceStrengthCandidateAction(p);
-}
-std::string CallFitDurationPrior(const std::string &p) { return commute_sa::FitDurationPriorAction(p); }
-std::string CallGetDurationPriorTrial(const std::string &p) { return commute_sa::GetDurationPriorTrialAction(p); }
-std::string CallCommitDurationPrior(const std::string &p) { return commute_sa::CommitDurationPriorCandidateAction(p); }
-std::string CallDiscardDurationPrior(const std::string &p) { return commute_sa::DiscardDurationPriorCandidateAction(p); }
 
 ErrorCode RegisterOne(const char *name, const char *desc,
     const std::vector<std::tuple<std::string, std::string, std::string, bool>> &params,
@@ -135,22 +99,10 @@ const std::vector<std::string> &ActionToolNames()
         "propose_aborted_leave_interpretation",
         "diagnose_context_template",
         "evaluate_negative_pattern_candidates",
-        "generate_context_template",
-        "get_context_template_trial",
-        "commit_context_template",
-        "discard_context_template",
-        "get_active_context_template",
+        "propose_personalization", "get_personalization_trial", "commit_personalization", "discard_personalization", "get_active_context_template",
         "get_current_user_anchor_profile",
         "get_personalization_history_summary",
-        "estimate_evidence_strength",
-        "get_evidence_strength_trial",
-        "commit_evidence_strength_candidate",
-        "discard_evidence_strength_candidate",
-        "fit_duration_prior",
-        "get_duration_prior_trial",
-        "commit_duration_prior_candidate",
-        "discard_duration_prior_candidate",
-    };
+        };
     return kNames;
 }
 
@@ -163,7 +115,8 @@ std::vector<std::string> RegisterActionTools()
         {{"which", "home|company|both", "string", true}}, &CallRequestAnchorReestimate);
 
     RegisterOne("submit_agent_analysis", "Persist the final typed Agent intervention decision for audit and ablation",
-        {{"intervention_type", "STRUCTURE|EVIDENCE_STRENGTH|DURATION|NO_OP", "string", true},
+        {{"family", "required with unified tools; STRUCTURE|PRIMITIVE_PARAMETER|EVIDENCE_STRENGTH|DURATION", "string", false},
+            {"intervention_type", "STRUCTURE|EVIDENCE_STRENGTH|DURATION|NO_OP", "string", true},
             {"anchor_id", "exact anchor id", "string", true},
             {"decision", "COMMITTED|REJECTED|DISCARDED|NO_OP", "string", true},
             {"context_name", "context", "string", true}, {"primary_cause", "cause", "string", true},
@@ -198,11 +151,14 @@ std::vector<std::string> RegisterActionTools()
         {{"anchor_id", "exact anchor id", "string", true},
          {"candidates", "1..8 pipe-separated patterns of comma-separated catalog events", "string", true}},
         &commute_sa::EvaluateNegativePatternCandidatesAction);
-    RegisterOne("generate_context_template", "Stage a replay-safe Agent-composed context template",
-        {{"template_name", "stable identifier", "string", true},
+    RegisterOne("propose_personalization", "Stage a replay-safe Agent-composed context template",
+        {{"family", "STRUCTURE|PRIMITIVE_PARAMETER|EVIDENCE_STRENGTH|DURATION", "string", true},
+            {"families", "evidence channels for EVIDENCE_STRENGTH", "string", false},
+            {"state", "PRE_LEAVE|LEAVING for DURATION", "string", false},
+            {"template_name", "stable identifier", "string", false},
             {"anchor_id", "exact anchor id", "string", true},
-            {"applicability", "always|baro_ready", "string", true},
-            {"positive_sequence", "ordered catalog events", "string", true},
+            {"applicability", "always|baro_ready", "string", false},
+            {"positive_sequence", "ordered catalog events", "string", false},
             {"readiness_policy", "support_only|disambiguate for observed incomplete prefix", "string", false},
             {"cancel_sequence", "optional ordered return events", "string", false},
             {"cancel_paths", "optional comma-ordered, pipe-separated return paths; see catalog; excludes cancel_sequence", "string", false},
@@ -210,13 +166,13 @@ std::vector<std::string> RegisterActionTools()
             {"absence_trigger", "optional ordered events starting an expected-event clock", "string", false},
             {"absence_expected", "optional baro_descending|lower_platform|baro_ascending|vertical_closure; tools fit wait and strengths", "string", false},
             {"parameter_families", "optional vertical_threshold", "string", false},
-            {"rationale", "evidence-grounded explanation", "string", true}}, &CallGenerateContextTemplate);
-    RegisterOne("get_context_template_trial", "Inspect staged template candidates", {},
-        &CallGetContextTemplateTrial);
-    RegisterOne("commit_context_template", "Commit only the C++-selected safe candidate", {},
-        &CallCommitContextTemplate);
-    RegisterOne("discard_context_template", "Discard the staged context template", {},
-        &CallDiscardContextTemplate);
+            {"rationale", "evidence-grounded explanation", "string", false}}, &commute_sa::ProposePersonalizationAction);
+    RegisterOne("get_personalization_trial", "Inspect current family trial",
+        {{"family", "same family as proposal", "string", true}}, &commute_sa::GetPersonalizationTrialAction);
+    RegisterOne("commit_personalization", "Commit replay-approved current family",
+        {{"family", "same family as proposal", "string", true}}, &commute_sa::CommitPersonalizationAction);
+    RegisterOne("discard_personalization", "Discard current family trial",
+        {{"family", "same family as proposal", "string", true}}, &commute_sa::DiscardPersonalizationAction);
     RegisterOne("get_active_context_template", "Return the persisted executable template", {},
         &CallGetActiveContextTemplate);
     RegisterOne("get_current_user_anchor_profile", "Return committed anchor-specific profile",
@@ -224,24 +180,6 @@ std::vector<std::string> RegisterActionTools()
         &CallGetUserAnchorProfile);
     RegisterOne("get_personalization_history_summary", "Return facts grouped only by anchor id",
         {{"anchor_id", "exact anchor id", "string", true}}, &CallGetPersonalizationHistorySummary);
-    RegisterOne("estimate_evidence_strength", "Fit selected strengths and stage a replay-checked candidate",
-        {{"anchor_id", "exact anchor id", "string", true},
-            {"families", "comma-separated evidence channels", "string", false}},
-        &CallEstimateEvidenceStrength);
-    RegisterOne("get_evidence_strength_trial", "Inspect staged strength candidate", {},
-        &CallGetEvidenceStrengthTrial);
-    RegisterOne("commit_evidence_strength_candidate", "Commit replay-safe anchor profile", {},
-        &CallCommitEvidenceStrength);
-    RegisterOne("discard_evidence_strength_candidate", "Discard staged strength candidate", {},
-        &CallDiscardEvidenceStrength);
-    RegisterOne("fit_duration_prior", "Fit PRE_LEAVE or LEAVING duration and stage a replay-checked candidate",
-        {{"anchor_id", "exact anchor id", "string", true},
-            {"state", "PRE_LEAVE|LEAVING", "string", true}}, &CallFitDurationPrior);
-    RegisterOne("get_duration_prior_trial", "Inspect staged duration candidate", {}, &CallGetDurationPriorTrial);
-    RegisterOne("commit_duration_prior_candidate", "Commit replay-safe anchor duration", {},
-        &CallCommitDurationPrior);
-    RegisterOne("discard_duration_prior_candidate", "Discard staged duration candidate", {},
-        &CallDiscardDurationPrior);
 
     return ActionToolNames();
 }

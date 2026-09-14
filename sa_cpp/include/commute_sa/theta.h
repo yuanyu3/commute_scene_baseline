@@ -45,8 +45,6 @@ struct Theta {
     double weekday_leave_home_hour = 8.25;
     double weekday_leave_company_hour = 18.2;
     double leave_window_min = 25.0;
-    // Legacy config compatibility only; no longer gates realtime or replay.
-    double arm_delay_s = 25.0;
     /** Explicit state-duration priors for the online HSMM. */
     double hsmm_preleave_min_s = 10.0;
     double hsmm_preleave_mean_s = 90.0;
@@ -62,8 +60,6 @@ struct Theta {
     double min_away_s = 1200.0;
     double push_cooldown_s = 1800.0;
     double max_gps_acc_m = 80.0;
-    /** Legacy load compatibility; no source-specific dwell override is applied. */
-    double allow_network_dwell_acc_m = 120.0;
     /** GPS direction reliability falls linearly from 1 to 0 across this range. */
     double gps_low_quality_start_m = 20.0;
     double gps_low_quality_zero_m = 120.0;

@@ -20,9 +20,12 @@ double EstimateDurationMeanValue(double globalMean, const std::vector<double> &s
 Theta ApplyCommittedUserAnchorProfile(
     const Theta &global, const std::string &anchorId);
 
-/** Compatibility alias retained for existing callers. */
-Theta ApplyCommittedEvidenceStrengthProfile(
-    const Theta &global, const std::string &side, const std::string &anchorId);
+
+/** Unified Agent lifecycle; backend estimators remain independent. */
+std::string ProposePersonalizationAction(const std::string &paramsJson);
+std::string GetPersonalizationTrialAction(const std::string &paramsJson);
+std::string CommitPersonalizationAction(const std::string &paramsJson);
+std::string DiscardPersonalizationAction(const std::string &paramsJson);
 
 std::string GetUserAnchorProfileAction(const std::string &paramsJson);
 std::string GetPersonalizationHistorySummaryAction(const std::string &paramsJson);
