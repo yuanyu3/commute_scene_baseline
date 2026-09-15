@@ -126,14 +126,18 @@ int main()
         return 8;
     }
 
-    // Dispatcher must reject cross-family commits and overlapping proposals.
+    // Failed validation must not reserve a phantom trial or block the next family.
     const std::string invalid = commute_sa::ProposePersonalizationAction(R"({"family":"arbitrary"})");
     if (invalid.find("error") == std::string::npos) return 9;
     commute_sa::ProposePersonalizationAction(R"({"family":"DURATION","anchor_id":"missing","state":"PRE_LEAVE"})");
     if (commute_sa::CommitPersonalizationAction(R"({"family":"EVIDENCE_STRENGTH"})").find("error") == std::string::npos) return 10;
-    if (commute_sa::ProposePersonalizationAction(R"({"family":"STRUCTURE"})").find("resolve the current trial") == std::string::npos) return 11;
+    if (commute_sa::ProposePersonalizationAction(R"({"family":"STRUCTURE"})").find("positive_sequence required") == std::string::npos) return 11;
     commute_sa::DiscardPersonalizationAction(R"({"family":"DURATION"})");
     if (commute_sa::ProposePersonalizationAction(R"({"family":"PRIMITIVE_PARAMETER"})").find("vertical_threshold") == std::string::npos) return 12;
+    const auto missingTemplate = commute_sa::ProposePersonalizationAction(
+        R"({"family":"PRIMITIVE_PARAMETER","parameter_families":"vertical_threshold"})");
+    if (missingTemplate.find("no prior STRUCTURE commit") == std::string::npos) return 13;
+    if (commute_sa::ProposePersonalizationAction(R"({"family":"STRUCTURE"})").find("positive_sequence required") == std::string::npos) return 14;
     std::cout << "ok\n";
     return 0;
 }

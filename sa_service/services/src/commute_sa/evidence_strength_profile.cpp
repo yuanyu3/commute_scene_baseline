@@ -1130,8 +1130,13 @@ std::string DispatchPersonalization(const std::string &params, int operation)
             operation == 2 ? CommitContextTemplateAction(params) :
                              DiscardContextTemplateAction(params);
     }
-    // Preserve failed trials for inspection/discard; never commit a different backend.
-    if (operation == 0) dispatchFamily = family;
+    // Validation can fail before a backend creates a trial. Only reserve the
+    // dispatcher when there is an actual trial, including ineligible trials.
+    if (operation == 0) {
+        const std::string trial = family == "EVIDENCE_STRENGTH" ? GetEvidenceStrengthTrialAction(params) :
+            family == "DURATION" ? GetDurationPriorTrialAction(params) : GetContextTemplateTrialAction(params);
+        if (trial.find(R"("trial_active":true)") != std::string::npos) dispatchFamily = family;
+    }
     if (operation == 3 || (operation == 2 && result.find(R"("ok":true)") != std::string::npos))
         dispatchFamily.clear();
     return result;

@@ -105,6 +105,8 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetAbortedLeaveCandidatesAction(params) << "\n";
         } else if (command == "propose_aborted") {
             std::cout << commute_sa::ProposeAbortedLeaveInterpretationAction(params) << "\n";
+        } else if (command == "personalization_propose") {
+            std::cout << commute_sa::ProposePersonalizationAction(params) << "\n";
         } else if (command == "template_generate") {
             std::cout << commute_sa::GenerateContextTemplateAction(params) << "\n";
         } else if (command == "template_fit") {

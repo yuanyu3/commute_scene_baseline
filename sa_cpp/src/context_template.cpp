@@ -958,7 +958,7 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"negative_pattern\":\"emit an independent negative_pattern_match observation\","
            "\"cancel_sequence\":\"ordered reversal after a started positive prefix; emits a 120-second cancel observation\","
            "\"strength\":\"new templates: independent calibrated context channels; legacy templates: sequence_reliability\"},"
-           "\"parameter_families\":{\"vertical_threshold\":\"anchor-scoped stable descent threshold; needs 3 validated lower-platform episodes\"},"
+           "\"parameter_families\":{\"vertical_threshold\":\"anchor-scoped stable descent threshold; needs 3 barometer-valid confirmed-leave episodes, independent of the old lower_platform threshold; submit template_name and positive_sequence in the same request even on cold start\"},"
            "\"disabled_parameter_families\":{\"departure_time\":\"disabled while collection timestamps are not representative of normal behavior\"},"
            "\"ready_prefix_length\":\"C++ evaluates legacy mode and each causal prefix; agent supplies sequence only\","
            "\"strengths\":\"LOW|MEDIUM|HIGH warm start, then independent channel coordinate search; consult context_engine.calibration; all candidates pass the existing per-episode commit guards\"}";
@@ -1274,7 +1274,8 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     std::string minimumReadyEvent;
     if (!ExtractString(paramsJson, "template_name", &spec.template_name) || spec.template_name.empty() ||
         !ExtractString(paramsJson, "positive_sequence", &positiveCsv) || positiveCsv.empty()) {
-        return "{\"ok\":false,\"error\":\"template_name and comma-separated positive_sequence required\"}";
+        return "{\"ok\":false,\"error\":\"template_name and comma-separated positive_sequence required\","
+               "\"hint\":\"PRIMITIVE_PARAMETER needs the dependent template in this same request; no prior STRUCTURE commit is required. Supply its complete structure, or copy the same-anchor active template fields.\"}";
     }
     ExtractString(paramsJson, "negative_pattern", &negativeCsv);
     ExtractString(paramsJson, "cancel_sequence", &cancelCsv);

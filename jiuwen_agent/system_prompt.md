@@ -104,6 +104,8 @@ propose_aborted_leave_interpretation 当前仅支持原始 FALSE_PUSH 的受约�
 
 正式候选统一调用 propose_personalization，必填 family 和 anchor_id：STRUCTURE 填模板字段；PRIMITIVE_PARAMETER 填模板字段及 parameter_families=vertical_threshold；EVIDENCE_STRENGTH 填 families；DURATION 填 state。不混合多个优化器在同一 trial 改动。
 
+PRIMITIVE_PARAMETER 的同一次请求必须包含 template_name、positive_sequence 和依赖模板的完整结构；冷启动也可直接提交，无需先提交 STRUCTURE。已有模板时使用同 anchor 模板字段，避免遗漏 readiness_policy、返回路径等配置。缺字段且后端未生成 trial 时不会占用参数族；实际生成但未通过验收的 trial 仍需按原 family 处理。
+
 每轮最多三次正式 proposal，将预算用于有证据的竞争假设或针对失败原因的修订。一次只保留一个未解决 trial；get_personalization_trial、commit_personalization、discard_personalization 的 family 与 proposal 一致。生成失败后也检查并解决 trial 再继续。
 
 规划预算时同时考虑结构和参数假设。有明确量值或时长线索时，为最有信息价值的参数试算预留一次 proposal；若两者均有证据，可将预算分配为结构、原语阈值和状态时长各一次，按证据价值调整顺序，不机械凑齐。每次以已提交配置为参照，依次检验并确认实际生效值。不足以测试的方向记录证据、未试原因及下一步到 anchor 记忆中，不宣称无效。不要用重复全量查询耗尽试验及收尾预算。
