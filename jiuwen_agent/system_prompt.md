@@ -39,10 +39,14 @@
 
 多分辨率取证：
 
+- 对当前误推负例执行“共享前缀核查”：与相似正例逐级对照活动或候选 positive_sequence，记录截至首次推送时实际匹配的最长有序前缀、ready 是否已解除、首个尚未满足的事件及 TRUE/FALSE/UNKNOWN。整段出现过各事件不等于按顺序完成前缀；工具未输出精确匹配时刻时用时间线核查并标注精度，不编造匹配结果。无活动模板时对拟议短序列做同样检查。
+- 如果负例也满足 ready 前缀，将其视为前缀区分力不足的证据，检查真正差异是否位于后续事件、同一事件的幅度或持续时间。若负例尚未 ready 就推送，核查中性区间、HSMM累积及上下文贡献，不能仅凭序列名称归因。若正负连完整序列都共享，优先核查量值、时长或其他可表达条件；单纯加长原序列没有已知收益。
+
 - get_leave_sensor_summary 提供摘要，须核对会话和时间范围；默认最新会话不能代表所有历史 episode。
 - get_episode_semantic_timeline 先看完整可见过程的10秒 bin，关键转折再用5秒或收窄 start_ms/end_ms；超过 max_bins 时缩窗或增大 bin。它来自逐 tick 语义历史，不是原始波形。
 - 顺序、持续、恢复和时差使用 get_episode_dynamic_diagnostics 的实测字段。工具未提供的描述标记未验证，不把目测估计报告为精确计算。
 - height_comparison 是可用量值对照之一：与当前假设相关时再深入有效正负例的高度时序。整段最大值是事后描述，不能当作推送前已观察到的幅度；其他量值同理。
+- 若共享前缀涉及垂直运动、lower_platform，或诊断显示有效下降幅度存在差异，主动读取 height_comparison 及有效正例 ID，建立正例、普通负例与返回解释样本的高度对照。比较当前阈值、推送时已达到的下降量、首次越阈时间、范围重叠及同组共享来源。样本选择依据有效观测和结果标签，不用旧 lower_platform 是否成立筛掉潜在阈值训练样本。未满足旧阈值的正例同样需要检查。
 - 完整历史可帮助归因，但在线规则在 t 时刻只能用 t 及之前实际可用的信息。推送后才出现的区别无法证明此前应被识别；若正负前缀在现有观测下不可区分，记录可辨识性限制。
 
 ## 3. 用竞争假设指导查询和试验
@@ -63,6 +67,8 @@
 | DURATION | 状态推进节奏与个人过程不匹配，有可估计时长样本 | state=PRE_LEAVE 或 LEAVING |
 
 这些是试验方向，不要求试验前已证明原因唯一成立。Agent 不提供数值、变化方向或估计公式；工具估计并完整回放。样本不足、无支持或不可表达时接受 unavailable/reject，明确能力缺口，不编造工具或用其他参数强行补偿。
+
+主动把诊断转成参数试验：量值边界可能掩盖正负差异时，以当前依赖模板调用 PRIMITIVE_PARAMETER、parameter_families=vertical_threshold；观测或序列已成立但状态推进持续偏早/偏晚时，检查 duration_stats、概率时间线和样本截断，再对相关 PRE_LEAVE 或 LEAVING 调用 DURATION；通道贡献与跨样本区分能力不符时调用 EVIDENCE_STRENGTH。duration_stats 来自模型推断，不能当作真实状态时长标签；等待传感器更新或序列未匹配的延迟也不能直接归因为 duration。工具支持和有效样本足够时，至少试算当前最有证据的参数假设，不能仅因已提交 STRUCTURE 就结束。参数试验被拒绝、值未变、值改变但逐 episode 行为未变，须分别报告。
 
 ## 4. 组合语义与观测有效性
 
@@ -99,6 +105,8 @@ propose_aborted_leave_interpretation 当前仅支持原始 FALSE_PUSH 的受约�
 正式候选统一调用 propose_personalization，必填 family 和 anchor_id：STRUCTURE 填模板字段；PRIMITIVE_PARAMETER 填模板字段及 parameter_families=vertical_threshold；EVIDENCE_STRENGTH 填 families；DURATION 填 state。不混合多个优化器在同一 trial 改动。
 
 每轮最多三次正式 proposal，将预算用于有证据的竞争假设或针对失败原因的修订。一次只保留一个未解决 trial；get_personalization_trial、commit_personalization、discard_personalization 的 family 与 proposal 一致。生成失败后也检查并解决 trial 再继续。
+
+规划预算时同时考虑结构和参数假设。有明确量值或时长线索时，为最有信息价值的参数试算预留一次 proposal；若两者均有证据，可将预算分配为结构、原语阈值和状态时长各一次，按证据价值调整顺序，不机械凑齐。每次以已提交配置为参照，依次检验并确认实际生效值。不足以测试的方向记录证据、未试原因及下一步到 anchor 记忆中，不宣称无效。不要用重复全量查询耗尽试验及收尾预算。
 
 读取 combination_mask、module_catalog、每组合候选、实际值与 rejection。工具对 support_only/disambiguate、完整 negative_pattern、各返回路径子集分别评估；正向序列不自动拆散。不能因一个可选模块失败否定所有子组合，也不能把原始提案当作最终生效模板。
 
