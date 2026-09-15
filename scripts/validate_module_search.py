@@ -25,6 +25,7 @@ active = json.loads((a.output / "active_context_template.json").read_text())
 (a.output / "active_context_template.json").rename(a.output / "frozen_reference.json")
 proposal = {k: active[k] for k in ("anchor_id", "positive_sequence", "applicability")}
 proposal.update(template_name="module_isolation_test", readiness_policy="support_only",
+                minimum_ready_event="lower_platform",
                 cancel_paths="baro_ascending,vertical_closure|geo_outbound,approaching,attached",
                 rationale="Developer-controlled regression, not an LLM discovery.")
 result = call(a.binary, "template_fit", proposal)
@@ -36,6 +37,9 @@ assert {c["combination_mask"] for c in t["candidates"]} == set(range(8))
 assert {c["template"]["readiness_policy"] for c in t["candidates"]} == {
     "support_only", "disambiguate"
 }
+assert all(c["template"]["ready_prefix_length"] >= 2 for c in t["candidates"]
+           if c["template"]["readiness_policy"] == "disambiguate"
+           and "return_module_requires_2" not in c.get("rejection", ""))
 assert any("requires_2" in c["rejection"] for c in t["candidates"])
 assert any(c["metrics"].get("mean_lead_s", -1) >= 0 for c in t["candidates"])
 assert t["best_candidate_id"] is not None

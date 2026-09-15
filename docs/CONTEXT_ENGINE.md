@@ -20,6 +20,9 @@ readiness_policy 控制正向序列未达到 ready_prefix_length 时的行为：
 - 未开始序列保持中性；保留现有时间倒退、tick gap、生命周期及返回重置。
 - 对任意 Agent 正向序列提案，确定性工具都同时评估 support_only 和 disambiguate；
   Agent 不需要预先选中策略，最终策略由同一历史回放与安全保护决定。
+- 当历史对照表明早期前缀由正负样本共享时，提案可用 `minimum_ready_event` 指定
+  有证据的最早区分事件。它只约束 disambiguate 的前缀搜索下界；强度仍由工具在
+  该约束下重新校准，不能把移动 ready 后的旧强度直接沿用。
 
 ## 四状态融合与校准
 

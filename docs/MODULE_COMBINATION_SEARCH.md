@@ -55,3 +55,20 @@ disambiguate 分支的 false_kept=16、missed_leave=0。冻结到 0813 的 34 �
 16 个确认离家全部识别，18 个负例中 9 个仍推送，平均提前量 28.125s；相对上一轮
 模板错误数未改善且平均提前量减少 6.875s。该结果说明候选遗漏已修复，但不能说明
 disambiguate 在扩展训练集和任意 Agent 序列上必然获胜。
+
+后续受控试验将 `minimum_ready_event=lower_platform`，再重新校准全部上下文强度。
+工具评估 130 个候选；最佳 disambiguate 分支选择 ready_prefix_length=4、
+positive_strength=2.4、negative_strength=0，得到 false_kept=17、missed_leave=1。
+非零旧强度直接迁移会显著增加漏报，故优化器关闭了该负向通道；最终仍选择
+support_only + no_baro_descent（false_kept=13、missed_leave=1）。当前
+disambiguate 与 negative_pattern 共用 negative_strength，因而关闭前缀压制也会同时
+关闭独立负向模式。这是后续应解耦的实现限制。
+
+同日使用 `DeepSeek-V4-Flash-0731` 从相同 71 条训练 episode 冷启动。Agent 提交
+`walking,pdr_outbound,baro_descending,wifi_detach,lower_platform`，工具从 90 个
+变体中选择 disambiguate、ready_prefix_length=3、positive_strength=0.4。训练冻结
+回放为 false_kept=12、missed_leave=0、mean_lead_s=74.881s；冻结到 0813 后为
+false_kept=9/18、missed_leave=0/16、mean_lead_s=38.125s。相对无模板基线，0813
+漏报由 3 降至 0，但误推仍为 9，说明该长序列主要改善召回，并未提高测试集负例
+区分率。prompt 因此进一步要求正式提案逐事件报告增量区分力，并在错误相同时强制
+优先最短序列；这项新增约束尚未重新训练验证。

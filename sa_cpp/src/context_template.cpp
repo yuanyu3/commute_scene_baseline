@@ -1271,6 +1271,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     std::string cancelCsv;
     std::string negativeCsv;
     std::string parameterFamiliesCsv;
+    std::string minimumReadyEvent;
     if (!ExtractString(paramsJson, "template_name", &spec.template_name) || spec.template_name.empty() ||
         !ExtractString(paramsJson, "positive_sequence", &positiveCsv) || positiveCsv.empty()) {
         return "{\"ok\":false,\"error\":\"template_name and comma-separated positive_sequence required\"}";
@@ -1292,6 +1293,7 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     ExtractString(paramsJson, "applicability", &spec.applicability);
     ExtractString(paramsJson, "rationale", &spec.rationale);
     ExtractString(paramsJson, "readiness_policy", &spec.readiness_policy);
+    ExtractString(paramsJson, "minimum_ready_event", &minimumReadyEvent);
     if (spec.readiness_policy.empty()) spec.readiness_policy = "support_only";
     if (spec.readiness_policy != "support_only" && spec.readiness_policy != "disambiguate")
         return "{\"ok\":false,\"error\":\"readiness_policy must be support_only|disambiguate\"}";
@@ -1302,6 +1304,15 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     spec.cancel_sequence = SplitCsv(cancelCsv);
     spec.negative_pattern = SplitCsv(negativeCsv);
     spec.parameter_families = SplitCsv(parameterFamiliesCsv);
+    int minimumDisambiguatePrefix = 0;
+    if (!minimumReadyEvent.empty()) {
+        const auto it = std::find(spec.positive_sequence.begin(), spec.positive_sequence.end(), minimumReadyEvent);
+        if (it == spec.positive_sequence.end()) {
+            return "{\"ok\":false,\"error\":\"minimum_ready_event must occur in positive_sequence\",\"event\":\"" +
+                Esc(minimumReadyEvent) + "\"}";
+        }
+        minimumDisambiguatePrefix = static_cast<int>(std::distance(spec.positive_sequence.begin(), it)) + 1;
+    }
     std::set<std::string> seenFamilies;
     for (const auto &family : spec.parameter_families) {
         if (EnabledParameterFamilies().count(family) == 0) {
@@ -1480,7 +1491,8 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
             continue;
         }
         searchBest = -1;
-    for (int prefix = 0; prefix <= static_cast<int>(spec.positive_sequence.size()); ++prefix) {
+    const int prefixStart = spec.readiness_policy == "disambiguate" ? minimumDisambiguatePrefix : 0;
+    for (int prefix = prefixStart; prefix <= static_cast<int>(spec.positive_sequence.size()); ++prefix) {
       for (const auto &level : levels) {
         Candidate candidate;
         candidate.spec = spec;
@@ -1504,7 +1516,9 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
             std::vector<double> values {0, 0.2, 0.6, 1.2, 2.4};
             if (axis == 3) {
                 values.clear();
-                for (int p = 0; p <= static_cast<int>(spec.positive_sequence.size()); ++p) values.push_back(p);
+                const int coordinatePrefixStart = spec.readiness_policy == "disambiguate" ? minimumDisambiguatePrefix : 0;
+                for (int p = coordinatePrefixStart; p <= static_cast<int>(spec.positive_sequence.size()); ++p)
+                    values.push_back(p);
             }
             for (double value : values) {
                 Candidate candidate = seed;

@@ -266,6 +266,7 @@
         "applicability": "always|baro_ready",
         "positive_sequence": "required for template families",
         "readiness_policy": "optional initial hint support_only|disambiguate; deterministic replay always evaluates both",
+        "minimum_ready_event": "optional event in positive_sequence; disambiguate ready prefix is not searched before this event",
         "cancel_sequence": "optional ordered events",
         "cancel_paths": "optional alternative ordered paths",
         "negative_pattern": "optional conjunction",

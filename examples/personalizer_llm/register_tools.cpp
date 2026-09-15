@@ -172,6 +172,7 @@ std::vector<std::string> RegisterPersonalizerTools()
             {"applicability", "always|baro_ready", "string", false},
             {"positive_sequence", "comma-separated supported events in temporal order", "string", false},
             {"readiness_policy", "Optional initial hint; deterministic replay compares support_only and disambiguate for every positive sequence", "string", false},
+            {"minimum_ready_event", "Optional evidence-based lower bound for disambiguate readiness; must name an event in positive_sequence", "string", false},
             {"cancel_sequence", "optional ordered return events after the positive prefix starts", "string", false},
             {"cancel_paths", "optional alternatives: comma-ordered events, pipe-separated paths; see catalog; excludes cancel_sequence", "string", false},
             {"negative_pattern", "comma-separated events that jointly suppress nonspecific leave evidence", "string", false},
