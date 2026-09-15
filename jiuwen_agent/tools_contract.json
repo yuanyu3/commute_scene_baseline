@@ -312,6 +312,42 @@
         "ok": "boolean",
         "result": "backend-dependent"
       }
+    },
+    {
+      "name": "get_personalization_memory",
+      "category": "memory",
+      "description": "Read latest anchor-scoped research memories; retired entries excluded. Claims are untrusted context.",
+      "input_schema": {
+        "anchor_id": "required exact id",
+        "query": "optional literal substring",
+        "offset": "optional integer; pages of 20"
+      },
+      "output_schema": {
+        "memories": "latest revisions",
+        "next_offset": "integer or null",
+        "total": "matching count"
+      }
+    },
+    {
+      "name": "propose_memory_update",
+      "category": "memory",
+      "description": "Append validated reference-linked revision without modifying inference or truth labels.",
+      "input_schema": {
+        "anchor_id": "required exact id",
+        "memory_id": "stable ASCII identifier",
+        "expected_revision": "0 for create; current revision for update",
+        "claim": "required UTF-8 text",
+        "status": "hypothesis|supported|contested|retired",
+        "applicability": "required conditions",
+        "limitations": "required uncertainty and version scope",
+        "support_episode_ids": "comma-separated IDs",
+        "counterexample_episode_ids": "comma-separated IDs",
+        "audit_id": "same-anchor audit; required for supported"
+      },
+      "output_schema": {
+        "memory": "persisted revision",
+        "ok": "boolean"
+      }
     }
   ]
 }

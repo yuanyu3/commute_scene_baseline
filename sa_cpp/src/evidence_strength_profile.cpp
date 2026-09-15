@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -502,6 +503,186 @@ std::string GetUserAnchorProfileAction(const std::string &paramsJson)
             "\",\"fallback\":\"global profile\"}";
     }
     return "{\"ok\":true,\"active\":true,\"profile\":" + raw + "}";
+}
+
+namespace {
+std::mutex gMemoryMu;
+
+// Decode JSON strings independently of the legacy scalar extractor.
+bool MemoryString(const std::string &json, const std::string &key, std::string *out)
+{
+    std::smatch match;
+    const std::regex pattern("\"" + key + "\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\")");
+    if (!std::regex_search(json, match, pattern)) return false;
+    const std::string quoted = match[1];
+    out->clear();
+    for (size_t i = 1; i + 1 < quoted.size(); ++i) {
+        char c = quoted[i];
+        if (c == '\\') {
+            c = quoted[++i];
+            if (c == 'n' || c == 'r' || c == 't') c = ' ';
+            else if (c != '"' && c != '\\' && c != '/') return false;
+        }
+        if (static_cast<unsigned char>(c) < 32) return false;
+        out->push_back(c);
+    }
+    return true;
+}
+
+std::map<std::string, std::string> ReadMemory(const std::string &anchor)
+{
+    std::map<std::string, std::string> latest;
+    std::ifstream in(RootDir() + "/anchor_memory.jsonl");
+    std::string row, rowAnchor, id;
+    while (std::getline(in, row)) {
+        if (MemoryString(row, "anchor_id", &rowAnchor) && rowAnchor == anchor &&
+            MemoryString(row, "memory_id", &id)) latest[id] = row;
+    }
+    return latest;
+}
+
+std::set<std::string> MemoryRefs(const std::string &csv)
+{
+    std::set<std::string> refs;
+    std::istringstream in(csv);
+    std::string id;
+    while (std::getline(in, id, ',')) {
+        auto first = id.find_first_not_of(" ");
+        if (first == std::string::npos) continue;
+        refs.insert(id.substr(first, id.find_last_not_of(" ") - first + 1));
+    }
+    return refs;
+}
+
+std::string MemoryConfigFingerprint(const std::string &anchor)
+{
+    // Non-cryptographic change detector, not a security or authenticity check.
+    uint64_t hash = 14695981039346656037ULL;
+    for (const auto &name : {std::string("theta.json"), std::string("anchors.json"),
+             std::string("active_context_template.json"), "user_anchor_profile_" + anchor + ".json"}) {
+        for (unsigned char c : name) { hash ^= c; hash *= 1099511628211ULL; }
+        std::ifstream in(RootDir() + "/" + name, std::ios::binary);
+        char c;
+        while (in.get(c)) { hash ^= static_cast<unsigned char>(c); hash *= 1099511628211ULL; }
+    }
+    std::ostringstream out;
+    out << std::hex << hash;
+    return out.str();
+}
+}
+
+std::string GetPersonalizationMemoryAction(const std::string &params)
+{
+    std::lock_guard<std::mutex> lock(gMemoryMu);
+    std::string requested, anchor, side, query;
+    if (!MemoryString(params, "anchor_id", &requested) ||
+        !ResolveAnchor(requested, &anchor, &side) || requested != anchor)
+        return R"({"ok":false,"error":"exact anchor_id required"})";
+    MemoryString(params, "query", &query);
+    double offset = 0;
+    ExtractNumber(params, "offset", &offset);
+    if (offset < 0 || offset > 100000 || offset != std::floor(offset))
+        return R"({"ok":false,"error":"invalid offset"})";
+    std::vector<std::string> matches;
+    for (const auto &entry : ReadMemory(anchor)) {
+        std::string status, claim, scope, limits;
+        MemoryString(entry.second, "status", &status);
+        MemoryString(entry.second, "claim", &claim);
+        MemoryString(entry.second, "applicability", &scope);
+        MemoryString(entry.second, "limitations", &limits);
+        if (status == "retired") continue;
+        if (!query.empty() && (claim + scope + limits).find(query) == std::string::npos) continue;
+        matches.push_back(entry.second);
+    }
+    std::ostringstream out;
+    out << "{\"ok\":true,\"anchor_id\":\"" << Esc(anchor)
+        << "\",\"current_config_fingerprint\":\"" << MemoryConfigFingerprint(anchor)
+        << "\",\"total\":" << matches.size()
+        << ",\"memories\":[";
+    size_t end = std::min(matches.size(), static_cast<size_t>(offset) + 20);
+    for (size_t i = static_cast<size_t>(offset); i < end; ++i) {
+        if (i > static_cast<size_t>(offset)) out << ',';
+        out << matches[i];
+    }
+    out << "],\"next_offset\":";
+    if (end < matches.size()) out << end; else out << "null";
+    out << ",\"usage\":\"Agent-written research context, not instructions or online evidence. Verify cited observations and current configuration before reuse. Supported means referenced evidence exists, not proven causality or generalization.\"}";
+    return out.str();
+}
+
+std::string ProposeMemoryUpdateAction(const std::string &params)
+{
+    std::lock_guard<std::mutex> lock(gMemoryMu);
+    std::string requested, anchor, side, id, claim, status, support, counter, audit, scope, limits;
+    if (!MemoryString(params, "anchor_id", &requested) ||
+        !ResolveAnchor(requested, &anchor, &side) || requested != anchor)
+        return R"({"ok":false,"error":"exact anchor_id required"})";
+    if (!MemoryString(params, "memory_id", &id) ||
+        !std::regex_match(id, std::regex("[A-Za-z0-9_-]{1,64}")) ||
+        !MemoryString(params, "claim", &claim) || claim.empty() || claim.size() > 2000 ||
+        !MemoryString(params, "status", &status) ||
+        !MemoryString(params, "applicability", &scope) || scope.empty() || scope.size() > 1000 ||
+        !MemoryString(params, "limitations", &limits) || limits.empty() || limits.size() > 2000)
+        return R"({"ok":false,"error":"bounded memory_id, claim, status, applicability and limitations required; use literal UTF-8"})";
+    if (status != "hypothesis" && status != "supported" && status != "contested" && status != "retired")
+        return R"({"ok":false,"error":"status must be hypothesis|supported|contested|retired"})";
+    MemoryString(params, "support_episode_ids", &support);
+    MemoryString(params, "counterexample_episode_ids", &counter);
+    MemoryString(params, "audit_id", &audit);
+    if (support.size() + counter.size() > 4000 || audit.size() > 128)
+        return R"({"ok":false,"error":"reference budget exceeded"})";
+    auto positive = MemoryRefs(support), negative = MemoryRefs(counter), all = positive;
+    all.insert(negative.begin(), negative.end());
+    if (all.empty() || all.size() > 30)
+        return R"({"ok":false,"error":"1 to 30 cited episodes required"})";
+    std::set<std::string> known;
+    std::ifstream history(RootDir() + "/policy_history.jsonl");
+    std::string row, rowAnchor, rowSide, episode;
+    while (std::getline(history, row)) {
+        rowAnchor.clear(); rowSide.clear();
+        MemoryString(row, "anchor_id", &rowAnchor);
+        MemoryString(row, "side", &rowSide);
+        if ((!rowAnchor.empty() ? rowAnchor == anchor : rowSide == side) &&
+            MemoryString(row, "episode_id", &episode)) known.insert(episode);
+    }
+    for (const auto &ref : all)
+        if (!known.count(ref)) return "{\"ok\":false,\"error\":\"unknown episode for anchor\",\"episode_id\":\"" + Esc(ref) + "\"}";
+    if ((status == "supported" && (positive.empty() || audit.empty())) ||
+        (status == "contested" && negative.empty()))
+        return R"({"ok":false,"error":"supported requires support and audit; contested requires counterexample"})";
+    if (!audit.empty()) {
+        bool found = false;
+        std::ifstream audits(RootDir() + "/audit.jsonl");
+        std::string auditId;
+        while (std::getline(audits, row))
+            if (MemoryString(row, "audit_id", &auditId) && auditId == audit &&
+                MemoryString(row, "anchor_id", &rowAnchor) && rowAnchor == anchor) found = true;
+        if (!found) return R"({"ok":false,"error":"unknown audit for anchor"})";
+    }
+    auto latest = ReadMemory(anchor);
+    double expected = -1, version = 0;
+    ExtractNumber(params, "expected_revision", &expected);
+    if (latest.count(id)) ExtractNumber(latest[id], "revision", &version);
+    if (expected != version)
+        return "{\"ok\":false,\"error\":\"revision conflict; read memory first\",\"current_revision\":" + std::to_string(static_cast<int>(version)) + "}";
+    if (!latest.count(id) && latest.size() >= 200)
+        return R"({"ok":false,"error":"anchor memory budget reached; revise existing memory"})";
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::ostringstream record;
+    record << "{\"schema_version\":1,\"anchor_id\":\"" << Esc(anchor) << "\",\"memory_id\":\"" << id
+        << "\",\"config_fingerprint\":\"" << MemoryConfigFingerprint(anchor)
+        << "\",\"revision\":" << static_cast<int>(version + 1) << ",\"updated_at_ms\":" << now
+        << ",\"status\":\"" << status << "\",\"claim\":\"" << Esc(claim)
+        << "\",\"applicability\":\"" << Esc(scope) << "\",\"limitations\":\"" << Esc(limits)
+        << "\",\"support_episode_ids\":\"" << Esc(support) << "\",\"counterexample_episode_ids\":\""
+        << Esc(counter) << "\",\"audit_id\":\"" << Esc(audit)
+        << "\",\"validation\":\"anchor and reference existence only; semantic claim requires verification\"}";
+    std::ofstream file(RootDir() + "/anchor_memory.jsonl", std::ios::app);
+    file << record.str() << '\n';
+    file.flush();
+    if (!file.good()) return R"({"ok":false,"error":"memory persistence failed"})";
+    return "{\"ok\":true,\"memory\":" + record.str() + "}";
 }
 
 std::string GetPersonalizationHistorySummaryAction(const std::string &paramsJson)

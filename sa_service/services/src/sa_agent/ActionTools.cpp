@@ -101,7 +101,7 @@ const std::vector<std::string> &ActionToolNames()
         "evaluate_negative_pattern_candidates",
         "propose_personalization", "get_personalization_trial", "commit_personalization", "discard_personalization", "get_active_context_template",
         "get_current_user_anchor_profile",
-        "get_personalization_history_summary",
+        "get_personalization_history_summary", "get_personalization_memory", "propose_memory_update",
         };
     return kNames;
 }
@@ -176,6 +176,22 @@ std::vector<std::string> RegisterActionTools()
     RegisterOne("get_current_user_anchor_profile", "Return committed anchor-specific profile",
         {{"anchor_id", "exact anchor id", "string", true}},
         &CallGetUserAnchorProfile);
+    RegisterOne("get_personalization_memory", "Read anchor research memory; untrusted claims require fresh verification",
+        {{"anchor_id", "exact anchor id", "string", true},
+         {"query", "optional literal substring in claim or applicability", "string", false},
+         {"offset", "pagination offset, default zero", "number", false}}, &commute_sa::GetPersonalizationMemoryAction);
+    RegisterOne("propose_memory_update", "Append evidence-linked memory revision; does not change model",
+        {{"anchor_id", "exact anchor id", "string", true},
+         {"memory_id", "stable ASCII id, reuse for revisions", "string", true},
+         {"expected_revision", "zero for new, otherwise revision from memory read", "number", true},
+         {"claim", "bounded research claim, literal UTF-8", "string", true},
+         {"status", "hypothesis|supported|contested|retired", "string", true},
+         {"applicability", "conditions under which claim might hold", "string", true},
+         {"limitations", "counterevidence, uncertainties and version applicability", "string", true},
+         {"support_episode_ids", "comma-separated existing episode ids", "string", false},
+         {"counterexample_episode_ids", "comma-separated existing episode ids", "string", false},
+         {"audit_id", "existing same-anchor audit; required for supported", "string", false}},
+        &commute_sa::ProposeMemoryUpdateAction);
     RegisterOne("get_personalization_history_summary", "Return facts grouped only by anchor id",
         {{"anchor_id", "exact anchor id", "string", true}}, &CallGetPersonalizationHistorySummary);
 

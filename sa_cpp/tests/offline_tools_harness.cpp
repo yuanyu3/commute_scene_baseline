@@ -73,6 +73,10 @@ int main(int argc, char **argv)
             std::cout << commute_sa::GetUserAnchorProfileAction(params) << "\n";
         } else if (command == "history_summary") {
             std::cout << commute_sa::GetPersonalizationHistorySummaryAction(params) << "\n";
+        } else if (command == "memory_get") {
+            std::cout << commute_sa::GetPersonalizationMemoryAction(params) << "\n";
+        } else if (command == "memory_update") {
+            std::cout << commute_sa::ProposeMemoryUpdateAction(params) << "\n";
         } else if (command == "strength_estimate") {
             std::cout << commute_sa::EstimateEvidenceStrengthAction(params) << "\n";
         } else if (command == "strength_trial") {

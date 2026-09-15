@@ -19,7 +19,8 @@
       "diagnose_context_template",
       "evaluate_negative_pattern_candidates",
       "get_current_user_anchor_profile",
-      "get_personalization_history_summary"
+      "get_personalization_history_summary",
+      "get_personalization_memory"
     ],
     "action": [
       "get_context_template_catalog",
@@ -27,6 +28,7 @@
       "get_active_context_template",
       "propose_aborted_leave_interpretation",
       "submit_agent_analysis",
+      "propose_memory_update",
       "request_anchor_reestimate",
       "propose_personalization",
       "get_personalization_trial",

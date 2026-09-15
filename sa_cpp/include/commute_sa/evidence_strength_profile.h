@@ -29,6 +29,8 @@ std::string DiscardPersonalizationAction(const std::string &paramsJson);
 
 std::string GetUserAnchorProfileAction(const std::string &paramsJson);
 std::string GetPersonalizationHistorySummaryAction(const std::string &paramsJson);
+std::string GetPersonalizationMemoryAction(const std::string &paramsJson);
+std::string ProposeMemoryUpdateAction(const std::string &paramsJson);
 std::string EstimateEvidenceStrengthAction(const std::string &paramsJson);
 std::string GetEvidenceStrengthTrialAction(const std::string &paramsJson);
 std::string CommitEvidenceStrengthCandidateAction(const std::string &paramsJson);
