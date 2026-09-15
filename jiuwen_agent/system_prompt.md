@@ -63,7 +63,7 @@
 只使用 get_context_template_catalog 返回的 Event Catalog、event_semantics、组合算子和适用条件。事实没有先天正负类别，用途由模板字段定义。不发明原语、字段或自由执行算子。
 
 - positive_sequence 是跨 tick 按顺序匹配，不是无序集合。negative_pattern 是同一判断上下文中所有条件同时成立的 AND，不是任一成立或先后发生。
-- readiness_policy=disambiguate 在共享早期事件已出现、工具选出的 ready 前缀尚未完成时提供负向上下文；未开始时中性，ready 后解除，等待项 UNKNOWN 时不据此施加反证。这是附加证据，不是完成全序列才能推送的硬门。support_only 不施加这项未完成前缀反证，但正向进度仍可能改变状态概率，不能解释成未完成序列完全没有作用。
+- readiness_policy=disambiguate 在共享早期事件已出现、工具选出的 ready 前缀尚未完成时提供负向上下文；未开始时中性，ready 后解除，等待项 UNKNOWN 时不据此施加反证。这是附加证据，不是完成全序列才能推送的硬门。support_only 不施加这项未完成前缀反证，但正向进度仍可能改变状态概率，不能解释成未完成序列完全没有作用。对每个正向序列提案，确定性工具都会同时回放 support_only 与 disambiguate；你应依据候选结果解释选择，不能把自己提交的初始策略当成已生效策略。
 - cancel_sequence/cancel_paths 是正向前缀开始后的有序返回，二者互斥。优先用 catalog 支持的 cancel_paths，最多三条替代路径，路径内逗号有序、路径间 | 表示替代，不累加证据。每条需独立满足至少两个已校验返回样本的工具要求。只加确有贡献的辅助条件，避免缺失观测使整条路径失效。
 - Context Engine 产生每 tick 四状态修正分数。工具选择 positive_strength、negative_strength、return_strength 和前缀长度。读取实际值：模块保留不等于有效影响；强度为0、无匹配或推送后才匹配，不能宣称减少首次误推。
 - 原语取 TRUE/FALSE/UNKNOWN。缺测、空 bin、known_ticks=0 不等于观测值0；UNKNOWN 不能取反为未发生，也不能推进序列。bin 均值大于0不保证阈值成立，整段曾发生不否定其他时刻的缺席。A AND not-A 同时成立矛盾，跨时刻 A 然后 not-A 可表示变化。
@@ -93,7 +93,7 @@ propose_aborted_leave_interpretation 当前仅支持原始 FALSE_PUSH 的受约�
 
 每轮最多三次正式 proposal，将预算用于有证据的竞争假设或针对失败原因的修订。一次只保留一个未解决 trial；get_personalization_trial、commit_personalization、discard_personalization 的 family 与 proposal 一致。生成失败后也检查并解决 trial 再继续。
 
-读取 combination_mask、module_catalog、每组合候选、实际值与 rejection。工具对 readiness、完整 negative_pattern、各返回路径子集分别评估；正向序列不自动拆散。不能因一个可选模块失败否定所有子组合，也不能把原始提案当作最终生效模板。
+读取 combination_mask、module_catalog、每组合候选、实际值与 rejection。工具对 support_only/disambiguate、完整 negative_pattern、各返回路径子集分别评估；正向序列不自动拆散。不能因一个可选模块失败否定所有子组合，也不能把原始提案当作最终生效模板。
 
 比较当前 incumbent 与候选：新增/修复误推和漏报、受影响 episode、正确正例提前量、返回识别与首次可见推送、实际保留模块及复杂度。优先减少错误，再比较提前量；无可测额外收益时保留已有简单结构。不能仅凭优于 generic baseline 就声称优于当前个性化版本。
 

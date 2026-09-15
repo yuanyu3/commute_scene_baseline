@@ -18,6 +18,8 @@ readiness_policy 控制正向序列未达到 ready_prefix_length 时的行为：
 - disambiguate：序列已经开始、尚未就绪且下一事实可观测时，输出 context_prefix_incomplete=1。
 - 下一事实为UNKNOWN时，该tick不产生未完成前缀反证；达到ready立即解除。
 - 未开始序列保持中性；保留现有时间倒退、tick gap、生命周期及返回重置。
+- 对任意 Agent 正向序列提案，确定性工具都同时评估 support_only 和 disambiguate；
+  Agent 不需要预先选中策略，最终策略由同一历史回放与安全保护决定。
 
 ## 四状态融合与校准
 

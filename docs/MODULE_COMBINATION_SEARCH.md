@@ -1,9 +1,13 @@
 # 结构提案的模块组合搜索
 
 STRUCTURE 提案不再只校准一份完整模板。保留完整 positive_sequence，
-将 disambiguate、完整 negative_pattern、每条返回路径作为可选模块，
+将 readiness_policy、完整 negative_pattern、每条返回路径作为可选模块，
 枚举其所有子集（最多 5 个模块、32 个组合）。不拆散序列顺序或 AND 子句。
 每个组合独立运行原有前缀及强度坐标搜索，避免一个组合的搜索种子污染其他组合。
+
+readiness_policy 不再要求 Agent 先猜中 `disambiguate`。每个结构提案都固定生成
+`support_only` 与 `disambiguate` 两个分支，在相同逐 episode 因果回放、保护条件和
+评分下分别校准 `ready_prefix_length` 及各上下文强度。
 
 返回路径独立检查至少两条已标注 ABORTED_LEAVE 匹配。缺少支持仅拒绝包含
 该路径的组合，不拒绝整个提案。语法错误、未知原语、矛盾子句及不合法返回
@@ -35,3 +39,19 @@ scripts/validate_module_search.py 在隔离副本中比较旧模板逐 episode �
 训练副本成功提交；相对原冻结模板，普通误推 0、漏推 0、平均提前量 51.4815s
 均不变，ABORTED_LEAVE 可见推送仍为 6（不能表述成所有负标签均无推送）。
 旧冻结模板的逐 episode 回放完全一致。本次验证不是新一轮 LLM 能力实验。
+
+## 2026-09-15 readiness policy 双分支验证
+
+工具现对每个正向序列固定比较 `support_only` 与 `disambiguate`。模块隔离回归实际
+评估 164 个候选，提交前后 47 条冻结历史均为普通误推 0、漏推 0、平均提前量
+51.4815s。
+
+使用共享组内气压的 0811/0812/0814 共 71 个 episode，从零调用 Qwen3.7-Plus。
+Agent 提出 `walking,pdr_outbound,baro_descending,lower_platform` 与
+`no_baro_descent`，工具评估 170 个候选。无负向模式时，disambiguate 相比
+support_only 将 false_kept 从 17 降至 16，40 个确认离家均保留；加入负向模式后，
+最终按错误数优先选择 support_only：false_kept=13、missed_leave=1，优于
+disambiguate 分支的 false_kept=16、missed_leave=0。冻结到 0813 的 34 条测试集后，
+16 个确认离家全部识别，18 个负例中 9 个仍推送，平均提前量 28.125s；相对上一轮
+模板错误数未改善且平均提前量减少 6.875s。该结果说明候选遗漏已修复，但不能说明
+disambiguate 在扩展训练集和任意 Agent 序列上必然获胜。

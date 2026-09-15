@@ -940,7 +940,7 @@ std::string GetContextTemplateCatalogAction(const std::string &)
            "\"evidence_rule\":\"attached_observed is whole-episode presence, NOT reattachment; missing auxiliary evidence must not become a mandatory prerequisite\"},"
            "\"applicability\":[\"always\",\"baro_ready\"],"
            "\"context_engine\":{\"output\":\"bounded additive log evidence c_t[AT,PRE,LEAVE,OUT], replaces legacy sequence emission\","
-           "\"readiness_policy\":\"support_only is neutral before ready; disambiguate treats an observed but incomplete calibrated prefix as negative context until ready. Agent selects policy, C++ selects prefix and strength. It is additive evidence, not a hard gate.\","
+           "\"readiness_policy\":\"support_only is neutral before ready; disambiguate treats an observed but incomplete calibrated prefix as negative context until ready. C++ always compares both policies and selects policy, prefix and strength by causal replay. It is additive evidence, not a hard gate.\","
            "\"lifecycle\":\"30s tick gap or clock reversal resets context; 600s lifetime; outside and completed return reset context; legacy product guards retained\","
            "\"calibration\":\"deterministic two-pass coordinate search: independent positive/negative/return strengths 0,0.2,0.6,1.2,2.4; causal prefix selection; no global optimum claim\"},"
            "\"event_semantics\":{"
@@ -1370,7 +1370,10 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
     trial.spec = spec;
     trial.baseline = baseline;
     if (spec.parameter_families.empty()) {
-    if (spec.readiness_policy == "disambiguate") trial.modules.push_back("readiness");
+    // Readiness semantics are a deterministic search dimension, not an Agent
+    // prerequisite. Always compare a neutral incomplete prefix with bounded
+    // disambiguation on the same proposed positive sequence.
+    trial.modules.push_back("readiness_policy");
     if (!spec.negative_pattern.empty()) trial.modules.push_back("negative_pattern");
     if (!spec.cancel_sequence.empty()) trial.modules.push_back("cancel_sequence");
     for (size_t i = 0; i < spec.cancel_paths.size(); ++i)
@@ -1457,7 +1460,8 @@ std::string GenerateContextTemplateAction(const std::string &paramsJson)
             const bool keep = (combination & (1 << i)) != 0;
             if (keep && !supported[i]) valid = false;
             const auto &name = trial.modules[i];
-            if (name == "readiness" && !keep) spec.readiness_policy = "support_only";
+            if (name == "readiness_policy")
+                spec.readiness_policy = keep ? "disambiguate" : "support_only";
             if (name == "negative_pattern" && !keep) spec.negative_pattern.clear();
             if (name == "cancel_sequence" && !keep) spec.cancel_sequence.clear();
             if (name.find("cancel_path_") == 0 && keep)

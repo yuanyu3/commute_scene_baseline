@@ -265,7 +265,7 @@
         "anchor_id": "required exact id",
         "applicability": "always|baro_ready",
         "positive_sequence": "required for template families",
-        "readiness_policy": "optional support_only|disambiguate",
+        "readiness_policy": "optional initial hint support_only|disambiguate; deterministic replay always evaluates both",
         "cancel_sequence": "optional ordered events",
         "cancel_paths": "optional alternative ordered paths",
         "negative_pattern": "optional conjunction",
